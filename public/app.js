@@ -738,7 +738,19 @@ function fairnessAnalysis() {
 function deviationLabel(value) { if (value === null) return '—'; const rounded = Math.round(value * 100); return `${rounded > 0 ? '+' : ''}${rounded}%`; }
 function shortAgendaName(name) { return name.replace('ambulatori', 'amb.').replace('ambulatòria', 'amb.').replace('urgent', 'urg.').replace('tècnics', 'tèc.').replace('Intervencionisme', 'Interv.').replace('Telecomandament', 'Telecom.').replace('Ressonància', 'Resson.'); }
 function deviationRow(cell) { const magnitude = cell.deviation === null ? 0 : Math.min(Math.abs(cell.deviation), 1) * 50; const side = cell.deviation === null ? 'none' : cell.deviation >= 0 ? 'over' : 'under'; return `<div class="deviation-row"><span><i style="--agenda-color:${cell.agenda.color}"></i>${esc(cell.agenda.name)}</span><div class="deviation-track"><b></b><i class="${side}" style="--deviation-width:${magnitude}%"></i></div><strong>${deviationLabel(cell.deviation)}</strong></div>`; }
-function heatCell(cell) { if (!cell || cell.deviation === null) return '<div class="heat-cell empty" title="Sense dades">—</div>'; const intensity = Math.min(Math.abs(cell.deviation), 1); const color = cell.deviation >= 0 ? `rgba(255,132,102,${0.12 + intensity * 0.58})` : `rgba(77,201,220,${0.12 + intensity * 0.58})`; return `<div class="heat-cell" style="background:${color}" title="Real ${Math.round(cell.actualShare * 100)}% · esperat ${Math.round(cell.expectedShare * 100)}%">${deviationLabel(cell.deviation)}</div>`; }
+function heatCell(cell) {
+  if (!cell || cell.deviation === null) return '<div class="heat-cell empty" title="Sense dades">—</div>';
+  const roundedDeviation = Math.round(cell.deviation * 100);
+  const magnitude = Math.abs(cell.deviation);
+  const direction = Math.abs(roundedDeviation) <= 5 ? 'balanced' : roundedDeviation < 0 ? 'below' : 'above';
+  const strength = magnitude >= 0.25 ? 'strong' : magnitude >= 0.1 ? 'medium' : 'soft';
+  const actual = Math.round(cell.actualShare * 100);
+  const expected = Math.round(cell.expectedShare * 100);
+  const detail = state.language === 'es'
+    ? `Real ${actual}% · esperado ${expected}%`
+    : `Real ${actual}% · esperat ${expected}%`;
+  return `<div class="heat-cell ${direction} ${strength}" title="${detail}" aria-label="${detail}">${direction === 'balanced' ? '≈' : deviationLabel(cell.deviation)}</div>`;
+}
 
 function orderedFairnessAgendas(analysis, members) {
   return state.agendas
@@ -976,7 +988,7 @@ function guardsPage() {
   const operations = guardTransferOperations();
   const guardRows = guards.map((item) => `<article class="guard-row"><div class="guard-date"><strong>${fmtDate(item.date, { day: 'numeric', month: 'short' })}</strong><span>${fmtDate(item.date, { weekday: 'long' })}</span></div><div class="guard-owner"><span class="member-avatar" style="--member-color:${person(item.memberId)?.color || '#cbd5d0'}">${esc(person(item.memberId)?.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join('') || '—')}</span><div><b>${esc(person(item.memberId)?.name || '—')}</b><small>Postguàrdia · ${fmtDate(addDays(item.date, 1), { day: 'numeric', month: 'short' })}</small></div></div><div class="guard-row-actions"><button class="button ghost small" data-action="open-guard-cession" data-guard-id="${item.id}">Cedeix</button><button class="button secondary small" data-action="open-guard-exchange" data-guard-id="${item.id}">Intercanvia</button></div></article>`).join('');
   const historyRows = operations.map((operation) => `<article class="guard-history-row"><div><b>${operation.operationKind === 'exchange' ? 'Intercanvi' : 'Cessió'}</b><span>${fmtDate(operation.createdAt.slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })}</span></div><div class="guard-history-legs">${operation.legs.sort((left, right) => left.date.localeCompare(right.date)).map((leg) => `<span><time>${fmtDate(leg.date, { day: 'numeric', month: 'short' })}</time>${guardPartyName(leg.fromMemberId)} <i>→</i> ${guardPartyName(leg.toMemberId)}</span>`).join('')}</div><small>${operation.impact?.moves || 0} canvis al calendari${operation.note ? ` · ${esc(operation.note)}` : ''}</small></article>`).join('');
-  return `${header('Guàrdies', `${guards.length} guàrdies internes · ${recordPeriodLabel(draft)}`)}<section class="guard-page-grid"><div><section class="card guard-panel"><div class="guard-list-toolbar"><button class="button" data-action="open-incoming-guard">Afegeix</button></div><div class="guard-list">${guardRows || '<div class="empty-state">No hi ha guàrdies internes en aquesta proposta.</div>'}</div></section></div><aside><section class="card guard-help"><div class="card-kicker">COM FUNCIONA</div><h3>Dos moviments clars</h3><dl><div><dt>Cessió</dt><dd>Canvia el responsable d’una data. Una part pot ser exterior.</dd></div><div><dt>Intercanvi</dt><dd>Permuta dues guàrdies. Amb Exterior, la guàrdia surt del calendari intern.</dd></div></dl><p>Abans d’aplicar, Pinendar ensenya els canvis mínims al calendari.</p></section></aside></section><section class="section guard-history"><div class="section-head"><div><h2>Històric de canvis</h2><p class="muted">Les cobertures exteriors només consten aquí.</p></div></div><div class="card guard-history-list">${historyRows || '<div class="empty-state">Encara no s’ha modificat cap guàrdia.</div>'}</div></section>`;
+  return `${header('Guàrdies', `${guards.length} guàrdies internes · ${recordPeriodLabel(draft)}`, '<button class="button" data-action="open-incoming-guard">Afegeix guàrdia</button>')}<section class="guard-page-grid"><div><section class="card guard-panel"><div class="guard-list">${guardRows || '<div class="empty-state">No hi ha guàrdies internes en aquesta proposta.</div>'}</div></section></div><aside><section class="card guard-help"><div class="card-kicker">COM FUNCIONA</div><h3>Dos moviments clars</h3><dl><div><dt>Cessió</dt><dd>Canvia el responsable d’una data. Una part pot ser exterior.</dd></div><div><dt>Intercanvi</dt><dd>Permuta dues guàrdies. Amb Exterior, la guàrdia surt del calendari intern.</dd></div></dl><p>Abans d’aplicar, Pinendar ensenya els canvis mínims al calendari.</p></section></aside></section><section class="section guard-history"><div class="section-head"><div><h2>Històric de canvis</h2><p class="muted">Les cobertures exteriors només consten aquí.</p></div></div><div class="card guard-history-list">${historyRows || '<div class="empty-state">Encara no s’ha modificat cap guàrdia.</div>'}</div></section>`;
 }
 function guardOperationPayload(formElement, operation) {
   const form = new FormData(formElement);
@@ -1132,7 +1144,94 @@ function monthYearPicker(field, value, label) {
   const months = Array.from({ length: 12 }, (_, index) => { const month = index + 1; const name = new Intl.DateTimeFormat(state.language === 'es' ? 'es-ES' : 'ca-ES', { month: 'long' }).format(new Date(Date.UTC(2026, index, 1))); return `<option value="${String(month).padStart(2, '0')}" ${month === selectedMonth ? 'selected' : ''}>${name.charAt(0).toUpperCase()}${name.slice(1)}</option>`; }).join('');
   return `<div class="field"><label>${label}</label><div class="month-year-picker" data-month-picker="${field}"><select data-month-part="month" aria-label="${label}">${months}</select><select data-month-part="year" aria-label="Any de ${label.toLowerCase()}">${years.map((year) => `<option value="${year}" ${year === selectedYear ? 'selected' : ''}>${year}</option>`).join('')}</select><input type="hidden" name="${field}" value="${value}" /></div></div>`;
 }
+const GENERATION_LOADING_PHRASES = {
+  ca: [
+    'Negociant amb {name}',
+    'Batallant amb el calendari de {name}',
+    'Suplicant una mica de flexibilitat a {name}',
+    'Convencent {name} que tot acabarà encaixant',
+    'Prometent un cafè a {name}',
+    'Fent Tetris amb les agendes de {name}',
+    'Quadrant el sudoku de {name}',
+    'Consultant l’oracle amb {name}',
+    'Revisant la lletra petita de {name}',
+    'Demanant una última concessió a {name}',
+    'Comptant mitges agendes amb {name}',
+    'Buscant un divendres amable per a {name}',
+    'Protegint els dies telemàtics de {name}',
+    'Desfent un nus impossible amb {name}',
+    'Comparant calendaris amb {name}',
+    'Intentant que tot encaixi per a {name}',
+    'Repartint dilluns amb {name}',
+    'Evitant una reunió infinita amb {name}',
+    'Buscant la combinació més justa per a {name}',
+    'Recalculant el pla mestre de {name}',
+    'Movent peces amb molta cura per a {name}',
+    'Comprovant que {name} no tingui dos llocs alhora',
+    'Reservant una mica de paciència per a {name}',
+    'Preguntant a {name} si aquest dimecres li va bé',
+  ],
+  es: [
+    'Negociando con {name}',
+    'Peleando con el calendario de {name}',
+    'Suplicándole un poco de flexibilidad a {name}',
+    'Convenciendo a {name} de que todo acabará encajando',
+    'Prometiéndole un café a {name}',
+    'Haciendo Tetris con las agendas de {name}',
+    'Cuadrando el sudoku de {name}',
+    'Consultando el oráculo con {name}',
+    'Revisando la letra pequeña de {name}',
+    'Pidiendo una última concesión a {name}',
+    'Contando agendas parciales con {name}',
+    'Buscando un viernes amable para {name}',
+    'Protegiendo los días telemáticos de {name}',
+    'Deshaciendo un nudo imposible con {name}',
+    'Comparando calendarios con {name}',
+    'Intentando que todo encaje para {name}',
+    'Repartiendo lunes con {name}',
+    'Evitando una reunión infinita con {name}',
+    'Buscando la combinación más justa para {name}',
+    'Recalculando el plan maestro de {name}',
+    'Moviendo piezas con mucho cuidado para {name}',
+    'Comprobando que {name} no esté en dos sitios a la vez',
+    'Reservando un poco de paciencia para {name}',
+    'Preguntándole a {name} si ese miércoles le va bien',
+  ],
+};
+
+function nextGenerationLoadingMessage() {
+  const phrases = GENERATION_LOADING_PHRASES[state.language === 'es' ? 'es' : 'ca'];
+  let phraseIndex = Math.floor(Math.random() * phrases.length);
+  if (phrases.length > 1 && phraseIndex === modal.loadingPhraseIndex) phraseIndex = (phraseIndex + 1) % phrases.length;
+  const names = activeTeam().map((member) => member.name).filter(Boolean);
+  const candidates = names.length > 1 ? names.filter((name) => name !== modal.loadingMember) : names;
+  const memberName = candidates[Math.floor(Math.random() * candidates.length)] || (state.language === 'es' ? 'el equipo' : 'l’equip');
+  modal.loadingPhraseIndex = phraseIndex;
+  modal.loadingMember = memberName;
+  return phrases[phraseIndex].replace('{name}', memberName);
+}
+
+function startGenerationLoadingAnimation() {
+  return window.setInterval(() => {
+    if (!modal?.busy) return;
+    modal.loadingPhrase = nextGenerationLoadingMessage();
+    const message = document.querySelector('[data-generation-loading-message]');
+    if (!message) return;
+    message.textContent = modal.loadingPhrase;
+    message.animate?.(
+      [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'translateY(0)' }],
+      { duration: 360, easing: 'ease-out' },
+    );
+  }, 2400);
+}
+
+function generationLoadingModal() {
+  const es = state.language === 'es';
+  return `<div class="modal-backdrop"><section class="modal-card modal-small generation-loading-modal" role="dialog" aria-modal="true" aria-labelledby="generation-loading-title" aria-describedby="generation-loading-help"><div class="generation-loading-body"><div class="generation-loading-orbit" aria-hidden="true"><i></i><i></i><i></i></div><div class="card-kicker">${es ? 'OPTIMIZANDO' : 'OPTIMITZANT'}</div><h2 id="generation-loading-title">${es ? 'Preparando el calendario' : 'Preparant el calendari'}</h2><p data-generation-loading-message aria-live="polite">${esc(modal.loadingPhrase)}</p><div class="generation-loading-track" aria-hidden="true"><i></i></div><small id="generation-loading-help">${es ? 'Puede tardar unos minutos. No cierres esta ventana.' : 'Pot trigar uns minuts. No tanquis aquesta finestra.'}</small></div></section></div>`;
+}
+
 function generationModal() {
+  if (modal.busy) return generationLoadingModal();
   const guards = modal.guards || []; const absences = modal.absences || [];
   const guardItems = guards.map((item) => generationCondition(item, 'guard')).join('') + guardImportReview(); const absenceItems = absences.map((item) => generationCondition(item, 'absence')).join('');
   const bounds = generationDateBounds();
@@ -1691,9 +1790,15 @@ async function handleForm(formElement) {
       const { startMonth, endMonth, startDate, endDate } = generationPeriodPayload();
       if (!guardImportReady()) { modal.conflict = 'Revisa les coincidències de l’XLSX i selecciona una sola persona per data.'; render(); return; }
       if (modal.guards.some((item) => item.date < bounds.start || item.date > bounds.end) || modal.absences.some((item) => item.start < bounds.start || item.end > bounds.end || item.end < item.start)) { modal.conflict = 'Hi ha guàrdies o vacances fora del període seleccionat. Elimina-les o ajusta el període.'; render(); return; }
-      modal.busy = true; modal.conflict = ''; render();
-      const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, guards: modal.guards, absences: modal.absences });
-      const job = await waitForGeneration(queued.id);
+      modal.busy = true; modal.conflict = ''; modal.loadingPhrase = nextGenerationLoadingMessage(); render();
+      const loadingTimer = startGenerationLoadingAnimation();
+      let job;
+      try {
+        const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, guards: modal.guards, absences: modal.absences });
+        job = await waitForGeneration(queued.id);
+      } finally {
+        window.clearInterval(loadingTimer);
+      }
       if (job.status !== 'succeeded') throw new Error(job.error?.message || 'No s’ha pogut generar la proposta');
       quarter = startMonth; calendarDate = startDate; modal = null; await reloadState();
       const unassigned = state.draft?.assignments.filter((item) => item.type === 'no_assignment') || [];
