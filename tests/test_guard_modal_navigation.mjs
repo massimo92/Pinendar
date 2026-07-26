@@ -44,7 +44,7 @@ assert.match(
 
 const historySource = appSource.slice(
   appSource.indexOf('function historyPage'),
-  appSource.indexOf('function currentProposalGuards'),
+  appSource.indexOf('function activeGuards'),
 );
 
 assert.doesNotMatch(

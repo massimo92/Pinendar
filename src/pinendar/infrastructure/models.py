@@ -191,9 +191,15 @@ class FixedRule(Base):
 
 class Absence(Base):
     __tablename__ = "absences"
-    __table_args__ = (CheckConstraint("category IN ('vacances', 'postguardia')", name="ck_absences_category"),)
+    __table_args__ = (
+        CheckConstraint("category IN ('vacances', 'postguardia')", name="ck_absences_category"),
+        UniqueConstraint("member_id", "category", "start", "end"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    generation_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("generation_jobs.id", ondelete="SET NULL")
+    )
     member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(String, default="vacances", nullable=False)
     start: Mapped[date] = mapped_column(Date, nullable=False)
@@ -209,35 +215,13 @@ class Holiday(Base):
 
 class Guard(Base):
     __tablename__ = "guards"
+    __table_args__ = (UniqueConstraint("date"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    generation_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("generation_jobs.id", ondelete="SET NULL")
+    )
     member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
-    date: Mapped[date] = mapped_column(Date, nullable=False)
-
-
-class Proposal(Base):
-    __tablename__ = "proposals"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    status: Mapped[str] = mapped_column(String, nullable=False)
-    start_month: Mapped[str] = mapped_column(String(7), nullable=False)
-    end_month: Mapped[str] = mapped_column(String(7), nullable=False)
-    start_date: Mapped[date | None] = mapped_column(Date)
-    end_date: Mapped[date | None] = mapped_column(Date)
-    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
-    input_revision: Mapped[int] = mapped_column(Integer, default=1)
-    engine: Mapped[str] = mapped_column(String, default="legacy")
-    engine_version: Mapped[str] = mapped_column(String, default="1")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-
-
-class ProposalGuard(Base):
-    __tablename__ = "proposal_guards"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
-    member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="RESTRICT"), nullable=False)
     date: Mapped[date] = mapped_column(Date, nullable=False)
 
 
@@ -257,9 +241,6 @@ class GuardTransfer(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     operation_id: Mapped[str] = mapped_column(String, nullable=False)
     operation_kind: Mapped[str] = mapped_column(String, nullable=False)
-    proposal_id: Mapped[str] = mapped_column(
-        ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False
-    )
     guard_date: Mapped[date] = mapped_column(Date, nullable=False)
     from_member_id: Mapped[str | None] = mapped_column(
         ForeignKey("members.id", ondelete="RESTRICT")
@@ -272,32 +253,25 @@ class GuardTransfer(Base):
     impact_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
 
 
-class ProposalAbsence(Base):
-    __tablename__ = "proposal_absences"
+class PlanningEvent(Base):
+    __tablename__ = "planning_events"
     __table_args__ = (
-        CheckConstraint("category IN ('vacances', 'postguardia')", name="ck_proposal_absences_category"),
+        CheckConstraint("load_percentage IN (0, 50, 100)", name="ck_planning_events_load"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
-    member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="RESTRICT"), nullable=False)
-    category: Mapped[str] = mapped_column(String, default="vacances", nullable=False)
-    start: Mapped[date] = mapped_column(Date, nullable=False)
-    end: Mapped[date] = mapped_column(Date, nullable=False)
-
-
-class Assignment(Base):
-    __tablename__ = "assignments"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
+    generation_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("generation_jobs.id", ondelete="SET NULL")
+    )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="RESTRICT"), nullable=False)
     agenda_id: Mapped[str | None] = mapped_column(ForeignKey("agendas.id", ondelete="RESTRICT"))
     kind: Mapped[str] = mapped_column(String, default="assigned")
+    load_percentage: Mapped[int] = mapped_column(Integer, default=100)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     fixed: Mapped[bool] = mapped_column(Boolean, default=False)
     extra: Mapped[bool] = mapped_column(Boolean, default=False)
+    manually_modified: Mapped[bool] = mapped_column(Boolean, default=False)
     management: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -305,7 +279,9 @@ class Vacancy(Base):
     __tablename__ = "vacancies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    proposal_id: Mapped[str] = mapped_column(ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False)
+    generation_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("generation_jobs.id", ondelete="SET NULL")
+    )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     agenda_id: Mapped[str] = mapped_column(ForeignKey("agendas.id", ondelete="RESTRICT"), nullable=False)
 
@@ -322,7 +298,6 @@ class GenerationJob(Base):
     input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     input_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     result_json: Mapped[str | None] = mapped_column(Text)
-    proposal_id: Mapped[str | None] = mapped_column(ForeignKey("proposals.id", ondelete="SET NULL"))
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -330,7 +305,9 @@ class GenerationJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-Index("ix_proposals_status", Proposal.status)
-Index("ix_assignments_date", Assignment.date)
+Assignment = PlanningEvent
+
+
+Index("ix_planning_events_date", PlanningEvent.date)
 Index("ix_jobs_status", GenerationJob.status)
-Index("ix_guard_transfers_proposal_created", GuardTransfer.proposal_id, GuardTransfer.created_at)
+Index("ix_guard_transfers_created", GuardTransfer.created_at)

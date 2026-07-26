@@ -15,7 +15,6 @@ from pinendar.application.state import (
     bump_revision,
     clear_agenda_coverage,
     clear_member_configuration,
-    month_end,
     normalized,
     parse_date,
     serialize_member,
@@ -39,9 +38,6 @@ from pinendar.infrastructure.models import (
     MemberCapability,
     MemberStatusChange,
     MemberTeleDay,
-    Proposal,
-    ProposalAbsence,
-    ProposalGuard,
     Vacancy,
 )
 
@@ -372,20 +368,12 @@ def archive_member(session: Session, member_id: str) -> None:
     member.archived_at = today
     clear_member_configuration(session, member_id)
     session.execute(delete(Guard).where(Guard.member_id == member_id, Guard.date >= today))
-    session.execute(delete(ProposalGuard).where(ProposalGuard.member_id == member_id, ProposalGuard.date >= today))
     session.execute(delete(Assignment).where(Assignment.member_id == member_id, Assignment.date >= today))
     for item in session.scalars(select(Absence).where(Absence.member_id == member_id, Absence.end >= today)):
         if item.start < today:
             item.end = yesterday
         else:
             session.delete(item)
-    for proposal_absence in session.scalars(
-        select(ProposalAbsence).where(ProposalAbsence.member_id == member_id, ProposalAbsence.end >= today)
-    ):
-        if proposal_absence.start < today:
-            proposal_absence.end = yesterday
-        else:
-            session.delete(proposal_absence)
     bump_revision(session)
 
 
@@ -455,8 +443,8 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                         "memberId": member.id,
                         "memberName": member.name,
                         "weekday": rule.weekday,
-                        "agendaId": agenda.id,
-                        "agendaName": agenda.name,
+                        "agendaId": agenda_id,
+                        "agendaName": payload["name"],
                     }
                     for rule, member in telework_rule_conflicts
                 ]
@@ -474,8 +462,8 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                         "memberId": member.id,
                         "memberName": member.name,
                         "weekday": rule.weekday,
-                        "agendaId": agenda.id,
-                        "agendaName": agenda.name,
+                        "agendaId": agenda_id,
+                        "agendaName": payload["name"],
                     }
                     for rule, member in conflicting_rules
                 ]
@@ -637,70 +625,21 @@ def delete_calendar_range(session: Session, start: date, end: date) -> dict[str,
             "La data final no pot ser anterior a la data inicial",
             field="endDate",
         )
-    current = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    if not current:
-        return {"assignmentsDeleted": 0, "vacanciesDeleted": 0}
-    assignments = session.execute(
+    assignments_result = session.execute(
         delete(Assignment).where(
-            Assignment.proposal_id == current.id,
             Assignment.date >= start,
             Assignment.date <= end,
         )
-    ).rowcount
-    vacancies = session.execute(
+    )
+    assignments = int(getattr(assignments_result, "rowcount", 0) or 0)
+    vacancies_result = session.execute(
         delete(Vacancy).where(
-            Vacancy.proposal_id == current.id,
             Vacancy.date >= start,
             Vacancy.date <= end,
         )
-    ).rowcount
-    absences_changed = False
-    absences = list(
-        session.scalars(
-            select(ProposalAbsence).where(
-                ProposalAbsence.proposal_id == current.id,
-                ProposalAbsence.start <= end,
-                ProposalAbsence.end >= start,
-            )
-        )
     )
-    day_before = start - timedelta(days=1)
-    day_after = end + timedelta(days=1)
-    for absence in absences:
-        original_end = absence.end
-        if absence.start < start and absence.end > end:
-            absence.end = day_before
-            session.add(
-                ProposalAbsence(
-                    id=uid(),
-                    proposal_id=current.id,
-                    member_id=absence.member_id,
-                    category=absence.category,
-                    start=day_after,
-                    end=original_end,
-                )
-            )
-        elif absence.start < start:
-            absence.end = day_before
-        elif absence.end > end:
-            absence.start = day_after
-        else:
-            session.delete(absence)
-        absences_changed = True
-    removed_empty_proposal = False
-    session.flush()
-    remaining_content = any(
-        (
-            session.scalar(select(Assignment.id).where(Assignment.proposal_id == current.id).limit(1)),
-            session.scalar(select(Vacancy.date).where(Vacancy.proposal_id == current.id).limit(1)),
-            session.scalar(select(ProposalGuard.id).where(ProposalGuard.proposal_id == current.id).limit(1)),
-            session.scalar(select(ProposalAbsence.id).where(ProposalAbsence.proposal_id == current.id).limit(1)),
-        )
-    )
-    if not remaining_content:
-        session.delete(current)
-        removed_empty_proposal = True
-    if assignments or vacancies or absences_changed or removed_empty_proposal:
+    vacancies = int(getattr(vacancies_result, "rowcount", 0) or 0)
+    if assignments or vacancies:
         bump_revision(session)
     return {
         "assignmentsDeleted": int(assignments or 0),
@@ -723,40 +662,20 @@ def remove_hospital(session: Session, hospital_id: str) -> None:
     bump_revision(session)
 
 
-def _current_proposal(session: Session) -> Proposal:
-    proposal = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    if not proposal:
-        raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
-    return proposal
-
-
 def _validate_member_planifiable(
     session: Session,
-    proposal: Proposal,
     member_id: str,
     assignment_date: date,
 ) -> Member:
     member = session.get(Member, member_id)
     if not member or member.archived_at or not member.is_active:
         raise DomainError("MEMBER_NOT_PLANNABLE", "La persona no està activa", field="memberId")
-    proposal_start = proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01")
-    proposal_end = proposal.end_date or month_end(proposal.end_month)
-    if assignment_date < proposal_start or assignment_date > proposal_end:
-        raise DomainError("DATE_OUTSIDE_PROPOSAL", "La data queda fora de la proposta actual", field="date")
     week_index = (assignment_date.isocalendar().week - 1) % max(member.work_pattern_weeks, 1)
     works = session.scalar(
         select(MemberAvailableDay.id).where(
             MemberAvailableDay.member_id == member_id,
             MemberAvailableDay.week_index == week_index,
             MemberAvailableDay.weekday == assignment_date.isoweekday(),
-        )
-    )
-    absent = session.scalar(
-        select(ProposalAbsence.id).where(
-            ProposalAbsence.proposal_id == proposal.id,
-            ProposalAbsence.member_id == member_id,
-            ProposalAbsence.start <= assignment_date,
-            ProposalAbsence.end >= assignment_date,
         )
     )
     profile_absent = session.scalar(
@@ -767,14 +686,13 @@ def _validate_member_planifiable(
         )
     )
     holiday = session.get(Holiday, assignment_date)
-    if not works or absent or profile_absent or holiday:
+    if not works or profile_absent or holiday:
         raise DomainError("MEMBER_NOT_PLANNABLE", "La persona no és planificable en aquesta data", field="date")
     return member
 
 
 def _validate_clinical_assignment(
     session: Session,
-    proposal: Proposal,
     member_id: str,
     assignment_date: date,
     agenda_id: str,
@@ -811,7 +729,6 @@ def _validate_clinical_assignment(
     siblings = list(
         session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == proposal.id,
                 Assignment.date == assignment_date,
                 Assignment.member_id == member_id,
                 Assignment.id.not_in(excluded),
@@ -861,7 +778,7 @@ def _fairness_context(session: Session) -> dict[str, Any]:
     counts = {member.id: {agenda.id: 0.0 for agenda in agendas} for member in members}
     for item in session.scalars(select(Assignment).where(Assignment.agenda_id.is_not(None))):
         if item.member_id in counts and item.agenda_id in loads:
-            counts[item.member_id][item.agenda_id] += loads[item.agenda_id]
+            counts[item.member_id][item.agenda_id] += item.load_percentage / 100
     capabilities = {
         member.id: set(
             session.scalars(select(MemberCapability.agenda_id).where(MemberCapability.member_id == member.id))
@@ -941,15 +858,8 @@ def _validate_exchange(
     target: Assignment,
     *,
     allow_fixed_source: bool = False,
-) -> tuple[Proposal, Agenda, Agenda]:
-    proposal = session.get(Proposal, source.proposal_id)
-    if (
-        not proposal
-        or proposal.status != "current"
-        or target.proposal_id != source.proposal_id
-        or target.date != source.date
-        or target.member_id == source.member_id
-    ):
+) -> tuple[Agenda, Agenda]:
+    if target.date != source.date or target.member_id == source.member_id:
         raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquest intercanvi ja no està disponible")
     if (
         source.kind != "assigned"
@@ -977,7 +887,6 @@ def _validate_exchange(
         raise DomainError("EXCHANGE_LOAD_MISMATCH", "Les agendes han de tenir la mateixa càrrega")
     _validate_clinical_assignment(
         session,
-        proposal,
         source.member_id,
         source.date,
         target.agenda_id,
@@ -985,13 +894,12 @@ def _validate_exchange(
     )
     _validate_clinical_assignment(
         session,
-        proposal,
         target.member_id,
         target.date,
         source.agenda_id,
         exclude_assignment_ids={target.id},
     )
-    return proposal, source_agenda, target_agenda
+    return source_agenda, target_agenda
 
 
 def exchange_options(
@@ -1002,9 +910,6 @@ def exchange_options(
 ) -> dict[str, Any]:
     source = session.get(Assignment, assignment_id)
     if not source:
-        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
-    proposal = session.get(Proposal, source.proposal_id)
-    if not proposal or proposal.status != "current":
         raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
     if source.kind != "assigned" or not source.agenda_id or source.management:
         raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquesta activitat no es pot intercanviar")
@@ -1019,7 +924,6 @@ def exchange_options(
     targets = list(
         session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == proposal.id,
                 Assignment.date == source.date,
                 Assignment.member_id != source.member_id,
                 Assignment.kind == "assigned",
@@ -1029,7 +933,7 @@ def exchange_options(
     )
     for target in targets:
         try:
-            _, source_agenda, target_agenda = _validate_exchange(
+            source_agenda, target_agenda = _validate_exchange(
                 session,
                 source,
                 target,
@@ -1083,7 +987,7 @@ def exchange_assignments(
     target = session.get(Assignment, target_assignment_id)
     if not source or not target:
         raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
-    _, source_agenda, target_agenda = _validate_exchange(
+    source_agenda, target_agenda = _validate_exchange(
         session,
         source,
         target,
@@ -1092,12 +996,16 @@ def exchange_assignments(
     source_extra, target_extra = source.extra, target.extra
     source.agenda_id = target_agenda.id
     target.agenda_id = source_agenda.id
+    source.load_percentage = target_agenda.load_percentage
+    target.load_percentage = source_agenda.load_percentage
     source.extra = target_extra
     target.extra = source_extra
     source.fixed = False
     target.fixed = False
     source.locked = True
     target.locked = True
+    source.manually_modified = True
+    target.manually_modified = True
     bump_revision(session)
     return {
         "source": {
@@ -1121,14 +1029,12 @@ def exchange_assignments(
 
 def _unassigned_rows(
     session: Session,
-    proposal: Proposal,
     member_id: str,
     assignment_date: date,
 ) -> list[Assignment]:
     return list(
         session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == proposal.id,
                 Assignment.member_id == member_id,
                 Assignment.date == assignment_date,
             )
@@ -1141,9 +1047,8 @@ def extra_assignment_options(
     member_id: str,
     assignment_date: date,
 ) -> dict[str, Any]:
-    proposal = _current_proposal(session)
-    member = _validate_member_planifiable(session, proposal, member_id, assignment_date)
-    rows = _unassigned_rows(session, proposal, member_id, assignment_date)
+    member = _validate_member_planifiable(session, member_id, assignment_date)
+    rows = _unassigned_rows(session, member_id, assignment_date)
     if any(item.kind != "no_assignment" for item in rows):
         raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
     context = _fairness_context(session)
@@ -1165,7 +1070,6 @@ def extra_assignment_options(
         try:
             agenda = _validate_clinical_assignment(
                 session,
-                proposal,
                 member_id,
                 assignment_date,
                 agenda_id,
@@ -1201,14 +1105,12 @@ def open_extra_assignment(
     assignment_date: date,
     agenda_id: str,
 ) -> dict[str, Any]:
-    proposal = _current_proposal(session)
-    _validate_member_planifiable(session, proposal, member_id, assignment_date)
-    rows = _unassigned_rows(session, proposal, member_id, assignment_date)
+    _validate_member_planifiable(session, member_id, assignment_date)
+    rows = _unassigned_rows(session, member_id, assignment_date)
     if any(item.kind != "no_assignment" for item in rows):
         raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
     agenda = _validate_clinical_assignment(
         session,
-        proposal,
         member_id,
         assignment_date,
         agenda_id,
@@ -1216,7 +1118,6 @@ def open_extra_assignment(
     )
     assignment = rows[0] if rows else Assignment(
         id=uid(),
-        proposal_id=proposal.id,
         date=assignment_date,
         member_id=member_id,
     )
@@ -1226,9 +1127,11 @@ def open_extra_assignment(
         session.add(assignment)
     assignment.agenda_id = agenda.id
     assignment.kind = "assigned"
+    assignment.load_percentage = agenda.load_percentage
     assignment.locked = True
     assignment.fixed = False
     assignment.extra = True
+    assignment.manually_modified = True
     assignment.management = False
     bump_revision(session)
     return {
@@ -1243,13 +1146,11 @@ def open_extra_assignment(
 
 def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> dict[str, Any]:
     assignment = session.get(Assignment, assignment_id)
-    current = session.get(Proposal, assignment.proposal_id) if assignment else None
-    if not assignment or not current or current.status != "current":
+    if not assignment:
         raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
     siblings = list(
         session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == assignment.proposal_id,
                 Assignment.date == assignment.date,
                 Assignment.member_id == assignment.member_id,
                 Assignment.id != assignment.id,
@@ -1261,9 +1162,11 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
             session.delete(sibling)
         assignment.agenda_id = None
         assignment.kind = "no_assignment"
+        assignment.load_percentage = 0
         assignment.locked = True
         assignment.fixed = False
         assignment.extra = False
+        assignment.manually_modified = True
         assignment.management = False
         bump_revision(session)
         return {
@@ -1293,7 +1196,6 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
             select(func.count())
             .select_from(Assignment)
             .where(
-                Assignment.proposal_id == assignment.proposal_id,
                 Assignment.member_id == assignment.member_id,
                 Assignment.kind == "management",
                 Assignment.date >= month_start,
@@ -1309,9 +1211,11 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
             )
         assignment.agenda_id = None
         assignment.kind = "management"
+        assignment.load_percentage = 100
         assignment.locked = True
         assignment.fixed = False
         assignment.extra = False
+        assignment.manually_modified = True
         assignment.management = True
         bump_revision(session)
         return {
@@ -1360,9 +1264,11 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
         )
     assignment.agenda_id = agenda_id
     assignment.kind = "assigned"
+    assignment.load_percentage = agenda.load_percentage
     assignment.locked = True
     assignment.fixed = False
     assignment.extra = False
+    assignment.manually_modified = True
     assignment.management = False
     bump_revision(session)
     return {
@@ -1384,17 +1290,15 @@ def fairness(session: Session) -> dict[str, Any]:
     )
     agendas = list(session.scalars(select(Agenda).where(Agenda.archived_at.is_(None)).order_by(Agenda.name)))
     counts = {member.id: {agenda.id: 0.0 for agenda in agendas} for member in members}
-    agenda_load = {agenda.id: agenda.load_percentage / 100 for agenda in agendas}
-    statement = select(Assignment).join(Proposal).where(Assignment.agenda_id.is_not(None))
+    statement = select(Assignment).where(Assignment.agenda_id.is_not(None))
     for item in session.scalars(statement):
         if item.member_id in counts and item.agenda_id in counts[item.member_id]:
-            counts[item.member_id][item.agenda_id] += agenda_load[item.agenda_id]
+            counts[item.member_id][item.agenda_id] += item.load_percentage / 100
     management_counts = {
         member.id: int(
             session.scalar(
                 select(func.count())
                 .select_from(Assignment)
-                .join(Proposal)
                 .where(
                     Assignment.member_id == member.id,
                     Assignment.kind == "management",

@@ -9,7 +9,7 @@ from ortools.sat.python import cp_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pinendar.application.state import DomainError, bump_revision, month_end, uid
+from pinendar.application.state import DomainError, bump_revision, uid
 from pinendar.domain.scheduler import matches_recurrence
 from pinendar.infrastructure.models import (
     Absence,
@@ -19,24 +19,15 @@ from pinendar.infrastructure.models import (
     Assignment,
     Coverage,
     FixedRule,
+    Guard,
     GuardTransfer,
     Holiday,
     Member,
     MemberAvailableDay,
     MemberCapability,
     MemberTeleDay,
-    Proposal,
-    ProposalAbsence,
-    ProposalGuard,
     Vacancy,
 )
-
-
-def _current_proposal(session: Session) -> Proposal:
-    proposal = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    if not proposal:
-        raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
-    return proposal
 
 
 def _member(session: Session, member_id: str | None) -> Member | None:
@@ -50,14 +41,13 @@ def _member(session: Session, member_id: str | None) -> Member | None:
 
 def _guard(
     session: Session,
-    proposal: Proposal,
     guard_id: str | None,
     guard_date: date,
-) -> ProposalGuard | None:
+) -> Guard | None:
     if guard_id is None:
         return None
-    guard = session.get(ProposalGuard, guard_id)
-    if not guard or guard.proposal_id != proposal.id or guard.date != guard_date:
+    guard = session.get(Guard, guard_id)
+    if not guard or guard.date != guard_date:
         raise DomainError(
             "GUARD_OPERATION_STALE",
             "La guàrdia ha canviat. Recarrega la vista abans de continuar",
@@ -89,7 +79,6 @@ def _assert_revision(session: Session, expected_revision: int | None) -> None:
 
 def _operation(
     session: Session,
-    proposal: Proposal,
     kind: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -99,9 +88,7 @@ def _operation(
 
     guards = list(
         session.scalars(
-            select(ProposalGuard)
-            .where(ProposalGuard.proposal_id == proposal.id)
-            .order_by(ProposalGuard.date, ProposalGuard.id)
+            select(Guard).order_by(Guard.date, Guard.id)
         )
     )
     specs = [
@@ -110,7 +97,7 @@ def _operation(
     ]
     if kind == "cession":
         guard_date = operation_date("date")
-        source = _guard(session, proposal, payload.get("guardId"), guard_date)
+        source = _guard(session, payload.get("guardId"), guard_date)
         target = _member(session, payload.get("toMemberId"))
         if source is None and target is None:
             raise DomainError(
@@ -135,7 +122,7 @@ def _operation(
         return {"guards": specs, "legs": legs}
 
     first_date = operation_date("firstDate")
-    first = _guard(session, proposal, payload.get("firstGuardId"), first_date)
+    first = _guard(session, payload.get("firstGuardId"), first_date)
     if first is None:
         raise DomainError(
             "INVALID_GUARD_EXCHANGE",
@@ -162,7 +149,7 @@ def _operation(
     second_date = operation_date("secondDate")
     if first_date == second_date:
         raise DomainError("INVALID_GUARD_EXCHANGE", "Cal seleccionar dues dates diferents")
-    second = _guard(session, proposal, second_guard_id, second_date)
+    second = _guard(session, second_guard_id, second_date)
     assert second is not None
     if first and second and first.member_id == second.member_id:
         raise DomainError(
@@ -218,7 +205,6 @@ def _telework(session: Session, member: Member, value: date) -> bool:
 
 def _planifiable(
     session: Session,
-    proposal: Proposal,
     member: Member,
     value: date,
     guard_specs: list[dict[str, Any]],
@@ -231,14 +217,6 @@ def _planifiable(
         or not _works(session, member, value)
     ):
         return False
-    absent = session.scalar(
-        select(ProposalAbsence.id).where(
-            ProposalAbsence.proposal_id == proposal.id,
-            ProposalAbsence.member_id == member.id,
-            ProposalAbsence.start <= value,
-            ProposalAbsence.end >= value,
-        )
-    )
     profile_absent = session.scalar(
         select(Absence.id).where(
             Absence.member_id == member.id,
@@ -246,7 +224,7 @@ def _planifiable(
             Absence.end >= value,
         )
     )
-    if absent or profile_absent:
+    if profile_absent:
         return False
     return not any(
         item["memberId"] == member.id and item["date"] + timedelta(days=1) == value
@@ -318,14 +296,12 @@ def _solve_phase(
 
 def _repair_date(
     session: Session,
-    proposal: Proposal,
     value: date,
     guard_specs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     rows = list(
         session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == proposal.id,
                 Assignment.date == value,
             )
         )
@@ -333,7 +309,6 @@ def _repair_date(
     old_vacancies = list(
         session.scalars(
             select(Vacancy).where(
-                Vacancy.proposal_id == proposal.id,
                 Vacancy.date == value,
             )
         )
@@ -380,7 +355,7 @@ def _repair_date(
     planifiable = {
         member.id: member
         for member in members
-        if _planifiable(session, proposal, member, value, guard_specs)
+        if _planifiable(session, member, value, guard_specs)
     }
     old_by_key = {
         (row.member_id, row.agenda_id): row
@@ -643,7 +618,6 @@ def _assignment_key(item: Assignment | dict[str, Any]) -> tuple[str, str]:
 
 def _relocate_management(
     session: Session,
-    proposal: Proposal,
     guard_specs: list[dict[str, Any]],
     repairs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -671,7 +645,6 @@ def _relocate_management(
         candidates: list[tuple[int, date, Assignment]] = []
         for row in session.scalars(
             select(Assignment).where(
-                Assignment.proposal_id == proposal.id,
                 Assignment.member_id == member_id,
                 Assignment.kind == "no_assignment",
             )
@@ -679,7 +652,7 @@ def _relocate_management(
             if (
                 row.date in affected
                 or row.date.strftime("%Y-%m") != month
-                or not _planifiable(session, proposal, member, row.date, guard_specs)
+                or not _planifiable(session, member, row.date, guard_specs)
             ):
                 continue
             weekday_rank = 0 if row.date.isoweekday() == 5 else 1 if row.date.isoweekday() == 1 else 2
@@ -782,26 +755,32 @@ def _calculate(
     session: Session,
     kind: str,
     payload: dict[str, Any],
-) -> tuple[Proposal, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    proposal = _current_proposal(session)
-    operation = _operation(session, proposal, kind, payload)
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    operation = _operation(session, kind, payload)
     affected_dates = sorted(
         {
             leg["date"] + timedelta(days=1)
             for leg in operation["legs"]
-            if (proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01"))
-            <= leg["date"] + timedelta(days=1)
-            <= (proposal.end_date or month_end(proposal.end_month))
+            if session.scalar(
+                select(Assignment.id)
+                .where(Assignment.date == leg["date"] + timedelta(days=1))
+                .limit(1)
+            )
+            or session.scalar(
+                select(Vacancy.id)
+                .where(Vacancy.date == leg["date"] + timedelta(days=1))
+                .limit(1)
+            )
         }
     )
     repairs = [
-        _repair_date(session, proposal, value, operation["guards"])
+        _repair_date(session, value, operation["guards"])
         for value in affected_dates
     ]
     relocations = _relocate_management(
-        session, proposal, operation["guards"], repairs
+        session, operation["guards"], repairs
     )
-    return proposal, operation, repairs, relocations, _impact(operation, repairs, relocations)
+    return operation, repairs, relocations, _impact(operation, repairs, relocations)
 
 
 def preview_guard_operation(
@@ -809,7 +788,7 @@ def preview_guard_operation(
     kind: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    _proposal, _operation_data, _repairs, _relocations, impact = _calculate(
+    _operation_data, _repairs, _relocations, impact = _calculate(
         session, kind, payload
     )
     settings = session.get(AppSettings, 1)
@@ -826,15 +805,13 @@ def apply_guard_operation(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     _assert_revision(session, payload.get("expectedRevision"))
-    proposal, operation, repairs, relocations, impact = _calculate(
+    operation, repairs, relocations, impact = _calculate(
         session, kind, payload
     )
 
     existing_guards = {
         item.id: item
-        for item in session.scalars(
-            select(ProposalGuard).where(ProposalGuard.proposal_id == proposal.id)
-        )
+        for item in session.scalars(select(Guard))
     }
     desired_guard_ids = {item["id"] for item in operation["guards"]}
     for guard_id, existing_guard in existing_guards.items():
@@ -844,9 +821,8 @@ def apply_guard_operation(
         desired_guard = existing_guards.get(item["id"])
         if desired_guard is None:
             session.add(
-                ProposalGuard(
+                Guard(
                     id=item["id"],
-                    proposal_id=proposal.id,
                     member_id=item["memberId"],
                     date=item["date"],
                 )
@@ -866,7 +842,6 @@ def apply_guard_operation(
             if row is None:
                 row = Assignment(
                     id=item["id"],
-                    proposal_id=proposal.id,
                     date=repair["date"],
                     member_id=item["memberId"],
                 )
@@ -874,6 +849,14 @@ def apply_guard_operation(
             row.member_id = item["memberId"]
             row.agenda_id = item["agendaId"]
             row.kind = item["kind"]
+            agenda = session.get(Agenda, item["agendaId"]) if item["agendaId"] else None
+            row.load_percentage = (
+                agenda.load_percentage
+                if agenda
+                else 100
+                if item["kind"] == "management"
+                else 0
+            )
             row.locked = item["locked"]
             row.fixed = item["fixed"]
             row.extra = item["extra"]
@@ -883,7 +866,6 @@ def apply_guard_operation(
         for agenda_id in repair["vacancies"]:
             session.add(
                 Vacancy(
-                    proposal_id=proposal.id,
                     date=repair["date"],
                     agenda_id=agenda_id,
                 )
@@ -893,6 +875,7 @@ def apply_guard_operation(
         row = relocation["oldAssignment"]
         row.kind = "management"
         row.agenda_id = None
+        row.load_percentage = 100
         row.locked = True
         row.fixed = False
         row.extra = False
@@ -906,7 +889,6 @@ def apply_guard_operation(
                 id=uid(),
                 operation_id=operation_id,
                 operation_kind=kind,
-                proposal_id=proposal.id,
                 guard_date=leg["date"],
                 from_member_id=leg["fromMemberId"],
                 to_member_id=leg["toMemberId"],

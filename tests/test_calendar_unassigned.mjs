@@ -46,6 +46,17 @@ assert.equal(dailyAssignmentLoad({
   memberId: 'active',
   date: '2026-08-01',
 }), 100);
+assert.equal(dailyAssignmentLoad({
+  assignments: [{
+    memberId: 'active',
+    date: '2026-08-01',
+    type: 'full',
+    loadPercentage: 50,
+  }],
+  agendas,
+  memberId: 'active',
+  date: '2026-08-01',
+}), 50, 'El evento conserva su carga histórica aunque cambie la agenda');
 assert.deepEqual(
   vacanciesForDate({
     unfilled: [

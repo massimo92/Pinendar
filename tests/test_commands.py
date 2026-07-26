@@ -5,15 +5,13 @@ from sqlalchemy import select
 
 from pinendar.application.commands import color_hue, madrid_today, random_color
 from pinendar.application.jobs import build_problem
-from pinendar.application.state import import_proposal, serialize_proposal
+from pinendar.application.state import import_calendar_record, serialize_calendar
 from pinendar.infrastructure.models import (
     Absence,
     AgendaRecurrence,
     Assignment,
+    Guard,
     MemberStatusChange,
-    Proposal,
-    ProposalAbsence,
-    ProposalGuard,
     Vacancy,
 )
 
@@ -259,7 +257,7 @@ def test_management_assignment_persists_without_an_agenda(
     state = authenticated_client.get("/api/v1/bootstrap").json()
     member_id = state["team"][0]["id"]
     with database.session_factory.begin() as session:
-        proposal = import_proposal(
+        import_calendar_record(
             session,
             {
                 "startMonth": "2027-01",
@@ -277,19 +275,17 @@ def test_management_assignment_persists_without_an_agenda(
                 "unfilled": [],
                 "conditions": {"guards": [], "absences": []},
             },
-            "historical",
-            1,
             {member_id},
             {item["id"] for item in state["agendas"]},
         )
         session.flush()
         assignment = session.get(Assignment, "management-assignment")
-        serialized = serialize_proposal(session, proposal)
+        serialized = serialize_calendar(session)
 
         assert assignment is not None
         assert assignment.agenda_id is None
         assert assignment.kind == "management"
-        assert serialized["assignments"][0]["type"] == "management"
+        assert serialized["events"][0]["type"] == "management"
 
 
 def test_member_status_is_tracked_and_inactive_member_is_not_planned(authenticated_client: TestClient) -> None:
@@ -517,20 +513,8 @@ def test_telework_day_rejects_manual_onsite_assignment(authenticated_client: Tes
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
         session.add(
-            Proposal(
-                id="proposal-manual-telework",
-                status="current",
-                start_month="2026-01",
-                end_month="2026-01",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
-        session.add(
             Assignment(
                 id="assignment-manual-telework",
-                proposal_id="proposal-manual-telework",
                 date=datetime(2026, 1, 5).date(),
                 member_id=member["id"],
                 agenda_id="tac_amb",
@@ -538,7 +522,7 @@ def test_telework_day_rejects_manual_onsite_assignment(authenticated_client: Tes
         )
 
     response = authenticated_client.patch(
-        "/api/v1/proposals/current/assignments/assignment-manual-telework",
+        "/api/v1/calendar/events/assignment-manual-telework",
         json={"type": "eco_amb"},
     )
 
@@ -567,40 +551,17 @@ def test_assignment_exchange_is_ranked_by_equity_and_updates_both_people_atomica
     database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
     with database.session_factory.begin() as session:
-        session.add_all(
-            [
-                Proposal(
-                    id="proposal-exchange-history",
-                    status="historical",
-                    start_month="2026-01",
-                    end_month="2026-01",
-                    generated_at=datetime.now(),
-                    input_revision=1,
-                ),
-                Proposal(
-                    id="proposal-exchange-current",
-                    status="current",
-                    start_month="2026-08",
-                    end_month="2026-08",
-                    generated_at=datetime.now(),
-                    input_revision=1,
-                ),
-            ]
-        )
-        session.flush()
         for index in range(4):
             session.add_all(
                 [
                     Assignment(
                         id=f"history-a-{index}",
-                        proposal_id="proposal-exchange-history",
                         date=datetime(2026, 1, index + 5).date(),
                         member_id=first_member["id"],
                         agenda_id=first_agenda["id"],
                     ),
                     Assignment(
                         id=f"history-b-{index}",
-                        proposal_id="proposal-exchange-history",
                         date=datetime(2026, 1, index + 5).date(),
                         member_id=second_member["id"],
                         agenda_id=second_agenda["id"],
@@ -611,14 +572,12 @@ def test_assignment_exchange_is_ranked_by_equity_and_updates_both_people_atomica
             [
                 Assignment(
                     id="exchange-source",
-                    proposal_id="proposal-exchange-current",
                     date=planning_date,
                     member_id=first_member["id"],
                     agenda_id=first_agenda["id"],
                 ),
                 Assignment(
                     id="exchange-target",
-                    proposal_id="proposal-exchange-current",
                     date=planning_date,
                     member_id=second_member["id"],
                     agenda_id=second_agenda["id"],
@@ -627,7 +586,7 @@ def test_assignment_exchange_is_ranked_by_equity_and_updates_both_people_atomica
         )
 
     options = authenticated_client.get(
-        "/api/v1/proposals/current/assignments/exchange-source/exchange-options"
+        "/api/v1/calendar/events/exchange-source/exchange-options"
     )
 
     assert options.status_code == 200
@@ -636,7 +595,7 @@ def test_assignment_exchange_is_ranked_by_equity_and_updates_both_people_atomica
     assert options.json()["options"][0]["fairnessWorstDeltaBasisPoints"] > 0
 
     exchanged = authenticated_client.post(
-        "/api/v1/proposals/current/assignments/exchange-source/exchange",
+        "/api/v1/calendar/events/exchange-source/exchange",
         json={"targetAssignmentId": "exchange-target"},
     )
 
@@ -670,29 +629,16 @@ def test_invalid_exchange_is_rejected_without_changing_either_assignment(
     database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-invalid-exchange",
-                status="current",
-                start_month="2026-08",
-                end_month="2026-08",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="invalid-exchange-source",
-                    proposal_id="proposal-invalid-exchange",
                     date=planning_date,
                     member_id=first_member["id"],
                     agenda_id=first_agenda["id"],
                 ),
                 Assignment(
                     id="invalid-exchange-target",
-                    proposal_id="proposal-invalid-exchange",
                     date=planning_date,
                     member_id=second_member["id"],
                     agenda_id=second_agenda["id"],
@@ -701,10 +647,10 @@ def test_invalid_exchange_is_rejected_without_changing_either_assignment(
         )
 
     options = authenticated_client.get(
-        "/api/v1/proposals/current/assignments/invalid-exchange-source/exchange-options"
+        "/api/v1/calendar/events/invalid-exchange-source/exchange-options"
     )
     rejected = authenticated_client.post(
-        "/api/v1/proposals/current/assignments/invalid-exchange-source/exchange",
+        "/api/v1/calendar/events/invalid-exchange-source/exchange",
         json={"targetAssignmentId": "invalid-exchange-target"},
     )
 
@@ -744,22 +690,10 @@ def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_overrid
     database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-fixed-exchange",
-                status="current",
-                start_month="2026-08",
-                end_month="2026-08",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="fixed-exchange-source",
-                    proposal_id="proposal-fixed-exchange",
                     date=planning_date,
                     member_id=first_member["id"],
                     agenda_id=first_agenda["id"],
@@ -767,14 +701,12 @@ def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_overrid
                 ),
                 Assignment(
                     id="fixed-exchange-target",
-                    proposal_id="proposal-fixed-exchange",
                     date=planning_date,
                     member_id=second_member["id"],
                     agenda_id=second_agenda["id"],
                 ),
                 Assignment(
                     id="other-fixed-exchange-target",
-                    proposal_id="proposal-fixed-exchange",
                     date=planning_date,
                     member_id=third_member["id"],
                     agenda_id=first_agenda["id"],
@@ -784,14 +716,14 @@ def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_overrid
         )
 
     warning = authenticated_client.get(
-        "/api/v1/proposals/current/assignments/fixed-exchange-source/exchange-options"
+        "/api/v1/calendar/events/fixed-exchange-source/exchange-options"
     )
     options = authenticated_client.get(
-        "/api/v1/proposals/current/assignments/fixed-exchange-source/exchange-options",
+        "/api/v1/calendar/events/fixed-exchange-source/exchange-options",
         params={"includeFixed": "true"},
     )
     rejected = authenticated_client.post(
-        "/api/v1/proposals/current/assignments/fixed-exchange-source/exchange",
+        "/api/v1/calendar/events/fixed-exchange-source/exchange",
         json={"targetAssignmentId": "fixed-exchange-target"},
     )
 
@@ -805,7 +737,7 @@ def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_overrid
     assert rejected.status_code == 409
 
     indirect_fixed_change = authenticated_client.post(
-        "/api/v1/proposals/current/assignments/fixed-exchange-target/exchange",
+        "/api/v1/calendar/events/fixed-exchange-target/exchange",
         json={
             "targetAssignmentId": "other-fixed-exchange-target",
             "confirmFixed": True,
@@ -814,7 +746,7 @@ def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_overrid
     assert indirect_fixed_change.status_code == 409
 
     exchanged = authenticated_client.post(
-        "/api/v1/proposals/current/assignments/fixed-exchange-source/exchange",
+        "/api/v1/calendar/events/fixed-exchange-source/exchange",
         json={
             "targetAssignmentId": "fixed-exchange-target",
             "confirmFixed": True,
@@ -842,22 +774,10 @@ def test_extra_assignment_can_be_opened_for_an_inferred_unassigned_person(
         email="placa-extra@hospital.test",
         agenda_ids=[first_agenda["id"], second_agenda["id"]],
     )
-    database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
-    with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-extra-current",
-                status="current",
-                start_month="2026-08",
-                end_month="2026-08",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
 
     options = authenticated_client.get(
-        f"/api/v1/proposals/current/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
     )
 
     assert options.status_code == 200
@@ -872,14 +792,14 @@ def test_extra_assignment_can_be_opened_for_an_inferred_unassigned_person(
     assert deltas == sorted(deltas, reverse=True)
 
     created = authenticated_client.post(
-        f"/api/v1/proposals/current/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
         json={"agendaId": first_agenda["id"]},
     )
 
     assert created.status_code == 201
     assert created.json()["extra"] is True
-    current = authenticated_client.get("/api/v1/proposals/current").json()
-    saved = next(item for item in current["assignments"] if item["memberId"] == member["id"])
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
+    saved = next(item for item in calendar["events"] if item["memberId"] == member["id"])
     assert saved["type"] == first_agenda["id"]
     assert saved["extra"] is True
 
@@ -897,22 +817,10 @@ def test_extra_assignment_options_respect_a_telematic_day(
         agenda_ids=[telematic["id"], onsite["id"]],
         telework=True,
     )
-    database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
-    with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-extra-telework",
-                status="current",
-                start_month="2026-08",
-                end_month="2026-08",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
 
     options = authenticated_client.get(
-        f"/api/v1/proposals/current/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
     )
 
     assert options.status_code == 200
@@ -935,28 +843,18 @@ def test_extra_assignment_rejects_a_profile_vacation(
     database = authenticated_client.app.state.database
     planning_date = datetime(2026, 8, 11).date()
     with database.session_factory.begin() as session:
-        session.add_all(
-            [
-                Proposal(
-                    id="proposal-extra-vacation",
-                    status="current",
-                    start_month="2026-08",
-                    end_month="2026-08",
-                    generated_at=datetime.now(),
-                    input_revision=1,
-                ),
-                Absence(
-                    id="profile-vacation-extra",
-                    member_id=member["id"],
-                    category="vacances",
-                    start=planning_date,
-                    end=planning_date,
-                ),
-            ]
+        session.add(
+            Absence(
+                id="profile-vacation-extra",
+                member_id=member["id"],
+                category="vacances",
+                start=planning_date,
+                end=planning_date,
+            )
         )
 
     options = authenticated_client.get(
-        f"/api/v1/proposals/current/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
     )
 
     assert options.status_code == 409
@@ -1221,36 +1119,14 @@ def test_calendar_assignments_can_be_deleted_for_an_inclusive_range(authenticate
     agenda_id = state["agendas"][0]["id"]
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-clear-range",
-                status="current",
-                start_month="2027-01",
-                end_month="2027-01",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.add(
-            Proposal(
-                id="historical-clear-range",
-                status="historical",
-                start_month="2027-01",
-                end_month="2027-01",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
-                Assignment(id="before-range", proposal_id="proposal-clear-range", date=datetime(2027, 1, 4).date(), member_id=member_id, agenda_id=agenda_id),
-                Assignment(id="inside-range", proposal_id="proposal-clear-range", date=datetime(2027, 1, 10).date(), member_id=member_id, agenda_id=agenda_id),
-                Assignment(id="after-range", proposal_id="proposal-clear-range", date=datetime(2027, 1, 20).date(), member_id=member_id, agenda_id=agenda_id),
-                Assignment(id="historical-inside-range", proposal_id="historical-clear-range", date=datetime(2027, 1, 10).date(), member_id=member_id, agenda_id=agenda_id),
-                Vacancy(proposal_id="proposal-clear-range", date=datetime(2027, 1, 11).date(), agenda_id=agenda_id),
-                ProposalGuard(id="guard-inside-range", proposal_id="proposal-clear-range", member_id=member_id, date=datetime(2027, 1, 10).date()),
-                ProposalAbsence(id="absence-spanning-range", proposal_id="proposal-clear-range", member_id=member_id, category="vacances", start=datetime(2027, 1, 1).date(), end=datetime(2027, 1, 31).date()),
+                Assignment(id="before-range", date=datetime(2027, 1, 4).date(), member_id=member_id, agenda_id=agenda_id),
+                Assignment(id="inside-range", date=datetime(2027, 1, 10).date(), member_id=member_id, agenda_id=agenda_id),
+                Assignment(id="after-range", date=datetime(2027, 1, 20).date(), member_id=member_id, agenda_id=agenda_id),
+                Vacancy(date=datetime(2027, 1, 11).date(), agenda_id=agenda_id),
+                Guard(id="guard-inside-range", member_id=member_id, date=datetime(2027, 1, 10).date()),
+                Absence(id="absence-spanning-range", member_id=member_id, category="vacances", start=datetime(2027, 1, 1).date(), end=datetime(2027, 1, 31).date()),
             ]
         )
 
@@ -1265,55 +1141,38 @@ def test_calendar_assignments_can_be_deleted_for_an_inclusive_range(authenticate
         assert session.get(Assignment, "before-range") is not None
         assert session.get(Assignment, "inside-range") is None
         assert session.get(Assignment, "after-range") is not None
-        assert session.get(Assignment, "historical-inside-range") is not None
-        assert session.get(ProposalGuard, "guard-inside-range") is not None
-        remaining_absences = list(
-            session.scalars(
-                select(ProposalAbsence)
-                .where(ProposalAbsence.proposal_id == "proposal-clear-range")
-                .order_by(ProposalAbsence.start)
-            )
+        assert session.get(Guard, "guard-inside-range") is not None
+        absence = session.get(Absence, "absence-spanning-range")
+        assert absence is not None
+        assert (absence.start.isoformat(), absence.end.isoformat()) == (
+            "2027-01-01",
+            "2027-01-31",
         )
-        assert [(item.start.isoformat(), item.end.isoformat()) for item in remaining_absences] == [
-            ("2027-01-01", "2027-01-07"),
-            ("2027-01-16", "2027-01-31"),
-        ]
 
 
-def test_current_proposal_guards_can_be_added_without_regenerating_calendar(
+def test_guards_can_be_added_without_regenerating_calendar(
     authenticated_client: TestClient,
 ) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
     member_id = state["team"][0]["id"]
     database = authenticated_client.app.state.database
-    with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-guards-only",
-                status="current",
-                start_month="2027-03",
-                end_month="2027-03",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
 
     response = authenticated_client.post(
-        "/api/v1/proposals/current/guards",
+        "/api/v1/guards",
         json={"guards": [{"memberId": member_id, "date": "2027-03-12"}]},
     )
 
     assert response.status_code == 201
     assert response.json()["added"] == 1
     with database.session_factory() as session:
-        guard = session.scalar(select(ProposalGuard).where(ProposalGuard.proposal_id == "proposal-guards-only"))
+        guard = session.scalar(select(Guard).where(Guard.date == datetime(2027, 3, 12).date()))
         assert guard is not None
         assert guard.member_id == member_id
         assert guard.date.isoformat() == "2027-03-12"
 
     replacement_member_id = state["team"][1]["id"]
     response = authenticated_client.put(
-        "/api/v1/proposals/current/guards",
+        "/api/v1/guards",
         json={"guards": [{"memberId": replacement_member_id, "date": "2027-03-12"}]},
     )
 
@@ -1323,7 +1182,7 @@ def test_current_proposal_guards_can_be_added_without_regenerating_calendar(
     ]
 
 
-def test_clearing_all_calendar_rows_removes_the_empty_current_proposal(
+def test_clearing_all_calendar_rows_leaves_no_planning_events(
     authenticated_client: TestClient,
 ) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
@@ -1331,28 +1190,15 @@ def test_clearing_all_calendar_rows_removes_the_empty_current_proposal(
     agenda_id = state["agendas"][0]["id"]
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-clear-entirely",
-                status="current",
-                start_month="2027-02",
-                end_month="2027-02",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="only-assignment",
-                    proposal_id="proposal-clear-entirely",
                     date=datetime(2027, 2, 8).date(),
                     member_id=member_id,
                     agenda_id=agenda_id,
                 ),
                 Vacancy(
-                    proposal_id="proposal-clear-entirely",
                     date=datetime(2027, 2, 9).date(),
                     agenda_id=agenda_id,
                 ),
@@ -1367,7 +1213,8 @@ def test_clearing_all_calendar_rows_removes_the_empty_current_proposal(
     assert response.status_code == 200
     assert response.json() == {"assignmentsDeleted": 1, "vacanciesDeleted": 1}
     with database.session_factory() as session:
-        assert session.get(Proposal, "proposal-clear-entirely") is None
+        assert session.get(Assignment, "only-assignment") is None
+        assert session.scalar(select(Vacancy).where(Vacancy.date == datetime(2027, 2, 9).date())) is None
 
 
 def test_archiving_member_preserves_past_and_removes_future_assignments(authenticated_client: TestClient) -> None:
@@ -1377,29 +1224,16 @@ def test_archiving_member_preserves_past_and_removes_future_assignments(authenti
     today = madrid_today()
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-member-archive",
-                status="current",
-                start_month=(today - timedelta(days=40)).strftime("%Y-%m"),
-                end_month=(today + timedelta(days=40)).strftime("%Y-%m"),
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="past-assignment",
-                    proposal_id="proposal-member-archive",
                     date=today - timedelta(days=1),
                     member_id=member_id,
                     agenda_id=agenda_id,
                 ),
                 Assignment(
                     id="future-assignment",
-                    proposal_id="proposal-member-archive",
                     date=today + timedelta(days=1),
                     member_id=member_id,
                     agenda_id=agenda_id,
@@ -1422,34 +1256,21 @@ def test_archiving_agenda_preserves_past_and_removes_future_events(authenticated
     today = madrid_today()
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="proposal-agenda-archive",
-                status="current",
-                start_month=(today - timedelta(days=40)).strftime("%Y-%m"),
-                end_month=(today + timedelta(days=40)).strftime("%Y-%m"),
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="past-agenda-assignment",
-                    proposal_id="proposal-agenda-archive",
                     date=today - timedelta(days=1),
                     member_id=member_id,
                     agenda_id=agenda_id,
                 ),
                 Assignment(
                     id="future-agenda-assignment",
-                    proposal_id="proposal-agenda-archive",
                     date=today + timedelta(days=1),
                     member_id=member_id,
                     agenda_id=agenda_id,
                 ),
-                Vacancy(proposal_id="proposal-agenda-archive", date=today + timedelta(days=2), agenda_id=agenda_id),
+                Vacancy(date=today + timedelta(days=2), agenda_id=agenda_id),
             ]
         )
 

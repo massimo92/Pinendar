@@ -81,7 +81,7 @@ def test_legacy_app_state_is_imported_without_losing_identifiers(tmp_path: Path)
     assert migrated["team"][0]["id"] == "member-1"
     assert migrated["agendas"][0]["id"] == "agenda-1"
     assert migrated["agendas"][0]["shift"] == "morning"
-    assert migrated["draft"]["assignments"][0]["id"] == "assignment-1"
+    assert migrated["calendar"]["events"][0]["id"] == "assignment-1"
     assert len(list(tmp_path.glob("pinendar.pre-fastapi-*.sqlite"))) == 1
 
     with TestClient(create_app(settings)):

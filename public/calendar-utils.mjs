@@ -21,7 +21,7 @@ export function dailyAssignmentLoad({ assignments, agendas, memberId, date }) {
     .reduce((total, item) => {
       if (item.type === 'no_assignment') return total;
       if (item.type === 'management') return total + 100;
-      return total + Number(loads[item.type] || 0);
+      return total + Number(item.loadPercentage ?? loads[item.type] ?? 0);
     }, 0);
 }
 

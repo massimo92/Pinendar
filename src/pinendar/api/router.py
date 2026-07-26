@@ -4,7 +4,6 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 
 from pinendar.api.auth import COOKIE_NAME, SESSION_SECONDS, create_session, require_auth
 from pinendar.application.commands import (
@@ -24,10 +23,10 @@ from pinendar.application.commands import (
     update_assignment,
 )
 from pinendar.application.guard_imports import (
-    add_current_proposal_guards,
+    add_guards,
     create_member_alias,
     preview_guard_import,
-    replace_current_proposal_guards,
+    replace_guards,
 )
 from pinendar.application.guard_operations import (
     apply_guard_operation,
@@ -39,7 +38,6 @@ from pinendar.application.state import (
     bootstrap,
     bump_revision,
     job_payload,
-    serialize_proposal,
 )
 from pinendar.infrastructure.models import (
     Agenda,
@@ -48,7 +46,6 @@ from pinendar.infrastructure.models import (
     Guard,
     Holiday,
     Member,
-    Proposal,
 )
 
 router = APIRouter()
@@ -173,6 +170,7 @@ class GenerationRequest(BaseModel):
     guards: list[GenerationGuardRequest] = []
     absences: list[GenerationAbsenceRequest] = []
     locked_assignments: list[dict[str, Any]] = Field(default=[], alias="lockedAssignments")
+    replace_existing: bool = Field(default=False, alias="replaceExisting")
     optimization_mode: Literal["fairness"] = Field(default="fairness", alias="optimizationMode")
 
 
@@ -195,7 +193,7 @@ class MemberAliasRequest(BaseModel):
     alias: str = Field(min_length=1, max_length=120)
 
 
-class CurrentProposalGuardsRequest(BaseModel):
+class GuardListRequest(BaseModel):
     guards: list[GenerationGuardRequest] = Field(default_factory=list)
 
 
@@ -468,14 +466,14 @@ def delete_assignments_in_range(
         return delete_calendar_range(database_session, start_date, end_date)
 
 
-@router.patch("/api/v1/proposals/current/assignments/{assignment_id}", dependencies=[Depends(require_auth)])
+@router.patch("/api/v1/calendar/events/{assignment_id}", dependencies=[Depends(require_auth)])
 def patch_assignment(assignment_id: str, payload: AssignmentRequest, request: Request) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
         return update_assignment(database_session, assignment_id, payload.type)
 
 
 @router.get(
-    "/api/v1/proposals/current/assignments/{assignment_id}/exchange-options",
+    "/api/v1/calendar/events/{assignment_id}/exchange-options",
     dependencies=[Depends(require_auth)],
 )
 def assignment_exchange_options(
@@ -488,7 +486,7 @@ def assignment_exchange_options(
 
 
 @router.post(
-    "/api/v1/proposals/current/assignments/{assignment_id}/exchange",
+    "/api/v1/calendar/events/{assignment_id}/exchange",
     dependencies=[Depends(require_auth)],
 )
 def exchange_assignment(
@@ -506,7 +504,7 @@ def exchange_assignment(
 
 
 @router.get(
-    "/api/v1/proposals/current/dates/{assignment_date}/members/{member_id}/extra-options",
+    "/api/v1/calendar/dates/{assignment_date}/members/{member_id}/extra-options",
     dependencies=[Depends(require_auth)],
 )
 def member_extra_assignment_options(
@@ -519,7 +517,7 @@ def member_extra_assignment_options(
 
 
 @router.post(
-    "/api/v1/proposals/current/dates/{assignment_date}/members/{member_id}/extra-assignments",
+    "/api/v1/calendar/dates/{assignment_date}/members/{member_id}/extra-assignments",
     dependencies=[Depends(require_auth)],
     status_code=status.HTTP_201_CREATED,
 )
@@ -533,37 +531,28 @@ def create_extra_assignment(
         return open_extra_assignment(database_session, member_id, assignment_date, payload.agenda_id)
 
 
-@router.get("/api/v1/proposals/current", dependencies=[Depends(require_auth)])
-def current_proposal(request: Request) -> dict[str, Any]:
-    with request.state.database.session_factory() as database_session:
-        proposal = database_session.scalar(select(Proposal).where(Proposal.status == "current"))
-        if not proposal:
-            raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
-        return serialize_proposal(database_session, proposal)
-
-
 @router.post(
-    "/api/v1/proposals/current/guards",
+    "/api/v1/guards",
     dependencies=[Depends(require_auth)],
     status_code=status.HTTP_201_CREATED,
 )
-def add_current_proposal_guards_endpoint(
-    payload: CurrentProposalGuardsRequest, request: Request
+def add_guards_endpoint(
+    payload: GuardListRequest, request: Request
 ) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
-        return add_current_proposal_guards(database_session, command_payload(payload)["guards"])
+        return add_guards(database_session, command_payload(payload)["guards"])
 
 
-@router.put("/api/v1/proposals/current/guards", dependencies=[Depends(require_auth)])
-def replace_current_proposal_guards_endpoint(
-    payload: CurrentProposalGuardsRequest, request: Request
+@router.put("/api/v1/guards", dependencies=[Depends(require_auth)])
+def replace_guards_endpoint(
+    payload: GuardListRequest, request: Request
 ) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
-        return replace_current_proposal_guards(database_session, command_payload(payload)["guards"])
+        return replace_guards(database_session, command_payload(payload)["guards"])
 
 
 @router.post(
-    "/api/v1/proposals/current/guard-cessions/preview",
+    "/api/v1/guard-cessions/preview",
     dependencies=[Depends(require_auth)],
 )
 def preview_guard_cession_endpoint(
@@ -576,7 +565,7 @@ def preview_guard_cession_endpoint(
 
 
 @router.post(
-    "/api/v1/proposals/current/guard-cessions",
+    "/api/v1/guard-cessions",
     dependencies=[Depends(require_auth)],
     status_code=status.HTTP_201_CREATED,
 )
@@ -590,7 +579,7 @@ def apply_guard_cession_endpoint(
 
 
 @router.post(
-    "/api/v1/proposals/current/guard-exchanges/preview",
+    "/api/v1/guard-exchanges/preview",
     dependencies=[Depends(require_auth)],
 )
 def preview_guard_exchange_endpoint(
@@ -603,7 +592,7 @@ def preview_guard_exchange_endpoint(
 
 
 @router.post(
-    "/api/v1/proposals/current/guard-exchanges",
+    "/api/v1/guard-exchanges",
     dependencies=[Depends(require_auth)],
     status_code=status.HTTP_201_CREATED,
 )
@@ -614,15 +603,6 @@ def apply_guard_exchange_endpoint(
         return apply_guard_operation(
             database_session, "exchange", command_payload(payload)
         )
-
-
-@router.get("/api/v1/proposals/history", dependencies=[Depends(require_auth)])
-def proposal_history(request: Request) -> list[dict[str, Any]]:
-    with request.state.database.session_factory() as database_session:
-        proposals = database_session.scalars(
-            select(Proposal).where(Proposal.status == "historical").order_by(Proposal.generated_at.desc())
-        )
-        return [serialize_proposal(database_session, proposal) for proposal in proposals]
 
 
 @router.get("/api/v1/fairness", dependencies=[Depends(require_auth)])

@@ -1,6 +1,8 @@
 # Pinendar
 
-Planificador mensual de agendas para equipos de radiología. Configura hospitales, agendas, personas, guardias y ausencias; Pinendar propone un calendario que respeta las reglas duras, protege la cobertura y mejora la equidad.
+Planificador mensual de agendas para equipos de radiología. Configura hospitales, agendas, personas, guardias y ausencias; Pinendar genera un calendario que respeta las reglas duras, protege la cobertura y mejora la equidad.
+
+El calendario es continuo: cada mes generado añade eventos por fecha y no reemplaza los meses anteriores. Regenerar un rango existente requiere confirmación y solo sustituye ese rango.
 
 ## Inicio rápido
 

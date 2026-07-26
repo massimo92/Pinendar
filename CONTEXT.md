@@ -139,7 +139,7 @@ _Avoid_: No asignación, ausencia
 
 **Regla fija**:
 Vínculo recurrente entre una persona, una agenda y un día semanal. Las personas planificables con el mismo vínculo ocupan tantas plazas de esa agenda como permita su demanda; las plazas restantes quedan abiertas.
-En la propuesta actual puede sobreescribirse manualmente tras una confirmación explícita. La asignación fija nunca aparece como destino de un intercambio iniciado desde otra persona y la regla recurrente permanece intacta.
+Puede sobreescribirse manualmente en un evento tras una confirmación explícita. La asignación fija nunca aparece como destino de un intercambio iniciado desde otra persona y la regla recurrente permanece intacta.
 _Avoid_: Asignación individual obligatoria, preferencia
 
 ## Decisiones de reparto
@@ -172,6 +172,14 @@ _Avoid_: Perfil agregado, media ponderada por asignaciones
 Proximidad del perfil estadístico de cada persona al perfil medio, limitada a diferencias que las capacidades permiten corregir.
 _Avoid_: Igualdad de conteos, equidad anual
 
-**Propuesta**:
-Calendario generado para un periodo que contiene asignaciones, vacantes y el snapshot de reglas que lo produjo.
-_Avoid_: Borrador, publicación
+**Evento de planificación**:
+Actividad vigente de una persona en una fecha. Puede ser una agenda clínica, Gestión o una jornada sin asignación. Conserva su carga y si fue fija, extraordinaria o modificada manualmente.
+_Avoid_: Propuesta, versión, evento de dominio
+
+**Calendario vigente**:
+Proyección por fechas de todos los eventos de planificación, vacantes, guardias y ausencias conservados. No tiene estados de borrador o publicación.
+_Avoid_: Propuesta actual, calendario definitivo
+
+**Ejecución de generación**:
+Registro técnico de una ejecución del optimizador: entrada, estado, diagnóstico y resultado. Sirve para auditoría y nunca decide qué eventos están vigentes.
+_Avoid_: Calendario, propuesta, versión

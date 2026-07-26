@@ -12,11 +12,9 @@ from sqlalchemy.orm import Session
 from pinendar.application.state import DomainError, bump_revision, month_end, uid
 from pinendar.infrastructure.models import (
     Assignment,
+    Guard,
     Member,
     MemberAlias,
-    Proposal,
-    ProposalGuard,
-    Vacancy,
 )
 
 ROLE_TOKENS = {
@@ -286,47 +284,25 @@ def create_member_alias(session: Session, member_id: str, alias: str) -> dict[st
     return {"id": item.id, "memberId": member_id, "alias": item.alias}
 
 
-def _assert_guard_import_safe(session: Session, proposal: Proposal) -> None:
-    has_calendar = any(
-        (
-            session.scalar(
-                select(Assignment.id)
-                .where(Assignment.proposal_id == proposal.id)
-                .limit(1)
-            ),
-            session.scalar(
-                select(Vacancy.id)
-                .where(Vacancy.proposal_id == proposal.id)
-                .limit(1)
-            ),
-        )
-    )
-    if has_calendar:
+def _assert_guard_import_safe(session: Session, guard_dates: set[date]) -> None:
+    post_guard_dates = {value.fromordinal(value.toordinal() + 1) for value in guard_dates}
+    if post_guard_dates and session.scalar(
+        select(Assignment.id).where(Assignment.date.in_(post_guard_dates)).limit(1)
+    ):
         raise DomainError(
             "GUARD_OPERATION_REQUIRED",
             "Amb un calendari generat, modifica les guàrdies mitjançant una cessió o un intercanvi",
         )
 
 
-def add_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]:
-    proposal = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    if not proposal:
-        raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
-    _assert_guard_import_safe(session, proposal)
-
-    start_date = proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01")
-    end_date = proposal.end_date or month_end(proposal.end_month)
+def add_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]:
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
-    existing = {
-        item.date: item
-        for item in session.scalars(
-            select(ProposalGuard).where(ProposalGuard.proposal_id == proposal.id)
-        )
-    }
-    added: list[ProposalGuard] = []
+    existing = {item.date: item for item in session.scalars(select(Guard))}
+    added: list[Guard] = []
     pending_dates: set[date] = set()
+    normalized_guards: list[tuple[dict[str, Any], str, date]] = []
     for raw_guard in guards:
         member_id = raw_guard.get("memberId") or raw_guard.get("member_id")
         guard_date = raw_guard.get("date")
@@ -337,12 +313,9 @@ def add_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) 
                 guard_date = date.fromisoformat(str(guard_date))
             except (TypeError, ValueError) as error:
                 raise DomainError("INVALID_DATE", "La data de la guàrdia no és vàlida", field="guards") from error
-        if guard_date < start_date or guard_date > end_date:
-            raise DomainError(
-                "GUARD_OUTSIDE_PERIOD",
-                "Les guàrdies han d’estar dins del període de la proposta",
-                field="guards",
-            )
+        normalized_guards.append((raw_guard, member_id, guard_date))
+    _assert_guard_import_safe(session, {item[2] for item in normalized_guards})
+    for raw_guard, member_id, guard_date in normalized_guards:
         current = existing.get(guard_date)
         if current or guard_date in pending_dates:
             current_member_id = current.member_id if current else next(
@@ -355,9 +328,8 @@ def add_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) 
                     field="guards",
                 )
             continue
-        item = ProposalGuard(
+        item = Guard(
             id=raw_guard.get("id") or uid(),
-            proposal_id=proposal.id,
             member_id=member_id,
             date=guard_date,
         )
@@ -370,7 +342,6 @@ def add_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) 
         bump_revision(session)
     all_guards = sorted([*existing.values(), *added], key=lambda item: (item.date, item.id))
     return {
-        "proposalId": proposal.id,
         "added": len(added),
         "guards": [
             {"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()}
@@ -379,45 +350,54 @@ def add_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) 
     }
 
 
-def replace_current_proposal_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]:
-    proposal = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    if not proposal:
-        raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
-    _assert_guard_import_safe(session, proposal)
-    start_date = proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01")
-    end_date = proposal.end_date or month_end(proposal.end_month)
+def replace_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]:
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
     desired: dict[date, str] = {}
     for raw_guard in guards:
-        member_id = raw_guard.get("memberId") or raw_guard.get("member_id")
+        raw_member_id = raw_guard.get("memberId") or raw_guard.get("member_id")
+        member_id = str(raw_member_id) if raw_member_id is not None else ""
         try:
-            guard_date = raw_guard.get("date") if isinstance(raw_guard.get("date"), date) else date.fromisoformat(str(raw_guard.get("date")))
+            raw_date = raw_guard.get("date")
+            guard_date: date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
         except (TypeError, ValueError) as error:
             raise DomainError("INVALID_DATE", "La data de la guàrdia no és vàlida", field="guards") from error
         if member_id not in active_member_ids:
             raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada", field="guards")
-        if guard_date < start_date or guard_date > end_date:
-            raise DomainError("GUARD_OUTSIDE_PERIOD", "Les guàrdies han d’estar dins del període de la proposta", field="guards")
         if guard_date in desired:
             raise DomainError("DUPLICATE_GUARD_DATE", f"Només hi pot haver una persona de guàrdia el {guard_date.isoformat()}", field="guards")
         desired[guard_date] = member_id
-    existing = {item.date: item for item in session.scalars(select(ProposalGuard).where(ProposalGuard.proposal_id == proposal.id))}
+    _assert_guard_import_safe(session, set(desired))
+    if not desired:
+        return {"guards": []}
+    range_start, range_end = min(desired), max(desired)
+    existing = {
+        item.date: item
+        for item in session.scalars(
+            select(Guard).where(Guard.date >= range_start, Guard.date <= range_end)
+        )
+    }
     changed = False
     for guard_date, member_id in desired.items():
         item = existing.pop(guard_date, None)
         if item is None:
-            session.add(ProposalGuard(id=uid(), proposal_id=proposal.id, member_id=member_id, date=guard_date))
+            session.add(Guard(id=uid(), member_id=member_id, date=guard_date))
             changed = True
         elif item.member_id != member_id:
             item.member_id = member_id
             changed = True
     if existing:
-        session.execute(delete(ProposalGuard).where(ProposalGuard.id.in_([item.id for item in existing.values()])))
+        session.execute(delete(Guard).where(Guard.id.in_([item.id for item in existing.values()])))
         changed = True
     if changed:
         session.flush()
         bump_revision(session)
-    items = list(session.scalars(select(ProposalGuard).where(ProposalGuard.proposal_id == proposal.id).order_by(ProposalGuard.date)))
-    return {"proposalId": proposal.id, "guards": [{"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()} for item in items]}
+    items = list(
+        session.scalars(
+            select(Guard)
+            .where(Guard.date >= range_start, Guard.date <= range_end)
+            .order_by(Guard.date)
+        )
+    )
+    return {"guards": [{"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()} for item in items]}

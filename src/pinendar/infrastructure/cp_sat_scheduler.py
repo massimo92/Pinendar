@@ -18,7 +18,7 @@ from pinendar.domain.scheduler import (
     period_dates,
 )
 
-MODEL_VERSION = "14"
+MODEL_VERSION = "15"
 PERCENT_SCALE = 10_000
 ORTOOLS_VERSION = version("ortools")
 
@@ -139,7 +139,7 @@ def _daily_demand(
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -221,6 +221,13 @@ class CpSatScheduler:
             )
         random_seed = int(config.get("randomSeed", 1))
         randomizer = Random(random_seed)
+        locked_by_key = {
+            (item["memberId"], date.fromisoformat(item["date"]), item["type"]): item
+            for item in problem.locked_assignments
+        }
+        locked_types_by_day: dict[tuple[str, date], set[str]] = defaultdict(set)
+        for member_id, value, event_type in locked_by_key:
+            locked_types_by_day[(member_id, value)].add(event_type)
 
         for value, member_ids in planifiable.items():
             for member_id in member_ids:
@@ -230,7 +237,10 @@ class CpSatScheduler:
                     agenda_id
                     for agenda_id in agendas
                     if agenda_id in allowed
-                    and demand[(value, agenda_id)] > 0
+                    and (
+                        demand[(value, agenda_id)] > 0
+                        or agenda_id in locked_types_by_day.get((member_id, value), set())
+                    )
                     and (
                         not _is_telework_day(member, value)
                         or bool(agendas[agenda_id].get("telematic", False))
@@ -268,6 +278,33 @@ class CpSatScheduler:
                 model.add(no_assignment + partial_day <= 1)
                 model.add(daily_units == 2 - (2 * no_assignment) - partial_day)
 
+        for (member_id, value, event_type), item in locked_by_key.items():
+            if value not in planning_dates or member_id not in planifiable.get(value, []):
+                return _failure(
+                    "LOCKED_ASSIGNMENT_CONFLICT",
+                    "Una assignació manual ja no és compatible amb la disponibilitat",
+                    details={"id": item.get("id"), "memberId": member_id, "date": value.isoformat()},
+                )
+            locked_variable: cp_model.IntVar | None
+            if event_type == "no_assignment":
+                locked_variable = unassigned.get((member_id, value))
+            elif event_type == "management":
+                locked_variable = management_assignments.get((member_id, value))
+            else:
+                locked_variable = assignments.get((member_id, value, event_type))
+            if locked_variable is None:
+                return _failure(
+                    "LOCKED_ASSIGNMENT_CONFLICT",
+                    "Una assignació manual ja no compleix les regles actuals",
+                    details={
+                        "id": item.get("id"),
+                        "memberId": member_id,
+                        "date": value.isoformat(),
+                        "type": event_type,
+                    },
+                )
+            model.add(locked_variable == 1)
+
         for value in planning_dates:
             for agenda_id in agendas:
                 amount = demand[(value, agenda_id)]
@@ -279,6 +316,9 @@ class CpSatScheduler:
                     assignment
                     for (member_id, assignment_date, assignment_agenda), assignment in assignments.items()
                     if assignment_date == value and assignment_agenda == agenda_id
+                    and not locked_by_key.get(
+                        (member_id, assignment_date, assignment_agenda), {}
+                    ).get("extra")
                 ]
                 model.add(sum(covered) + variable == amount)
 
@@ -715,12 +755,23 @@ class CpSatScheduler:
         for (member_id, value, agenda_id), variable in assignments.items():
             if last_solver.value(variable) != 1:
                 continue
+            locked_item = locked_by_key.get((member_id, value, agenda_id))
             result_assignments.append(
                 {
-                    "id": uuid4().hex,
+                    "id": locked_by_key.get((member_id, value, agenda_id), {}).get("id")
+                    or uuid4().hex,
                     "date": value.isoformat(),
                     "memberId": member_id,
                     "type": agenda_id,
+                    **(
+                        {
+                            key: locked_item[key]
+                            for key in ("locked", "extra", "manuallyModified")
+                            if key in locked_item
+                        }
+                        if locked_item
+                        else {}
+                    ),
                     **({"fixed": True} if (member_id, value, agenda_id) in fixed_assignments else {}),
                 }
             )
@@ -729,12 +780,14 @@ class CpSatScheduler:
                 continue
             result_assignments.append(
                 {
-                    "id": uuid4().hex,
+                    "id": locked_by_key.get((member_id, value, "management"), {}).get("id")
+                    or uuid4().hex,
                     "date": value.isoformat(),
                     "memberId": member_id,
                     "type": "management",
                     "management": True,
                     "telematic": True,
+                    **locked_by_key.get((member_id, value, "management"), {}),
                 }
             )
         for (member_id, value), variable in unassigned.items():
@@ -742,10 +795,12 @@ class CpSatScheduler:
                 continue
             result_assignments.append(
                 {
-                    "id": uuid4().hex,
+                    "id": locked_by_key.get((member_id, value, "no_assignment"), {}).get("id")
+                    or uuid4().hex,
                     "date": value.isoformat(),
                     "memberId": member_id,
                     "type": "no_assignment",
+                    **locked_by_key.get((member_id, value, "no_assignment"), {}),
                 }
             )
         result_assignments.sort(

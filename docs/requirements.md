@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Generar automáticamente propuestas de un mes, revisarlas manualmente y conservar sus versiones anteriores. Cada cuenta tiene un entorno independiente; la aplicación comienza en catalán y puede cambiarse a español.
+Generar automáticamente un mes de calendario, revisarlo manualmente y conservar simultáneamente todos los meses anteriores. Cada cuenta tiene un entorno independiente; la aplicación comienza en catalán y puede cambiarse a español.
 
 ## Entidades
 
@@ -11,7 +11,8 @@ Generar automáticamente propuestas de un mes, revisarlas manualmente y conserva
 - **Jornada de gestión**: actividad telemática especial de jornada completa. No es una agenda, no pertenece a ningún hospital y no crea demanda ni vacantes.
 - **Guardia**: fecha y médico. Deriva automáticamente una ausencia `post-guardia` el día natural siguiente; en domingo bloquea el lunes.
 - **Festivo**: fecha no laborable de Girona, importable desde fuente pública y editable manualmente.
-- **Propuesta**: actual o histórica. Al generar correctamente una nueva se archiva la anterior para histórico y equidad.
+- **Evento de planificación**: actividad vigente de una persona en una fecha: agenda, Gestión o sin asignación. Conserva su carga y si es fijo, extraordinario o manual.
+- **Ejecución de generación**: registro técnico del optimizador. No es un calendario ni determina qué eventos se muestran.
 
 ## Cobertura ordinaria
 
@@ -39,11 +40,11 @@ La tabla es el valor inicial y puede editarse en cada agenda. Una regla especial
 10. La demanda de una fecha es la suma de la cobertura semanal de cada agenda y sus reglas especiales recurrentes coincidentes.
 11. Cada agenda tiene una prioridad de cobertura: muy alta, alta, moderada o baja. El generador protege lexicográficamente cada nivel.
 12. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
-13. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera la propuesta actual.
+13. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
 14. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
 15. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas.
 
-Una asignación manual bloqueada solo será una regla de generación cuando exista un flujo para regenerar o reparar un periodo ya creado. Hasta entonces no interviene en nuevas propuestas, porque no se permiten periodos solapados.
+Una asignación manual bloqueada se conserva como regla dura al regenerar su periodo. Si vuelve imposible el cálculo, la regeneración falla sin cambiar el calendario.
 
 ## Reglas blandas
 
@@ -76,21 +77,23 @@ Las preferencias por agenda usan +1 para corazón, −1 para pulgar abajo y 0 cu
 ## Flujo de uso
 
 1. Configurar equipo, cobertura, festivos, guardias, vacaciones y reglas.
-2. Generar una propuesta de un mes y revisar cobertura, vacantes resaltadas en rojo, personas sin agenda en violeta, agendas parciales en naranja y estadísticas de equidad. Las vistas de día, semana y mes muestran indicadores diarios; los KPIs del periodo visible cuentan vacantes y días-persona sin agenda. Día y semana agrupan los eventos por hospital y muestran turno y carga, también en las vacantes, sin repetir el hospital dentro de cada tarjeta. En el mes, las asignaciones muestran solo el nombre de la persona y se identifican por el color de agenda. Las tarjetas de día y semana colocan turno y carga junto al nombre de la agenda. El desplegable de edición agrupa las opciones por hospital y no repite el hospital dentro de cada opción.
-3. Ajustar manualmente la propuesta:
-   - Si la persona ya tiene una agenda, intercambiar de forma atómica su asignación con otra persona compatible del mismo día y carga. Las opciones se ordenan por mejora de equidad. Una asignación fija solo puede cambiarse entrando directamente en ella y confirmando un aviso previo; nunca aparece como destino desde otra persona. La excepción afecta únicamente a la propuesta actual y conserva la regla recurrente del perfil.
+2. Generar un mes y revisar cobertura, vacantes resaltadas en rojo, personas sin agenda en violeta, agendas parciales en naranja y estadísticas de equidad. Las vistas de día, semana y mes muestran indicadores diarios; los KPIs del periodo visible cuentan vacantes y días-persona sin agenda. Día y semana agrupan los eventos por hospital y muestran turno y carga, también en las vacantes, sin repetir el hospital dentro de cada tarjeta. En el mes, las asignaciones muestran solo el nombre de la persona y se identifican por el color de agenda. Las tarjetas de día y semana colocan turno y carga junto al nombre de la agenda. El desplegable de edición agrupa las opciones por hospital y no repite el hospital dentro de cada opción.
+3. Ajustar manualmente el calendario:
+   - Si la persona ya tiene una agenda, intercambiar de forma atómica su asignación con otra persona compatible del mismo día y carga. Las opciones se ordenan por mejora de equidad. Una asignación fija solo puede cambiarse entrando directamente en ella y confirmando un aviso previo; nunca aparece como destino desde otra persona. La excepción afecta únicamente al evento y conserva la regla recurrente del perfil.
    - Si la persona no tiene actividad, abrir y asignarle una plaza extraordinaria compatible con su perfil y las reglas duras. Esta plaza cuenta en carga, histórico y equidad, pero no altera la demanda ordinaria ni sus vacantes.
-   Ambos cambios quedan bloqueados en la propuesta actual.
-4. Generar el periodo siguiente. La propuesta anterior pasa al histórico.
+   Ambos cambios quedan bloqueados y se conservan si se regenera ese periodo.
+4. Generar el periodo siguiente. Los eventos anteriores siguen vigentes y visibles.
 5. Exportar el periodo completo o filtrado por médico como XLSX, CSV e ICS de día completo, con el correo del médico como asistente.
+
+Si un periodo ya contiene eventos o vacantes, la aplicación muestra las cantidades afectadas y pide confirmación. Confirmar sustituye atómicamente solo ese rango; cancelar no modifica nada. Guardias y ausencias nunca se borran al regenerar o limpiar un rango.
 
 ## Pantallas
 
-- **Calendario**: vistas de día, semana y mes; filtros por persona y agenda; generar, editar y borrar por rango el contenido de la propuesta actual con confirmación escrita, sin alterar históricos ni configuración, y exportar.
+- **Calendario**: vistas de día, semana y mes; filtros por persona y agenda; generar, editar y borrar eventos y vacantes por rango, sin alterar otros meses, guardias, ausencias ni configuración, y exportar.
 - **Equipo**: perfiles, estado activo auditado, patrones de trabajo semanales o alternantes, capacidades, gestión, reglas, vacaciones y archivo.
 - **Agendas**: hospital, modalidad, prioridad, cobertura semanal y reglas especiales recurrentes.
 - **Guardias y festivos**: formularios simples y listado.
-- **Equidad e histórico**: composición histórica por actividad planificada, equilibrio clínico por persona y agenda, métrica propia de Gestión, evolución y propuestas registradas.
+- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, métrica propia de Gestión y evolución.
 - **Ajustes**: idioma, hospitales y festivos.
 - **Guía de uso**: explicación no técnica del flujo, las reglas, los criterios de reparto, los avisos y los cambios manuales.
 

@@ -9,13 +9,13 @@ from datetime import UTC, date, datetime
 from multiprocessing import get_context
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
+from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
 from pinendar.application.state import (
     DomainError,
     bootstrap,
-    import_proposal,
     job_payload,
     month_end,
     uid,
@@ -25,14 +25,13 @@ from pinendar.infrastructure.catalog import HospitalCatalog
 from pinendar.infrastructure.cp_sat_scheduler import solve_snapshot, validate_solution
 from pinendar.infrastructure.database import Database
 from pinendar.infrastructure.models import (
+    Absence,
+    Agenda,
     AppSettings,
     Assignment,
     GenerationJob,
     Guard,
     Member,
-    Proposal,
-    ProposalAbsence,
-    ProposalGuard,
     Vacancy,
 )
 
@@ -108,26 +107,12 @@ def validate_generation_request(session: Session, payload: dict[str, Any]) -> No
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
-    if payload.get("lockedAssignments"):
-        raise DomainError(
-            "LOCKED_ASSIGNMENTS_NOT_SUPPORTED",
-            "Les assignacions bloquejades només es podran utilitzar en una futura regeneració",
-            field="lockedAssignments",
+    persisted_guards = {
+        item.date.isoformat(): item.member_id
+        for item in session.scalars(
+            select(Guard).where(Guard.date >= start_date, Guard.date <= end_date)
         )
-    persisted_guard_dates = set(
-        session.scalars(select(Guard.date).where(Guard.date >= start_date, Guard.date <= end_date))
-    )
-    persisted_guard_dates.update(
-        session.scalars(
-            select(ProposalGuard.date)
-            .join(Proposal)
-            .where(
-                ProposalGuard.date >= start_date,
-                ProposalGuard.date <= end_date,
-                Proposal.status != "current",
-            )
-        )
-    )
+    }
     guard_dates: set[str] = set()
     for guard in payload.get("guards", []):
         if guard["memberId"] not in active_member_ids:
@@ -140,7 +125,10 @@ def validate_generation_request(session: Session, payload: dict[str, Any]) -> No
             raise DomainError(
                 "DUPLICATE_GUARD_DATE", f"Només hi pot haver una persona de guàrdia el {guard['date']}", field="guards"
             )
-        if date.fromisoformat(guard["date"]) in persisted_guard_dates:
+        if (
+            guard["date"] in persisted_guards
+            and persisted_guards[guard["date"]] != guard["memberId"]
+        ):
             raise DomainError(
                 "DUPLICATE_GUARD_DATE",
                 f"Ja hi ha una guàrdia registrada el {guard['date']}",
@@ -155,44 +143,51 @@ def validate_generation_request(session: Session, payload: dict[str, Any]) -> No
             raise DomainError(
                 "ABSENCE_OUTSIDE_PERIOD", "Les vacances han d’estar dins del període del calendari", field="absences"
             )
-    for proposal in session.scalars(select(Proposal)):
-        has_assignments = session.scalar(
-            select(Assignment.id).where(Assignment.proposal_id == proposal.id).limit(1)
+    existing_events = int(
+        session.scalar(
+            select(sa_func.count())
+            .select_from(Assignment)
+            .where(Assignment.date >= start_date, Assignment.date <= end_date)
         )
-        has_vacancies = session.scalar(
-            select(Vacancy.date).where(Vacancy.proposal_id == proposal.id).limit(1)
+        or 0
+    )
+    existing_vacancies = int(
+        session.scalar(
+            select(sa_func.count())
+            .select_from(Vacancy)
+            .where(Vacancy.date >= start_date, Vacancy.date <= end_date)
         )
-        has_absences = session.scalar(
-            select(ProposalAbsence.id).where(ProposalAbsence.proposal_id == proposal.id).limit(1)
+        or 0
+    )
+    if (existing_events or existing_vacancies) and not payload.get("replaceExisting"):
+        locked_events = int(
+            session.scalar(
+                select(sa_func.count())
+                .select_from(Assignment)
+                .where(
+                    Assignment.date >= start_date,
+                    Assignment.date <= end_date,
+                    or_(
+                        Assignment.locked.is_(True),
+                        Assignment.extra.is_(True),
+                        Assignment.manually_modified.is_(True),
+                    ),
+                )
+            )
+            or 0
         )
-        has_guards = session.scalar(
-            select(ProposalGuard.id).where(ProposalGuard.proposal_id == proposal.id).limit(1)
+        raise DomainError(
+            "PERIOD_OVERLAP",
+            "El període ja conté esdeveniments",
+            details={
+                "startDate": bounds_start,
+                "endDate": bounds_end,
+                "events": existing_events,
+                "vacancies": existing_vacancies,
+                "preservedManualEvents": locked_events,
+                "canReplace": True,
+            },
         )
-        if (
-            proposal.status == "current"
-            and has_assignments is None
-            and has_vacancies is None
-            and has_guards is None
-            and has_absences is None
-        ):
-            session.delete(proposal)
-            session.flush()
-            continue
-        # Guards are calendar conditions, not calendar content. A proposal
-        # containing only guards must not reserve its period.
-        if has_assignments is None and has_vacancies is None and has_absences is None:
-            continue
-        if periods_overlap(
-            start,
-            end,
-            proposal.start_month,
-            proposal.end_month,
-            bounds_start,
-            bounds_end,
-            proposal.start_date.isoformat() if proposal.start_date else None,
-            proposal.end_date.isoformat() if proposal.end_date else None,
-        ):
-            raise DomainError("PERIOD_OVERLAP", "Ja existeix una proposta o assignacions dins del període seleccionat")
     for job in session.scalars(select(GenerationJob).where(GenerationJob.status.in_(["queued", "running"]))):
         if periods_overlap(
             start,
@@ -215,31 +210,45 @@ def build_problem(
 ) -> ScheduleProblem:
     state = bootstrap(session, catalog)
     planning_team = [member for member in state["team"] if member.get("active", True)]
-    # Proposal conditions are immutable historical inputs. Include their guards so
-    # a guard on the day before this period still creates a post-guard absence.
-    historical_guards = list(state["guards"])
-    known_guards = {(item["memberId"], item["date"]) for item in historical_guards}
-    current = session.scalar(select(Proposal).where(Proposal.status == "current"))
-    replacement_dates = {item["date"] for item in payload.get("guards", [])}
-    for item in session.scalars(select(ProposalGuard).order_by(ProposalGuard.date, ProposalGuard.id)):
-        if current and item.proposal_id == current.id and item.date.isoformat() in replacement_dates:
-            continue
-        key = (item.member_id, item.date.isoformat())
-        if key not in known_guards:
-            historical_guards.append({"id": item.id, "memberId": item.member_id, "date": key[1]})
-            known_guards.add(key)
+    calendar = state["calendar"]
+    historical_guards = list(calendar["guards"])
+    requested_start, requested_end = period_bounds(
+        payload["startMonth"],
+        payload["endMonth"],
+        payload.get("startDate"),
+        payload.get("endDate"),
+    )
     historical_counts = {member["id"]: {agenda["id"]: 0 for agenda in state["agendas"]} for member in planning_team}
     load_units = {agenda["id"]: int(agenda.get("loadPercentage", 100)) // 50 for agenda in state["agendas"]}
-    for proposal in [*state["published"], *([state["draft"]] if state["draft"] else [])]:
-        for assignment in proposal["assignments"]:
-            if (
-                assignment["type"] != "no_assignment"
-                and assignment["memberId"] in historical_counts
-                and assignment["type"] in historical_counts[assignment["memberId"]]
-            ):
-                historical_counts[assignment["memberId"]][assignment["type"]] += load_units[assignment["type"]]
+    for event in calendar["events"]:
+        event_date = date.fromisoformat(event["date"])
+        if requested_start <= event_date <= requested_end:
+            continue
+        if (
+            event["type"] != "no_assignment"
+            and event["memberId"] in historical_counts
+            and event["type"] in historical_counts[event["memberId"]]
+        ):
+            historical_counts[event["memberId"]][event["type"]] += (
+                int(event.get("loadPercentage", load_units[event["type"]] * 50)) // 50
+            )
+    absences = [
+        item
+        for item in calendar["absences"]
+        if item["start"] <= requested_end.isoformat()
+        and item["end"] >= requested_start.isoformat()
+    ]
+    known_absences = {
+        (item["memberId"], item.get("category", "vacances"), item["start"], item["end"])
+        for item in absences
+    }
+    for item in payload.get("absences", []):
+        key = (item["memberId"], item.get("category", "vacances"), item["start"], item["end"])
+        if key not in known_absences:
+            absences.append(item)
+            known_absences.add(key)
     return ScheduleProblem(
-        schema_version=5,
+        schema_version=6,
         planning_revision=state["planningRevision"],
         start_month=payload["startMonth"],
         end_month=payload["endMonth"],
@@ -248,7 +257,7 @@ def build_problem(
         coverage=state["coverage"],
         holidays=state["holidays"],
         guards=historical_guards,
-        conditions={"guards": payload.get("guards", []), "absences": payload.get("absences", [])},
+        conditions={"guards": payload.get("guards", []), "absences": absences},
         historical_counts=historical_counts,
         locked_assignments=payload.get("lockedAssignments", []),
         start_date=payload.get("startDate"),
@@ -271,29 +280,48 @@ def enqueue_job(
         with Session(bind=connection, expire_on_commit=False) as session:
             try:
                 validate_generation_request(session, payload)
-                current = session.scalar(select(Proposal).where(Proposal.status == "current"))
-                if current:
-                    payload_start, payload_end = period_bounds(
-                        payload["startMonth"],
-                        payload["endMonth"],
-                        payload.get("startDate"),
-                        payload.get("endDate"),
-                    )
-                    carried_guards = {
-                        item.date.isoformat(): {"memberId": item.member_id, "date": item.date.isoformat()}
-                        for item in session.scalars(
-                            select(ProposalGuard).where(
-                                ProposalGuard.proposal_id == current.id,
-                                ProposalGuard.date >= payload_start,
-                                ProposalGuard.date <= payload_end,
+                payload_start, payload_end = period_bounds(
+                    payload["startMonth"],
+                    payload["endMonth"],
+                    payload.get("startDate"),
+                    payload.get("endDate"),
+                )
+                locked_assignments = [
+                    {
+                        "id": item.id,
+                        "date": item.date.isoformat(),
+                        "memberId": item.member_id,
+                        "type": (
+                            item.agenda_id
+                            or (
+                                "management"
+                                if item.kind == "management" or item.management
+                                else "no_assignment"
                             )
-                        )
+                        ),
+                        "locked": True,
+                        **({"fixed": True} if item.fixed else {}),
+                        **({"extra": True} if item.extra else {}),
+                        **({"manuallyModified": True} if item.manually_modified else {}),
+                        **({"management": True} if item.management else {}),
                     }
-                    carried_guards.update({item["date"]: item for item in payload.get("guards", [])})
-                    payload = {**payload, "guards": list(carried_guards.values())}
+                    for item in session.scalars(
+                        select(Assignment).where(
+                            Assignment.date >= payload_start,
+                            Assignment.date <= payload_end,
+                            or_(
+                                Assignment.locked.is_(True),
+                                Assignment.extra.is_(True),
+                                Assignment.manually_modified.is_(True),
+                            ),
+                        )
+                    )
+                ]
+                payload = {**payload, "lockedAssignments": locked_assignments}
                 job_id = uid()
                 effective_solver_config = dict(solver_config or {})
                 effective_solver_config["optimizationMode"] = "fairness"
+                effective_solver_config["replaceExisting"] = bool(payload.get("replaceExisting"))
                 base_seed = int(effective_solver_config.get("randomSeed", 1))
                 effective_solver_config["randomSeed"] = (int(job_id[:8], 16) ^ base_seed) % 2_147_483_647 or 1
                 problem = build_problem(session, catalog, payload, effective_solver_config)
@@ -411,28 +439,6 @@ class JobDispatcher:
                 job.error_message = "La configuració ha canviat durant la generació"
                 job.completed_at = utc_now()
                 return
-            if any(
-                periods_overlap(
-                    job.start_month,
-                    job.end_month,
-                    proposal.start_month,
-                    proposal.end_month,
-                    job.start_date.isoformat() if job.start_date else None,
-                    job.end_date.isoformat() if job.end_date else None,
-                    proposal.start_date.isoformat() if proposal.start_date else None,
-                    proposal.end_date.isoformat() if proposal.end_date else None,
-                )
-                and (
-                    session.scalar(select(Assignment.id).where(Assignment.proposal_id == proposal.id).limit(1))
-                    or session.scalar(select(Vacancy.date).where(Vacancy.proposal_id == proposal.id).limit(1))
-                )
-                for proposal in session.scalars(select(Proposal))
-            ):
-                job.status = "stale"
-                job.error_code = "PERIOD_OVERLAP"
-                job.error_message = "El període ja ha estat cobert"
-                job.completed_at = utc_now()
-                return
             if result.get("outcome") != "solution":
                 error = result.get("error") or {}
                 job.status = "failed"
@@ -469,44 +475,116 @@ class JobDispatcher:
                 )
                 job.completed_at = utc_now()
                 return
-            current = session.scalar(select(Proposal).where(Proposal.status == "current"))
-            if current:
-                carried_dates = [date.fromisoformat(item["date"]) for item in snapshot["conditions"].get("guards", [])]
-                if carried_dates:
-                    session.execute(
-                        delete(ProposalGuard).where(
-                            ProposalGuard.proposal_id == current.id,
-                            ProposalGuard.date.in_(carried_dates),
+            range_start = job.start_date or date.fromisoformat(f"{job.start_month}-01")
+            range_end = job.end_date or month_end(job.end_month)
+            locked_ids = {
+                item["id"]
+                for item in snapshot.get("locked_assignments", [])
+                if item.get("id")
+            }
+            locked_keys = {
+                (item["memberId"], item["date"], item["type"])
+                for item in snapshot.get("locked_assignments", [])
+            }
+            session.execute(
+                delete(Assignment).where(
+                    Assignment.date >= range_start,
+                    Assignment.date <= range_end,
+                    Assignment.locked.is_(False),
+                    Assignment.extra.is_(False),
+                    Assignment.manually_modified.is_(False),
+                )
+            )
+            session.execute(
+                delete(Vacancy).where(
+                    Vacancy.date >= range_start,
+                    Vacancy.date <= range_end,
+                )
+            )
+            agenda_loads = {
+                agenda.id: agenda.load_percentage
+                for agenda in session.scalars(select(Agenda))
+            }
+            for item in result["assignments"]:
+                key = (item["memberId"], item["date"], item["type"])
+                if item.get("id") in locked_ids or key in locked_keys:
+                    continue
+                event_type = item["type"]
+                kind = (
+                    "no_assignment"
+                    if event_type == "no_assignment"
+                    else "management"
+                    if event_type == "management"
+                    else "assigned"
+                )
+                session.add(
+                    Assignment(
+                        id=item.get("id") or uid(),
+                        generation_job_id=job.id,
+                        date=date.fromisoformat(item["date"]),
+                        member_id=item["memberId"],
+                        agenda_id=event_type if kind == "assigned" else None,
+                        kind=kind,
+                        load_percentage=(
+                            agenda_loads[event_type]
+                            if kind == "assigned"
+                            else 100
+                            if kind == "management"
+                            else 0
+                        ),
+                        locked=bool(item.get("locked")),
+                        fixed=bool(item.get("fixed")),
+                        extra=bool(item.get("extra")),
+                        manually_modified=bool(item.get("manuallyModified") or item.get("locked")),
+                        management=kind == "management" or bool(item.get("management")),
+                    )
+                )
+            for item in result["vacancies"]:
+                session.add(
+                    Vacancy(
+                        generation_job_id=job.id,
+                        date=date.fromisoformat(item["date"]),
+                        agenda_id=item["type"],
+                    )
+                )
+            for item in snapshot["conditions"].get("guards", []):
+                guard_date = date.fromisoformat(item["date"])
+                existing_guard = session.scalar(select(Guard).where(Guard.date == guard_date))
+                if existing_guard is None:
+                    session.add(
+                        Guard(
+                            id=item.get("id") or uid(),
+                            generation_job_id=job.id,
+                            member_id=item["memberId"],
+                            date=guard_date,
                         )
                     )
-                current.status = "historical"
-                current.archived_at = utc_now()
-            record = {
-                "startMonth": job.start_month,
-                "endMonth": job.end_month,
-                "startDate": job.start_date.isoformat() if job.start_date else f"{job.start_month}-01",
-                "endDate": job.end_date.isoformat() if job.end_date else month_end(job.end_month).isoformat(),
-                "generatedAt": utc_now().isoformat(),
-                "assignments": result["assignments"],
-                "unfilled": result["vacancies"],
-                "extraCapacity": result.get("metrics", {}).get("extraCapacity", {}),
-                "conditions": snapshot["conditions"],
-            }
-            member_ids = {item["id"] for item in snapshot["team"]}
-            agenda_ids = {item["id"] for item in snapshot["agendas"]}
-            proposal = import_proposal(session, record, "current", job.input_revision, member_ids, agenda_ids)
-            proposal.engine = result.get("engine", "cp-sat")
-            proposal.engine_version = result.get("engine_version", "1")
-            proposal.metadata_json = json.dumps(
-                {
-                    "extraCapacity": result.get("metrics", {}).get("extraCapacity", {}),
-                    "scheduler": result.get("metrics", {}),
-                },
-                ensure_ascii=False,
-            )
+            for item in snapshot["conditions"].get("absences", []):
+                category = item.get("category", "vacances")
+                absence_start = date.fromisoformat(item["start"])
+                absence_end = date.fromisoformat(item["end"])
+                existing_absence = session.scalar(
+                    select(Absence).where(
+                        Absence.member_id == item["memberId"],
+                        Absence.category == category,
+                        Absence.start == absence_start,
+                        Absence.end == absence_end,
+                    )
+                )
+                if existing_absence is None:
+                    session.add(
+                        Absence(
+                            id=item.get("id") or uid(),
+                            generation_job_id=job.id,
+                            member_id=item["memberId"],
+                            category=category,
+                            start=absence_start,
+                            end=absence_end,
+                            notes="",
+                        )
+                    )
             settings.planning_revision += 1
             job.status = "succeeded"
-            job.proposal_id = proposal.id
             job.result_json = json.dumps(
                 {
                     "outcome": result.get("outcome"),

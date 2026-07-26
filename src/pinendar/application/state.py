@@ -32,9 +32,6 @@ from pinendar.infrastructure.models import (
     MemberCapability,
     MemberStatusChange,
     MemberTeleDay,
-    Proposal,
-    ProposalAbsence,
-    ProposalGuard,
     Vacancy,
 )
 
@@ -392,37 +389,28 @@ def import_legacy_state(session: Session, state: dict[str, Any], catalog: Hospit
         if guard.get("memberId") in seen_members:
             session.add(Guard(id=guard.get("id") or uid(), member_id=guard["memberId"], date=parse_date(guard["date"])))
 
-    imported_proposals: set[str] = set()
-    for record in state.get("published", []):
-        key = str(record.get("generatedAt") or record.get("id") or uid())
-        if key not in imported_proposals:
-            import_proposal(session, record, "historical", 1, seen_members, seen_agendas)
-            imported_proposals.add(key)
+    records = [*state.get("published", [])]
     if state.get("draft"):
-        import_proposal(session, state["draft"], "current", 1, seen_members, seen_agendas)
+        records.append(state["draft"])
+    records.sort(key=lambda record: parse_datetime(record.get("generatedAt") or record.get("publishedAt")))
+    for record in records:
+        import_calendar_record(session, record, seen_members, seen_agendas)
 
 
-def import_proposal(
-    session: Session, record: dict[str, Any], status: str, revision: int, member_ids: set[str], agenda_ids: set[str]
-) -> Proposal:
-    start_month = str(record.get("startMonth") or record.get("quarter"))
-    end_month = str(record.get("endMonth") or start_month)
-    proposal = Proposal(
-        id=record.get("id") or uid(),
-        status=status,
-        start_month=start_month,
-        end_month=end_month,
-        start_date=parse_date(record.get("startDate") or f"{start_month}-01"),
-        end_date=parse_date(record.get("endDate") or month_end(end_month).isoformat()),
-        generated_at=parse_datetime(record.get("generatedAt") or record.get("publishedAt")),
-        archived_at=parse_datetime(record.get("publishedAt")) if status == "historical" else None,
-        input_revision=revision,
-        engine="legacy-js",
-        engine_version="1",
-        metadata_json=json.dumps({"extraCapacity": record.get("extraCapacity", {})}),
-    )
-    session.add(proposal)
-    session.flush()
+def import_calendar_record(
+    session: Session,
+    record: dict[str, Any],
+    member_ids: set[str],
+    agenda_ids: set[str],
+) -> None:
+    dates = {
+        parse_date(item["date"])
+        for item in [*record.get("assignments", []), *record.get("unfilled", [])]
+        if item.get("date")
+    }
+    if dates:
+        session.execute(delete(Assignment).where(Assignment.date.in_(dates)))
+        session.execute(delete(Vacancy).where(Vacancy.date.in_(dates)))
     for item in record.get("assignments", []):
         if item.get("memberId") not in member_ids:
             continue
@@ -437,47 +425,65 @@ def import_proposal(
         )
         if kind == "assigned" and not agenda_id:
             continue
+        agenda = session.get(Agenda, agenda_id) if agenda_id else None
+        load_percentage = agenda.load_percentage if agenda else 100 if kind == "management" else 0
         session.add(
             Assignment(
                 id=item.get("id") or uid(),
-                proposal_id=proposal.id,
                 date=parse_date(item["date"]),
                 member_id=item["memberId"],
                 agenda_id=agenda_id,
                 kind=kind,
+                load_percentage=load_percentage,
                 locked=bool(item.get("locked")),
                 fixed=bool(item.get("fixed")),
                 extra=bool(item.get("extra")),
+                manually_modified=bool(item.get("manuallyModified") or item.get("locked")),
                 management=kind == "management" or bool(item.get("management")),
             )
         )
     for item in record.get("unfilled", []):
         if item.get("type") in agenda_ids:
-            session.add(Vacancy(proposal_id=proposal.id, date=parse_date(item["date"]), agenda_id=item["type"]))
+            session.add(Vacancy(date=parse_date(item["date"]), agenda_id=item["type"]))
     conditions = record.get("conditions", {})
     for item in conditions.get("guards", []):
         if item.get("memberId") in member_ids:
-            session.add(
-                ProposalGuard(
-                    id=item.get("id") or uid(),
-                    proposal_id=proposal.id,
-                    member_id=item["memberId"],
-                    date=parse_date(item["date"]),
+            guard_date = parse_date(item["date"])
+            existing_guard = session.scalar(select(Guard).where(Guard.date == guard_date))
+            if existing_guard:
+                existing_guard.member_id = item["memberId"]
+            else:
+                session.add(
+                    Guard(
+                        id=item.get("id") or uid(),
+                        member_id=item["memberId"],
+                        date=guard_date,
+                    )
                 )
-            )
     for item in conditions.get("absences", []):
-        if item.get("memberId") in member_ids:
+        if item.get("memberId") not in member_ids:
+            continue
+        absence_start = parse_date(item["start"])
+        absence_end = parse_date(item["end"])
+        existing_absence = session.scalar(
+            select(Absence).where(
+                Absence.member_id == item["memberId"],
+                Absence.category == item.get("category", "vacances"),
+                Absence.start == absence_start,
+                Absence.end == absence_end,
+            )
+        )
+        if not existing_absence:
             session.add(
-                ProposalAbsence(
+                Absence(
                     id=item.get("id") or uid(),
-                    proposal_id=proposal.id,
                     member_id=item["memberId"],
-                    category="vacances",
-                    start=parse_date(item["start"]),
-                    end=parse_date(item["end"]),
+                    category=item.get("category", "vacances"),
+                    start=absence_start,
+                    end=absence_end,
+                    notes="",
                 )
             )
-    return proposal
 
 
 def serialize_member(session: Session, member: Member) -> dict[str, Any]:
@@ -488,12 +494,12 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
             .order_by(MemberAvailableDay.week_index, MemberAvailableDay.weekday)
         )
     )
-    pattern_weeks = [
+    pattern_weeks: list[dict[str, list[int]]] = [
         {"workingDays": [], "teleDays": []} for _ in range(member.work_pattern_weeks)
     ]
-    for item in pattern_days:
-        if item.week_index < len(pattern_weeks):
-            pattern_weeks[item.week_index]["workingDays"].append(item.weekday)
+    for pattern_day in pattern_days:
+        if pattern_day.week_index < len(pattern_weeks):
+            pattern_weeks[pattern_day.week_index]["workingDays"].append(pattern_day.weekday)
     pattern_tele_days = list(
         session.scalars(
             select(MemberTeleDay)
@@ -501,9 +507,9 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
             .order_by(MemberTeleDay.week_index, MemberTeleDay.weekday)
         )
     )
-    for item in pattern_tele_days:
-        if item.week_index < len(pattern_weeks):
-            pattern_weeks[item.week_index]["teleDays"].append(item.weekday)
+    for tele_day in pattern_tele_days:
+        if tele_day.week_index < len(pattern_weeks):
+            pattern_weeks[tele_day.week_index]["teleDays"].append(tele_day.weekday)
     available = sorted({weekday for week in pattern_weeks for weekday in week["workingDays"]})
     tele = sorted({weekday for week in pattern_weeks for weekday in week["teleDays"]})
     capabilities = list(
@@ -524,11 +530,11 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
     rules = list(session.scalars(select(FixedRule).where(FixedRule.member_id == member.id).order_by(FixedRule.weekday)))
     absences = list(session.scalars(select(Absence).where(Absence.member_id == member.id).order_by(Absence.start)))
     vacation_dates: list[str] = []
-    for item in absences:
-        if item.category != "vacances":
+    for absence in absences:
+        if absence.category != "vacances":
             continue
-        current = item.start
-        while current <= item.end:
+        current = absence.start
+        while current <= absence.end:
             vacation_dates.append(current.isoformat())
             current += timedelta(days=1)
     status_history = list(
@@ -569,41 +575,19 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
     }
 
 
-def serialize_proposal(session: Session, proposal: Proposal) -> dict[str, Any]:
-    assignments = list(
-        session.scalars(
-            select(Assignment).where(Assignment.proposal_id == proposal.id).order_by(Assignment.date, Assignment.id)
-        )
-    )
-    vacancies = list(
-        session.scalars(select(Vacancy).where(Vacancy.proposal_id == proposal.id).order_by(Vacancy.date, Vacancy.id))
-    )
-    guards = list(
-        session.scalars(
-            select(ProposalGuard).where(ProposalGuard.proposal_id == proposal.id).order_by(ProposalGuard.date)
-        )
-    )
+def serialize_calendar(session: Session) -> dict[str, Any]:
+    events = list(session.scalars(select(Assignment).order_by(Assignment.date, Assignment.id)))
+    vacancies = list(session.scalars(select(Vacancy).order_by(Vacancy.date, Vacancy.id)))
+    guards = list(session.scalars(select(Guard).order_by(Guard.date, Guard.id)))
     guard_transfers = list(
         session.scalars(
             select(GuardTransfer)
-            .where(GuardTransfer.proposal_id == proposal.id)
             .order_by(GuardTransfer.created_at.desc(), GuardTransfer.id)
         )
     )
-    absences = list(
-        session.scalars(
-            select(ProposalAbsence).where(ProposalAbsence.proposal_id == proposal.id).order_by(ProposalAbsence.start)
-        )
-    )
-    metadata = json.loads(proposal.metadata_json or "{}")
+    absences = list(session.scalars(select(Absence).order_by(Absence.start, Absence.id)))
     return {
-        "id": proposal.id,
-        "startMonth": proposal.start_month,
-        "endMonth": proposal.end_month,
-        "startDate": (proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01")).isoformat(),
-        "endDate": (proposal.end_date or month_end(proposal.end_month)).isoformat(),
-        "generatedAt": proposal.generated_at.isoformat() + "Z",
-        "assignments": [
+        "events": [
             {
                 "id": item.id,
                 "date": item.date.isoformat(),
@@ -612,42 +596,47 @@ def serialize_proposal(session: Session, proposal: Proposal) -> dict[str, Any]:
                     item.agenda_id
                     or ("management" if item.kind == "management" or item.management else "no_assignment")
                 ),
+                "loadPercentage": item.load_percentage,
                 **({"locked": True} if item.locked else {}),
                 **({"fixed": True} if item.fixed else {}),
                 **({"extra": True} if item.extra else {}),
+                **({"manuallyModified": True} if item.manually_modified else {}),
                 **({"management": True} if item.management else {}),
             }
-            for item in assignments
+            for item in events
         ],
-        "unfilled": [{"date": item.date.isoformat(), "type": item.agenda_id} for item in vacancies],
-        "extraCapacity": metadata.get("extraCapacity", {}),
-        "conditions": {
-            "guards": [{"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()} for item in guards],
-            "guardTransfers": [
-                {
-                    "id": item.id,
-                    "operationId": item.operation_id,
-                    "operationKind": item.operation_kind,
-                    "date": item.guard_date.isoformat(),
-                    "fromMemberId": item.from_member_id,
-                    "toMemberId": item.to_member_id,
-                    "createdAt": item.created_at.isoformat() + "Z",
-                    "note": item.note,
-                    "impact": json.loads(item.impact_json or "{}"),
-                }
-                for item in guard_transfers
-            ],
-            "absences": [
-                {
-                    "id": item.id,
-                    "memberId": item.member_id,
-                    "category": item.category,
-                    "start": item.start.isoformat(),
-                    "end": item.end.isoformat(),
-                }
-                for item in absences
-            ],
-        },
+        "vacancies": [
+            {"id": item.id, "date": item.date.isoformat(), "type": item.agenda_id}
+            for item in vacancies
+        ],
+        "guards": [
+            {"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()}
+            for item in guards
+        ],
+        "guardTransfers": [
+            {
+                "id": item.id,
+                "operationId": item.operation_id,
+                "operationKind": item.operation_kind,
+                "date": item.guard_date.isoformat(),
+                "fromMemberId": item.from_member_id,
+                "toMemberId": item.to_member_id,
+                "createdAt": item.created_at.isoformat() + "Z",
+                "note": item.note,
+                "impact": json.loads(item.impact_json or "{}"),
+            }
+            for item in guard_transfers
+        ],
+        "absences": [
+            {
+                "id": item.id,
+                "memberId": item.member_id,
+                "category": item.category,
+                "start": item.start.isoformat(),
+                "end": item.end.isoformat(),
+            }
+            for item in absences
+        ],
     }
 
 
@@ -675,12 +664,6 @@ def bootstrap(session: Session, catalog: HospitalCatalog) -> dict[str, Any]:
     coverage: dict[str, dict[str, int]] = {str(day): {} for day in range(1, 6)}
     for item in coverage_rows:
         coverage[str(item.weekday)][item.agenda_id] = item.slots
-    current = session.scalar(
-        select(Proposal).where(Proposal.status == "current").order_by(Proposal.generated_at.desc())
-    )
-    historical = list(
-        session.scalars(select(Proposal).where(Proposal.status == "historical").order_by(Proposal.generated_at.desc()))
-    )
     hospitals = []
     for selected in selected_hospitals:
         details = catalog.by_id.get(selected.catalog_id, {}) if selected.location_known else {}
@@ -720,14 +703,9 @@ def bootstrap(session: Session, catalog: HospitalCatalog) -> dict[str, Any]:
         "agendas": [agenda_payload(item) for item in active_agendas],
         "archivedAgendas": [agenda_payload(item) for item in archived_agendas],
         "coverage": coverage,
-        "guards": [
-            {"id": item.id, "memberId": item.member_id, "date": item.date.isoformat()}
-            for item in session.scalars(select(Guard).order_by(Guard.date))
-        ],
         "holidays": [item.isoformat() for item in session.scalars(select(Holiday.date).order_by(Holiday.date))],
         "hospitals": hospitals,
-        "draft": serialize_proposal(session, current) if current else None,
-        "published": [serialize_proposal(session, item) for item in historical],
+        "calendar": serialize_calendar(session),
     }
 
 
@@ -763,7 +741,6 @@ def job_payload(job: GenerationJob) -> dict[str, Any]:
         "endDate": (job.end_date or month_end(job.end_month)).isoformat(),
         "inputRevision": job.input_revision,
         "optimizationMode": snapshot_config.get("optimizationMode", "fairness"),
-        "proposalId": job.proposal_id,
         "error": {
             "code": job.error_code,
             "message": job.error_message,

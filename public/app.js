@@ -33,7 +33,7 @@ const hospitalSearchCache = new Map();
 const hospitalDetailsCache = new Map();
 const ES_TEXT = {
   'Calendari': 'Calendario', 'CALENDARI': 'CALENDARIO', 'Equip': 'Equipo', 'Configuració': 'Configuración', 'Equitat i històric': 'Equidad e histórico', 'Surt': 'Salir',
-  'Genera una nova versió': 'Genera una nueva versión', 'Prepara el calendari': 'Prepara el calendario', 'Genera proposta': 'Generar propuesta', 'Exporta': 'Exportar',
+  'Genera un altre període': 'Generar otro período', 'Prepara el calendari': 'Prepara el calendario', 'Genera calendari': 'Generar calendario', 'Exporta': 'Exportar',
   'Respecta els filtres actius': 'Respeta los filtros activos', 'Avui': 'Hoy', 'Anterior': 'Anterior', 'Següent': 'Siguiente', 'Persones': 'Personas', 'Tothom': 'Todos',
   'Agendes': 'Agendas', 'Totes': 'Todas', 'Dia': 'Día', 'Setmana': 'Semana', 'Mes': 'Mes', 'Festiu': 'Festivo', 'No assignació': 'Sin asignación', 'Sense assignació': 'Sin asignación',
   'Guàrdia': 'Guardia', 'Vacances': 'Vacaciones', 'Afegeix membre': 'Añadir miembro', 'Perfil actiu': 'Perfil activo', 'Inactiu': 'Inactivo',
@@ -52,14 +52,14 @@ const ES_TEXT = {
   'Índex global d’equilibri': 'Índice global de equilibrio', 'Agenda més desviada': 'Agenda más desviada', 'Dins del marge ±20%': 'Dentro del margen ±20%',
   'Equilibri d’una persona': 'Equilibrio de una persona', 'Equilibri entre persones': 'Equilibrio entre personas', 'Per sota': 'Por debajo', 'Esperat': 'Esperado', 'Per sobre': 'Por encima',
   'Teletreball': 'Teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
-  'Propostes registrades': 'Propuestas registradas', 'Proposta actual': 'Propuesta actual', 'Històric': 'Histórico', 'Còpia JSON': 'Copia JSON',
+  'Períodes registrats': 'Períodos registrados', 'Calendari': 'Calendario', 'Històric': 'Histórico', 'Còpia JSON': 'Copia JSON',
   'Color automàtic': 'Color automático', 'Pastel per distingir persones': 'Pastel para distinguir personas', 'Saturat per distingir agendes': 'Saturado para distinguir agendas',
   'Nou color aleatori': 'Nuevo color aleatorio', 'Nom i cognoms': 'Nombre y apellidos', 'Correu': 'Correo', 'Dies disponibles': 'Días disponibles',
   'Patró de treball': 'Patrón de trabajo', 'Quins dies s’ha de planificar aquesta persona?': '¿Qué días debe planificarse esta persona?', 'Sempre igual': 'Siempre igual', 'Alterna setmanes': 'Alterna semanas', 'Treball': 'Trabajo',
   'Les setmanes segueixen el número ISO i tornen a començar després de l’última.': 'Las semanas siguen el número ISO y vuelven a empezar después de la última.', 'Afegeix setmana': 'Añadir semana', 'Elimina setmana': 'Eliminar semana',
   'Càrrega': 'Carga', 'Completa': 'Completa', 'Parcial': 'Parcial', 'Perfil desat': 'Perfil guardado', 'Els canvis s’han guardat correctament.': 'Los cambios se han guardado correctamente.',
   'EQUIP': 'EQUIPO', 'Nou membre': 'Nuevo miembro', 'Edita membre': 'Editar miembro', 'AGENDES': 'AGENDAS',
-  'Les persones inactives no entren en la generació del calendari.': 'Las personas inactivas no entran en la generación del calendario.', 'Gestió': 'Gestión', 'Sense hospital': 'Sin hospital', 'Altres activitats': 'Otras actividades', 'Fa gestió': 'Hace Gestión', 'Dies de gestió al mes': 'Días de Gestión al mes', 'Gestió a la proposta': 'Gestión en la propuesta', 'persones habilitades': 'personas habilitadas', 'Cap persona habilitada': 'Ninguna persona habilitada',
+  'Les persones inactives no entren en la generació del calendari.': 'Las personas inactivas no entran en la generación del calendario.', 'Gestió': 'Gestión', 'Sense hospital': 'Sin hospital', 'Altres activitats': 'Otras actividades', 'Fa gestió': 'Hace Gestión', 'Dies de gestió al mes': 'Días de Gestión al mes', 'Gestió al calendari': 'Gestión en el calendario', 'persones habilitades': 'personas habilitadas', 'Cap persona habilitada': 'Ninguna persona habilitada',
   'Dies obligatoris de treball telemàtic': 'Días obligatorios de trabajo telemático', 'Agendes habilitades': 'Agendas habilitadas', 'Quota mensual de gestió': 'Cuota mensual de gestión',
   'Afegeix ♥ o 👎 per indicar preferències. Sense reacció significa indiferent.': 'Añade ♥ o 👎 para indicar preferencias. Sin reacción significa indiferente.', 'Agrada': 'Le gusta', 'Desagrada': 'Le disgusta', 'Afegeix reacció': 'Añadir reacción', 'Treu la reacció': 'Quitar la reacción',
   'Perfil general': 'Perfil general', 'Regles fixes': 'Reglas fijas', 'Afegeix regla': 'Añadir regla', 'Encara no hi ha regles fixes.': 'Todavía no hay reglas fijas.',
@@ -76,12 +76,12 @@ const ES_TEXT = {
   'Confirma i desa': 'Confirmar y guardar', 'REGLES RELACIONADES': 'REGLAS RELACIONADAS', 'Torna a l’agenda': 'Volver a la agenda', 'Perfil inactiu': 'Perfil inactivo', 'Aquesta agenda no té cap regla relacionada.': 'Esta agenda no tiene ninguna regla relacionada.', 'Consulta les persones i dies vinculats a aquesta agenda.': 'Consulta las personas y días vinculados a esta agenda.',
   'Dilluns': 'Lunes', 'Dimarts': 'Martes', 'Dimecres': 'Miércoles', 'Dijous': 'Jueves', 'Divendres': 'Viernes',
   'Es conservaran els esdeveniments passats': 'Se conservarán los eventos pasados', 'Paraula de confirmació': 'Palabra de confirmación', 'Elimina definitivament': 'Eliminar definitivamente',
-  'Assignació': 'Asignación', 'Agenda': 'Agenda', 'Desa canvi': 'Guardar cambio', 'NOVA PROPOSTA': 'NUEVA PROPUESTA', 'Genera el calendari': 'Generar el calendario', 'Mes complet': 'Mes completo', 'Selecciona directament un mes i un any.': 'Selecciona directamente un mes y un año.', 'Període personalitzat': 'Período personalizado', 'Escull manualment les dates dins d’un únic mes.': 'Escoge manualmente las fechas dentro de un único mes.', 'Mes a generar': 'Mes a generar', 'Data inicial': 'Fecha inicial', 'Data final': 'Fecha final', 'Es generarà únicament el mes seleccionat.': 'Se generará únicamente el mes seleccionado.', 'Les dues dates han de pertànyer al mateix mes natural.': 'Las dos fechas deben pertenecer al mismo mes natural.',
+  'Assignació': 'Asignación', 'Agenda': 'Agenda', 'Desa canvi': 'Guardar cambio', 'NOU PERÍODE': 'NUEVO PERÍODO', 'Genera el calendari': 'Generar el calendario', 'Mes complet': 'Mes completo', 'Selecciona directament un mes i un any.': 'Selecciona directamente un mes y un año.', 'Període personalitzat': 'Período personalizado', 'Escull manualment les dates dins d’un únic mes.': 'Escoge manualmente las fechas dentro de un único mes.', 'Mes a generar': 'Mes a generar', 'Data inicial': 'Fecha inicial', 'Data final': 'Fecha final', 'Es generarà únicament el mes seleccionat.': 'Se generará únicamente el mes seleccionado.', 'Les dues dates han de pertànyer al mateix mes natural.': 'Las dos fechas deben pertenecer al mismo mes natural.',
   'Esborra període': 'Borrar período', 'ESBORRA PERÍODE': 'BORRAR PERÍODO', 'Contingut del calendari': 'Contenido del calendario',
   'Contingut del calendari eliminat dins del període seleccionat': 'Contenido del calendario eliminado dentro del período seleccionado',
-  'El canvi quedarà fixat dins la proposta actual.': 'El cambio quedará fijado dentro de la propuesta actual.', 'Defineix el període i les incidències pròpies d’aquesta proposta.': 'Define el período y las incidencias propias de esta propuesta.',
+  'El canvi quedarà fixat al calendari.': 'El cambio quedará fijado en el calendario.', 'Defineix el període i les incidències noves.': 'Define el período y las incidencias nuevas.',
   'Tria un període d’entre 1 i 3 mesos. El mes final mai pot ser anterior a l’inicial.': 'Selecciona un período de entre 1 y 3 meses. El mes final nunca puede ser anterior al inicial.',
-  'Comencen buits i només afecten aquesta proposta. Les absències permanents i els festius ja s’apliquen automàticament.': 'Empiezan vacíos y sólo afectan a esta propuesta. Las ausencias permanentes y los festivos ya se aplican automáticamente.',
+  'Comencen buits i només afecten el període. Les absències permanents i els festius ja s’apliquen automàticament.': 'Empiezan vacíos y sólo afectan al período. Las ausencias permanentes y los festivos ya se aplican automáticamente.',
   'Mes d’inici': 'Mes inicial', 'Mes final': 'Mes final', 'Condicionants variables': 'Condicionantes variables', 'Guàrdies': 'Guardias', 'Exporta plantilla': 'Exportar plantilla',
   'Importa XLS': 'Importar XLS', 'Persona': 'Persona', 'Data': 'Fecha', 'Afegeix': 'Añadir', 'Sense guàrdies.': 'Sin guardias.', 'Tipus': 'Tipo', 'Inici': 'Inicio', 'Final': 'Final',
   'Sense vacances puntuals.': 'Sin vacaciones puntuales.', 'Vacances puntuals': 'Vacaciones puntuales', 'Tanca': 'Cerrar', 'Dades locals · SQLite': 'Datos locales · SQLite', 'Àrea no disponible': 'Área no disponible',
@@ -89,7 +89,7 @@ const ES_TEXT = {
   'Any de mes d’inici': 'Año del mes inicial', 'Any de mes final': 'Año del mes final', 'Selecciona una persona': 'Selecciona una persona', 'i': 'y',
   'Ex. Bellvitge o Barcelona': 'Ej. Bellvitge o Barcelona', 'Ex. Núria Prat': 'Ej. Nuria Prat', 'nom@hospital.cat': 'nombre@hospital.es', 'Ex. Ecografia avançada': 'Ej. Ecografía avanzada', 'Afegeix un detall breu': 'Añade un detalle breve',
   'Totes les agendes han de tenir un hospital vàlid': 'Todas las agendas deben tener un hospital válido', 'Les regles fixes superen la cobertura disponible': 'Las reglas fijas superan la cobertura disponible',
-  'El període del calendari ha de ser d’un màxim de 3 mesos': 'El período del calendario debe ser de un máximo de 3 meses', 'Ja existeix una proposta o assignacions dins del període seleccionat': 'Ya existe una propuesta o asignaciones dentro del período seleccionado',
+  'El període del calendari ha de ser d’un màxim d’un mes': 'El período del calendario debe ser de un máximo de un mes', 'Ja hi ha esdeveniments dins del període seleccionat': 'Ya hay eventos dentro del período seleccionado',
   'Una persona no pot tenir dues assignacions el mateix dia': 'Una persona no puede tener dos asignaciones el mismo día', 'Les guàrdies han d’estar dins del període del calendari': 'Las guardias deben estar dentro del período del calendario', 'Les absències han d’estar dins del període del calendari': 'Las ausencias deben estar dentro del período del calendario',
   'Hi ha una absència amb dates invàlides': 'Hay una ausencia con fechas no válidas', 'Hi ha una guàrdia associada a una persona inexistent': 'Hay una guardia asociada a una persona inexistente',
   'TAC ambulatori': 'TAC ambulatorio', 'Eco ambulatòria': 'Ecografía ambulatoria', 'TAC urgent': 'TAC urgente', 'Eco urgent': 'Ecografía urgente',
@@ -121,6 +121,39 @@ function isoWeekNumber(key) { const value = fromKey(key); const target = new Dat
 function monthKey(key) { return key.slice(0, 7); }
 function startOfWeek(key) { return addDays(key, -((weekday(key) + 6) % 7)); }
 function endOfMonth(key) { const d = fromKey(`${monthKey(key)}-01`); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return dateKey(d); }
+function calendarEvents() { return state?.calendar?.events || []; }
+function calendarVacancies() { return state?.calendar?.vacancies || []; }
+function calendarGuards() { return state?.calendar?.guards || []; }
+function calendarAbsences() { return state?.calendar?.absences || []; }
+function calendarBounds() {
+  const dates = [
+    ...calendarEvents().map((item) => item.date),
+    ...calendarVacancies().map((item) => item.date),
+  ].filter(Boolean).sort();
+  const fallback = `${monthKey(calendarDate)}-01`;
+  return { start: dates[0] || fallback, end: dates.at(-1) || endOfMonth(fallback) };
+}
+function calendarProjection() {
+  const bounds = calendarBounds();
+  return {
+    startMonth: monthKey(bounds.start),
+    endMonth: monthKey(bounds.end),
+    startDate: bounds.start,
+    endDate: bounds.end,
+    assignments: calendarEvents(),
+    unfilled: calendarVacancies(),
+    conditions: {
+      guards: calendarGuards(),
+      guardTransfers: state?.calendar?.guardTransfers || [],
+      absences: calendarAbsences(),
+    },
+  };
+}
+function hasCalendarContent() { return calendarEvents().length > 0 || calendarVacancies().length > 0; }
+function nextGenerationMonth() {
+  const latestEventDate = calendarEvents().map((item) => item.date).sort().at(-1);
+  return latestEventDate ? monthKey(addMonths(`${monthKey(latestEventDate)}-01`, 1)) : monthKey(calendarDate);
+}
 function fmtDate(key, options = { weekday: 'short', day: 'numeric', month: 'short' }) { return new Intl.DateTimeFormat(state?.language === 'es' ? 'es-ES' : 'ca-ES', options).format(fromKey(key)); }
 function ordinalLabel(value) { return (state?.language === 'es' ? ['', '1.º', '2.º', '3.º', '4.º', '5.º'] : ['', '1r', '2n', '3r', '4t', '5è'])[Number(value)] || String(value); }
 function priorityLabel(value) { return (state?.language === 'es' ? ['', 'Muy alta', 'Alta', 'Moderada', 'Baja'] : ['', 'Molt alta', 'Alta', 'Moderada', 'Baixa'])[Number(value)] || 'Moderada'; }
@@ -152,7 +185,7 @@ function localize(value = '') {
     .replace(/(\d+) membres habilitats/g, '$1 miembros habilitados').replace(/(\d+) places\/setmana/g, '$1 plazas/semana')
     .replace(/(\d+) agendes/g, '$1 agendas').replace(/(\d+) regles fixes/g, '$1 reglas fijas').replace(/(\d+) absències previstes/g, '$1 ausencias previstas')
     .replace(/(\d+) guàrdies internes/g, '$1 guardias internas').replace(/(\d+) canvis/g, '$1 cambios').replace(/Postguàrdia/g, 'Postguardia')
-    .replace(/proposta actual/g, 'propuesta actual').replace(/Sense proposta generada/g, 'Sin propuesta generada').replace(/Proposta actual/g, 'Propuesta actual')
+    .replace(/Sense calendari generat/g, 'Sin calendario generado')
     .replace(/^Dates entre (.+) i (.+)\. XLS: columnes Persona i Data\.$/, 'Fechas entre $1 y $2. XLS: columnas Persona y Fecha.')
     .replace(/^Dates entre (.+) i (.+)\. XLS: Persona, Tipus, Inici i Final\.$/, 'Fechas entre $1 y $2. XLS: Persona, Tipo, Inicio y Final.')
     .replace(/^(.+) té més d’una regla fixa el mateix dia$/, '$1 tiene más de una regla fija el mismo día')
@@ -362,9 +395,9 @@ function calendarRange() {
 
 function calendarIncidents(key) {
   return calendarIncidentsForDate({
-    assignments: state.draft?.assignments || [],
+    assignments: calendarEvents(),
     agendas: planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]),
-    unfilled: state.draft?.unfilled || [],
+    unfilled: calendarVacancies(),
     members: activeTeam(),
     date: key,
     memberWorksOnDate,
@@ -412,24 +445,24 @@ function calendarTitle() {
 function eventsForDate(key) {
   const matchesMember = (memberId) => !selectedMemberFilters.size || selectedMemberFilters.has(memberId);
   const matchesAgenda = (type) => !selectedAgendaFilters.size || selectedAgendaFilters.has(type);
-  const assignments = (state.draft?.assignments || []).filter((item) => item.date === key && matchesMember(item.memberId) && matchesAgenda(item.type));
+  const assignments = calendarEvents().filter((item) => item.date === key && matchesMember(item.memberId) && matchesAgenda(item.type));
   const showUncategorised = !selectedAgendaFilters.size;
-  const guards = [...state.guards, ...(state.draft?.conditions?.guards || [])].filter((item) => item.date === key && matchesMember(item.memberId));
+  const guards = calendarGuards().filter((item) => item.date === key && matchesMember(item.memberId));
   const savedAbsences = showUncategorised ? [...state.team, ...(state.archivedTeam || [])].flatMap((member) => member.vacations.filter((item) => key >= item.start && key <= item.end && matchesMember(member.id)).map((item) => ({ ...item, memberId: member.id }))) : [];
-  const proposalAbsences = showUncategorised ? (state.draft?.conditions?.absences || []).filter((item) => key >= item.start && key <= item.end && matchesMember(item.memberId)) : [];
-  const absences = [...savedAbsences, ...proposalAbsences];
+  const calendarDateAbsences = showUncategorised ? calendarAbsences().filter((item) => key >= item.start && key <= item.end && matchesMember(item.memberId)) : [];
+  const absences = [...savedAbsences, ...calendarDateAbsences];
   const vacancies = vacanciesForDate({
-    unfilled: state.draft?.unfilled || [],
+    unfilled: calendarVacancies(),
     date: key,
     selectedAgendaIds: selectedAgendaFilters,
   });
   return { assignments, guards, absences, vacancies };
 }
 function isMemberAbsentOnDate(member, key) {
-  const proposalAbsences = (state.draft?.conditions?.absences || []).filter((item) => item.memberId === member.id);
-  const explicitlyAbsent = [...member.vacations, ...proposalAbsences].some((item) => key >= item.start && key <= item.end);
+  const activeAbsences = calendarAbsences().filter((item) => item.memberId === member.id);
+  const explicitlyAbsent = [...member.vacations, ...activeAbsences].some((item) => key >= item.start && key <= item.end);
   if (explicitlyAbsent) return true;
-  return [...state.guards, ...(state.draft?.conditions?.guards || [])].some((item) => item.memberId === member.id && addDays(item.date, 1) === key);
+  return calendarGuards().some((item) => item.memberId === member.id && addDays(item.date, 1) === key);
 }
 function memberWorksOnDate(member, key) {
   const pattern = member.workPattern; const weeks = pattern?.weeks || [];
@@ -439,9 +472,9 @@ function memberWorksOnDate(member, key) {
   return workingDays.includes(weekday(key));
 }
 function unassignedMembersForDate(key) {
-  const assignments = state.draft?.assignments || [];
-  if (!state.draft || selectedAgendaFilters.size) return [];
-  const bounds = periodBounds(state.draft);
+  const assignments = calendarEvents();
+  if (!hasCalendarContent() || selectedAgendaFilters.size) return [];
+  const bounds = calendarBounds();
   if (key < bounds.start || key > bounds.end || [0, 6].includes(weekday(key)) || isHoliday(key)) return [];
   const eligibleIds = eligibleUnassignedMemberIds({
     members: state.team,
@@ -480,9 +513,9 @@ function calendarCell(key) {
   const incidents = calendarIncidents(key);
   const weekend = [0, 6].includes(weekday(key));
   const holiday = isHoliday(key);
-  const proposalAssignments = state.draft?.assignments || [];
-  const proposalAgendas = planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]);
-  const rawDateAssignments = proposalAssignments.filter((item) => item.date === key);
+  const activeEvents = calendarEvents();
+  const activeAgendas = planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]);
+  const rawDateAssignments = activeEvents.filter((item) => item.date === key);
   const noHospitalName = state.language === 'es' ? 'Sin hospital' : 'Sense hospital';
   const eventEntry = (html, hospital) => ({
     html,
@@ -491,12 +524,16 @@ function calendarCell(key) {
   });
   const assignmentEvent = (item) => {
     const member = person(item.memberId);
-    const meta = agenda(item.type);
+    const storedMeta = agenda(item.type);
+    const meta = {
+      ...storedMeta,
+      loadPercentage: item.loadPercentage ?? storedMeta.loadPercentage,
+    };
     const hospital = agendaHospital(meta);
     const unassigned = item.type === 'no_assignment';
     const dailyLoad = unassigned ? 0 : dailyAssignmentLoad({
-      assignments: proposalAssignments,
-      agendas: proposalAgendas,
+      assignments: activeEvents,
+      agendas: activeAgendas,
       memberId: item.memberId,
       date: key,
     });
@@ -556,9 +593,9 @@ function calendarCell(key) {
   const guardLabel = guardNames.length ? `Guàrdia: ${guardNames.join(', ')}` : '';
   const guardColor = person(events.guards[0]?.memberId)?.color || '#f1c75b';
   const calendarGuard = events.guards[0];
-  const proposalGuard = currentProposalGuards().find((item) => item.id === calendarGuard?.id)
-    || currentProposalGuards().find((item) => item.date === key && item.memberId === calendarGuard?.memberId);
-  const guardAction = proposalGuard ? `data-action="open-calendar-guard" data-guard-id="${proposalGuard.id}"` : `data-calendar-open="${key}"`;
+  const storedGuard = activeGuards().find((item) => item.id === calendarGuard?.id)
+    || activeGuards().find((item) => item.date === key && item.memberId === calendarGuard?.memberId);
+  const guardAction = storedGuard ? `data-action="open-calendar-guard" data-guard-id="${storedGuard.id}"` : `data-calendar-open="${key}"`;
   const guardSummary = calendarView === 'month' && guardNames.length
     ? `<button type="button" class="calendar-guard-hover" style="--member-color:${guardColor}" ${guardAction} aria-label="${esc(guardLabel)} · Gestiona la guàrdia"><span aria-hidden="true">G</span><span class="calendar-guard-tooltip" role="tooltip">${esc(guardLabel)}</span></button>`
     : '';
@@ -630,11 +667,12 @@ function calendarAgendaFilterGroups() {
 }
 
 function calendarPage() {
-  const assignments = state.draft?.assignments || [];
-  const unfilled = state.draft?.unfilled?.length || 0;
-  return `${header('Calendari', state.draft ? `${recordPeriodLabel(state.draft)} · proposta actual` : 'Sense proposta generada')}
-    <div class="calendar-actions"><section class="calendar-generate card"><div><b>${state.draft ? 'Genera una nova versió' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera proposta</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="export-csv" ${state.draft ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="export-excel" ${state.draft ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="export-ics" ${state.draft ? '' : 'disabled'}>ICS</button></div></section></div>
-    ${state.draft ? calendarKpis() : ''}
+  const assignments = calendarEvents();
+  const unfilled = calendarVacancies().length;
+  const hasContent = hasCalendarContent();
+  return `${header('Calendari', hasContent ? `${projectionPeriodLabel(calendarProjection())} · esdeveniments vigents` : 'Sense esdeveniments generats')}
+    <div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="export-csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="export-excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="export-ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>
+    ${hasContent ? calendarKpis() : ''}
     <section class="calendar-toolbar card"><div class="calendar-nav"><button class="button ghost small" data-action="calendar-today">Avui</button><button class="icon-button" data-action="calendar-prev" aria-label="Anterior">‹</button><button class="icon-button" data-action="calendar-next" aria-label="Següent">›</button><h2>${calendarTitle()}</h2></div><div class="calendar-controls"><div class="calendar-filters">${calendarMultiFilter('member', 'Persones', selectedMemberFilters, calendarMemberFilterGroups(), 'Tothom')}${calendarMultiFilter('agenda', 'Agendes', selectedAgendaFilters, calendarAgendaFilterGroups(), 'Totes')}</div><div class="view-switch">${[['day', 'Dia'], ['week', 'Setmana'], ['month', 'Mes']].map(([id, label]) => `<button data-calendar-view="${id}" class="${calendarView === id ? 'active' : ''}">${label}</button>`).join('')}</div></div></section>
     <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section><div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>`;
 }
@@ -772,8 +810,8 @@ function teleworkBalance(selected, analysis) {
 
 function managementSummary() {
   const eligible = activeTeam().filter((member) => Number(member.managementQuota || 0) > 0);
-  const assignments = (state.draft?.assignments || []).filter((item) => item.type === MANAGEMENT_ACTIVITY.id);
-  const months = state.draft ? periodMonthCount(recordStartMonth(state.draft), recordEndMonth(state.draft)) : 0;
+  const assignments = calendarEvents().filter((item) => item.type === MANAGEMENT_ACTIVITY.id);
+  const months = hasCalendarContent() ? periodMonthCount(projectionStartMonth(calendarProjection()), projectionEndMonth(calendarProjection())) : 0;
   const target = months * eligible.reduce((sum, member) => sum + Number(member.managementQuota || 0), 0);
   return {
     assigned: assignments.length,
@@ -794,9 +832,9 @@ function teleworkBar(balance) {
   return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Equip = mitjana real de les persones.</small></section>`;
 }
 function happinessTimeline() {
-  const people = [...state.team, ...(state.archivedTeam || [])]; const byId = Object.fromEntries(people.map((member) => [member.id, member])); const records = [...(state.published || [])]; if (state.draft && !records.some((item) => item.generatedAt === state.draft.generatedAt)) records.push(state.draft);
+  const people = [...state.team, ...(state.archivedTeam || [])]; const byId = Object.fromEntries(people.map((member) => [member.id, member])); const records = hasCalendarContent() ? [calendarProjection()] : [];
   const assignments = records.flatMap((record) => record.assignments || []).filter((item) => !['no_assignment', 'management'].includes(item.type) && byId[item.memberId]).sort((left, right) => left.date.localeCompare(right.date)); const dates = [...new Set(assignments.map((item) => item.date))]; const cumulative = Object.fromEntries(people.map((member) => [member.id, { points: 0, load: 0, started: false }])); const series = Object.fromEntries(people.map((member) => [member.id, []]));
-  for (const date of dates) { for (const item of assignments.filter((assignment) => assignment.date === date)) { const summary = cumulative[item.memberId]; const load = (agenda(item.type).loadPercentage || 100) / 100; summary.points += Number(byId[item.memberId].agendaPreferences?.[item.type] || 0) * load; summary.load += load; summary.started = true; } for (const member of people) { const summary = cumulative[member.id]; if (summary.started && summary.load) series[member.id].push({ date, value: summary.points / summary.load }); } }
+  for (const date of dates) { for (const item of assignments.filter((assignment) => assignment.date === date)) { const summary = cumulative[item.memberId]; const load = Number(item.loadPercentage ?? agenda(item.type).loadPercentage ?? 100) / 100; summary.points += Number(byId[item.memberId].agendaPreferences?.[item.type] || 0) * load; summary.load += load; summary.started = true; } for (const member of people) { const summary = cumulative[member.id]; if (summary.started && summary.load) series[member.id].push({ date, value: summary.points / summary.load }); } }
   const average = dates.map((date) => { const values = people.map((member) => series[member.id].find((point) => point.date === date)?.value).filter((value) => value !== undefined); return values.length ? { date, value: values.reduce((sum, value) => sum + value, 0) / values.length } : null; }).filter(Boolean);
   return { people: people.filter((member) => series[member.id].length), dates, series, average };
 }
@@ -890,7 +928,7 @@ function historyPage() {
   const telework = teleworkBalance(selected, analysis);
   const heatmapAgendas = orderedFairnessAgendas(analysis, members);
   return `${header('Equitat i històric', 'Desviació respecte al perfil mitjà de les persones comparables', '<button class="button ghost small" data-action="backup">Còpia JSON</button>')}
-    <section class="fairness-stats fairness-stats-single"><div class="insight-card card"><span>Índex global d’equilibri</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? 'Genera una proposta per començar' : analysis.globalScore >= 80 ? 'Repartiment molt equilibrat' : analysis.globalScore >= 60 ? 'Equilibri millorable' : 'Cal revisar el repartiment'}</small></div></section>
+    <section class="fairness-stats fairness-stats-single"><div class="insight-card card"><span>Índex global d’equilibri</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? 'Genera un període per començar' : analysis.globalScore >= 80 ? 'Repartiment molt equilibrat' : analysis.globalScore >= 60 ? 'Equilibri millorable' : 'Cal revisar el repartiment'}</small></div></section>
     <section class="section"><div class="section-head"><div><h2>Evolució de la felicitat</h2><div class="muted">Índex acumulat ponderat per càrrega: ♥ suma, 👎 resta i sense reacció no modifica el resultat.</div></div></div><div class="card happiness-card">${happinessChart()}<p>La sèrie històrica es recalcula amb les preferències actuals. La mitjana de l’equip està ressaltada.</p></div></section>
     <section class="section"><div class="section-head"><div><h2>Equilibri d’una persona</h2><div class="muted">La composició mostra què ha fet; les barres indiquen desviació respecte al seu repartiment esperat.</div></div><select data-action="history-member">${memberOptions(selected?.id || '')}</select></div><div class="person-balance-grid"><section class="card balance-profile" style="--member-color:${selected?.color || '#b9c4c0'}"><div class="balance-person"><span class="member-avatar">${selected ? esc(selected.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('')) : '—'}</span><div><h3>${esc(selected?.name || 'Sense membres')}</h3><span>Índex personal ${selected && analysis.memberScores[selected.id] !== null ? `${analysis.memberScores[selected.id]}/100` : '—'}</span></div></div><div class="composition-bar">${composition.map((entry) => `<i style="width:${entry.share * 100}%;--agenda-color:${entry.item.color}" title="${esc(entry.item.name)} · ${Math.round(entry.share * 100)}%"></i>`).join('') || '<span>Sense activitat registrada</span>'}</div><div class="composition-legend" style="--legend-rows:${Math.ceil(composition.length / 2) || 1}">${composition.map((entry) => `<span><i style="--agenda-color:${entry.item.color}"></i>${esc(entry.item.name)} <b>${Math.round(entry.share * 100)}%</b></span>`).join('')}</div>${teleworkBar(telework)}</section><section class="card deviation-card"><div class="deviation-head"><span>Per sota</span><b>Esperat</b><span>Per sobre</span></div>${selectedCells.map(deviationRow).join('') || '<div class="empty-state">Sense dades per comparar.</div>'}</section></div></section>
     <section class="section"><div class="section-head"><div><h2>Equilibri entre persones</h2><div class="muted">Mapa de calor: blau = menys del repartiment esperat; corall = més. Clica una persona per veure’n el detall.</div></div><div class="heat-legend"><span>Per sota</span><i></i><span>Equilibri</span><i></i><span>Per sobre</span></div></div><div class="card heatmap-wrap"><div class="fairness-heatmap" style="--agenda-columns:${heatmapAgendas.length}"><div class="heat-corner">Persona</div>${heatmapAgendas.map((item) => `<div class="heat-head" title="${esc(item.name)}"><i style="--agenda-color:${item.color}"></i><span>${esc(shortAgendaName(item.name))}</span></div>`).join('')}${members.flatMap((member) => [`<button class="heat-person" data-history-member="${member.id}" style="--member-color:${member.color}"><i></i>${esc(member.name)}</button>`, ...heatmapAgendas.map((item) => heatCell(analysis.cells.find((cell) => cell.member.id === member.id && cell.agenda.id === item.id)))]).join('')}</div></div></section>`;
@@ -920,17 +958,17 @@ function guidePage() {
       <div class="guide-quick"><b>${g('En 30 segons', 'En 30 segundos')}</b><span>1. ${g('Actualitza equip i guàrdies', 'Actualiza equipo y guardias')}</span><span>2. ${g('Genera el mes', 'Genera el mes')}</span><span>3. ${g('Revisa avisos', 'Revisa los avisos')}</span><span>4. ${g('Ajusta i exporta', 'Ajusta y exporta')}</span></div>
     </section>
 
-    <section class="guide-section card"><div class="guide-section-head"><span>1</span><div><h2>${g('Abans de generar', 'Antes de generar')}</h2><p>${g('Una bona proposta depèn de tenir aquestes dades actualitzades.', 'Una buena propuesta depende de tener estos datos actualizados.')}</p></div></div><div class="guide-step-list">${preparation.map(([title, description], index) => `<article><i>${index + 1}</i><div><b>${title}</b><p>${description}</p></div></article>`).join('')}</div></section>
+    <section class="guide-section card"><div class="guide-section-head"><span>1</span><div><h2>${g('Abans de generar', 'Antes de generar')}</h2><p>${g('Un bon calendari depèn de tenir aquestes dades actualitzades.', 'Un buen calendario depende de tener estos datos actualizados.')}</p></div></div><div class="guide-step-list">${preparation.map(([title, description], index) => `<article><i>${index + 1}</i><div><b>${title}</b><p>${description}</p></div></article>`).join('')}</div></section>
 
     <section class="guide-section card"><div class="guide-section-head"><span>2</span><div><h2>${g('Regles que mai no es trenquen', 'Reglas que nunca se rompen')}</h2><p>${g('Si una assignació incompleix una d’aquestes regles, Pinendar no la farà.', 'Si una asignación incumple una de estas reglas, Pinendar no la hará.')}</p></div></div><ul class="guide-check-list">${hardRules.map((rule) => `<li><span>✓</span>${rule}</li>`).join('')}</ul></section>
 
-    <section class="guide-section card"><div class="guide-section-head"><span>3</span><div><h2>${g('Com tria la millor proposta', 'Cómo elige la mejor propuesta')}</h2><p>${g('No barreja tots els criteris. Assegura cada objectiu abans de passar al següent.', 'No mezcla todos los criterios. Asegura cada objetivo antes de pasar al siguiente.')}</p></div></div>
+    <section class="guide-section card"><div class="guide-section-head"><span>3</span><div><h2>${g('Com tria el millor repartiment', 'Cómo elige el mejor reparto')}</h2><p>${g('No barreja tots els criteris. Assegura cada objectiu abans de passar al següent.', 'No mezcla todos los criterios. Asegura cada objetivo antes de pasar al siguiente.')}</p></div></div>
       <ol class="guide-priority-list">
         <li><b>${g('Protegeix les agendes de prioritat molt alta.', 'Protege las agendas de prioridad muy alta.')}</b><span>${g('Són les primeres que intenta cobrir.', 'Son las primeras que intenta cubrir.')}</span></li>
         <li><b>${g('Reparteix Gestió per rondes.', 'Reparte Gestión por rondas.')}</b><span>${g('Intenta donar un primer dia a tothom abans de donar-ne un segon. Gestió pot desplaçar prioritats alta, moderada o baixa, però no la molt alta.', 'Intenta dar un primer día a todos antes de dar un segundo. Gestión puede desplazar prioridades alta, moderada o baja, pero no la muy alta.')}</span></li>
         <li><b>${g('Cobreix la resta per prioritat.', 'Cubre el resto por prioridad.')}</b><span>${g('Primer alta, després moderada i finalment baixa.', 'Primero alta, después moderada y finalmente baja.')}</span></li>
         <li><b>${g('Redueix jornades parcials i persones sense activitat.', 'Reduce jornadas parciales y personas sin actividad.')}</b><span>${g('Si dues agendes parcials poden completar una persona, evita repartir-les innecessàriament.', 'Si dos agendas parciales pueden completar una persona, evita repartirlas innecesariamente.')}</span></li>
-        <li><b>${g('Millora l’equitat.', 'Mejora la equidad.')}</b><span>${g('Entre propostes igual de bones en tot l’anterior, reparteix les agendes per acostar cada perfil al repartiment històric de l’equip.', 'Entre propuestas igual de buenas en todo lo anterior, reparte las agendas para acercar cada perfil al reparto histórico del equipo.')}</span></li>
+        <li><b>${g('Millora l’equitat.', 'Mejora la equidad.')}</b><span>${g('Entre repartiments igual de bons en tot l’anterior, distribueix les agendes per acostar cada perfil al repartiment històric de l’equip.', 'Entre repartos igual de buenos en todo lo anterior, distribuye las agendas para acercar cada perfil al reparto histórico del equipo.')}</span></li>
         <li><b>${g('Col·loca Gestió preferentment en divendres i després en dilluns.', 'Coloca Gestión preferentemente en viernes y después en lunes.')}</b><span>${g('Només ho fa si no empitjora cap criteri anterior.', 'Sólo lo hace si no empeora ningún criterio anterior.')}</span></li>
       </ol>
       <div class="guide-note"><b>${g('I els cors i polzes?', '¿Y los corazones y pulgares?')}</b> ${g('Les preferències es guarden i apareixen a les mètriques de felicitat, però de moment no influeixen en la generació.', 'Las preferencias se guardan y aparecen en las métricas de felicidad, pero por ahora no influyen en la generación.')}</div>
@@ -949,7 +987,7 @@ function guidePage() {
       <article><b>${g('Cedir o intercanviar guàrdies', 'Ceder o intercambiar guardias')}</b><p>${g('Pinendar recalcula les postguàrdies i intenta mantenir cobertes les agendes base amb el mínim de moviments.', 'Pinendar recalcula las postguardias e intenta mantener cubiertas las agendas base con el mínimo de movimientos.')}</p></article>
     </div></section>
 
-    <section class="guide-section card"><div class="guide-section-head"><span>6</span><div><h2>${g('Històric, mètriques i exportació', 'Histórico, métricas y exportación')}</h2><p>${g('Quan generes un període nou, la proposta anterior es conserva a l’històric.', 'Cuando generas un período nuevo, la propuesta anterior se conserva en el histórico.')}</p></div></div><div class="guide-action-grid">
+    <section class="guide-section card"><div class="guide-section-head"><span>6</span><div><h2>${g('Històric, mètriques i exportació', 'Histórico, métricas y exportación')}</h2><p>${g('Cada període generat s’afegeix al calendari. Els mesos anteriors es conserven.', 'Cada período generado se añade al calendario. Los meses anteriores se conservan.')}</p></div></div><div class="guide-action-grid">
       <article><b>${g('Equitat', 'Equidad')}</b><p>${g('Compara el percentatge d’agendes de cada persona amb el perfil mitjà de persones que poden fer-les.', 'Compara el porcentaje de agendas de cada persona con el perfil medio de personas que pueden hacerlas.')}</p></article>
       <article><b>${g('Felicitat', 'Felicidad')}</b><p>${g('Mostra l’evolució de cors i polzes. És informativa.', 'Muestra la evolución de corazones y pulgares. Es informativa.')}</p></article>
       <article><b>${g('Exportació', 'Exportación')}</b><p>${g('CSV, Excel i ICS respecten el període i els filtres actius del calendari.', 'CSV, Excel e ICS respetan el período y los filtros activos del calendario.')}</p></article>
@@ -961,17 +999,17 @@ function guidePage() {
     <section class="guide-section guide-faq card"><div class="guide-section-head"><span>?</span><div><h2>${g('Preguntes freqüents', 'Preguntas frecuentes')}</h2></div></div>
       <details><summary>${g('Per què hi pot haver una vacant i una persona sense agenda el mateix dia?', '¿Por qué puede haber una vacante y una persona sin agenda el mismo día?')}</summary><p>${g('Perquè aquella persona pot no tenir capacitat per fer l’agenda, estar en dia telemàtic o no poder completar una combinació parcial vàlida.', 'Porque esa persona puede no estar habilitada para esa agenda, estar en día telemático o no poder completar una combinación parcial válida.')}</p></details>
       <details><summary>${g('Per què l’equitat no canvia una agenda prioritària?', '¿Por qué la equidad no cambia una agenda prioritaria?')}</summary><p>${g('Perquè l’equitat només tria entre resultats que ja tenen la mateixa cobertura, Gestió i nombre mínim d’incidències.', 'Porque la equidad sólo elige entre resultados que ya tienen la misma cobertura, Gestión y número mínimo de incidencias.')}</p></details>
-      <details><summary>${g('Cal acceptar la proposta automàtica?', '¿Hay que aceptar la propuesta automática?')}</summary><p>${g('No. És una proposta revisable. Els avisos, intercanvis i canvis de guàrdia existeixen perquè la decisió final continuï sent humana.', 'No. Es una propuesta revisable. Los avisos, intercambios y cambios de guardia existen para que la decisión final siga siendo humana.')}</p></details>
+      <details><summary>${g('Es pot ajustar el calendari generat?', '¿Se puede ajustar el calendario generado?')}</summary><p>${g('Sí. Els avisos, intercanvis i canvis de guàrdia permeten revisar-lo i mantenen la decisió final en mans de l’equip.', 'Sí. Los avisos, intercambios y cambios de guardia permiten revisarlo y mantienen la decisión final en manos del equipo.')}</p></details>
     </section>
   </section>`;
 }
 
-function currentProposalGuards() {
-  return [...(state.draft?.conditions?.guards || [])].sort((left, right) => left.date.localeCompare(right.date) || person(left.memberId)?.name.localeCompare(person(right.memberId)?.name || '') || 0);
+function activeGuards() {
+  return [...calendarGuards()].sort((left, right) => left.date.localeCompare(right.date) || person(left.memberId)?.name.localeCompare(person(right.memberId)?.name || '') || 0);
 }
 function guardTransferOperations() {
   const groups = new Map();
-  for (const leg of state.draft?.conditions?.guardTransfers || []) {
+  for (const leg of state.calendar?.guardTransfers || []) {
     if (!groups.has(leg.operationId)) groups.set(leg.operationId, { ...leg, legs: [] });
     groups.get(leg.operationId).legs.push(leg);
   }
@@ -982,13 +1020,11 @@ function guardMemberOptions(selected = '', includeExternal = true, excludedMembe
   return `<option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option>${includeExternal ? `<option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>` : ''}${alphabetically(activeTeam()).filter((member) => member.id !== excludedMemberId).map((member) => `<option value="${member.id}" ${selected === member.id ? 'selected' : ''}>${esc(member.name)}</option>`).join('')}`;
 }
 function guardsPage() {
-  const draft = state.draft;
-  if (!draft) return `${header('Guàrdies', 'Canvis i postguàrdies')}<section class="card empty-state guard-empty"><h2>Encara no hi ha cap proposta</h2><p>Les guàrdies inicials es defineixen en generar el calendari.</p><button class="button" data-page="calendar">Ves al calendari</button></section>`;
-  const guards = currentProposalGuards();
+  const guards = activeGuards();
   const operations = guardTransferOperations();
   const guardRows = guards.map((item) => `<article class="guard-row"><div class="guard-date"><strong>${fmtDate(item.date, { day: 'numeric', month: 'short' })}</strong><span>${fmtDate(item.date, { weekday: 'long' })}</span></div><div class="guard-owner"><span class="member-avatar" style="--member-color:${person(item.memberId)?.color || '#cbd5d0'}">${esc(person(item.memberId)?.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join('') || '—')}</span><div><b>${esc(person(item.memberId)?.name || '—')}</b><small>Postguàrdia · ${fmtDate(addDays(item.date, 1), { day: 'numeric', month: 'short' })}</small></div></div><div class="guard-row-actions"><button class="button ghost small" data-action="open-guard-cession" data-guard-id="${item.id}">Cedeix</button><button class="button secondary small" data-action="open-guard-exchange" data-guard-id="${item.id}">Intercanvia</button></div></article>`).join('');
   const historyRows = operations.map((operation) => `<article class="guard-history-row"><div><b>${operation.operationKind === 'exchange' ? 'Intercanvi' : 'Cessió'}</b><span>${fmtDate(operation.createdAt.slice(0, 10), { day: 'numeric', month: 'short', year: 'numeric' })}</span></div><div class="guard-history-legs">${operation.legs.sort((left, right) => left.date.localeCompare(right.date)).map((leg) => `<span><time>${fmtDate(leg.date, { day: 'numeric', month: 'short' })}</time>${guardPartyName(leg.fromMemberId)} <i>→</i> ${guardPartyName(leg.toMemberId)}</span>`).join('')}</div><small>${operation.impact?.moves || 0} canvis al calendari${operation.note ? ` · ${esc(operation.note)}` : ''}</small></article>`).join('');
-  return `${header('Guàrdies', `${guards.length} guàrdies internes · ${recordPeriodLabel(draft)}`, '<button class="button" data-action="open-incoming-guard">Afegeix guàrdia</button>')}<section class="guard-page-grid"><div><section class="card guard-panel"><div class="guard-list">${guardRows || '<div class="empty-state">No hi ha guàrdies internes en aquesta proposta.</div>'}</div></section></div><aside><section class="card guard-help"><div class="card-kicker">COM FUNCIONA</div><h3>Dos moviments clars</h3><dl><div><dt>Cessió</dt><dd>Canvia el responsable d’una data. Una part pot ser exterior.</dd></div><div><dt>Intercanvi</dt><dd>Permuta dues guàrdies. Amb Exterior, la guàrdia surt del calendari intern.</dd></div></dl><p>Abans d’aplicar, Pinendar ensenya els canvis mínims al calendari.</p></section></aside></section><section class="section guard-history"><div class="section-head"><div><h2>Històric de canvis</h2><p class="muted">Les cobertures exteriors només consten aquí.</p></div></div><div class="card guard-history-list">${historyRows || '<div class="empty-state">Encara no s’ha modificat cap guàrdia.</div>'}</div></section>`;
+  return `${header('Guàrdies', `${guards.length} guàrdies internes`, '<button class="button" data-action="open-incoming-guard">Afegeix guàrdia</button>')}<section class="guard-page-grid"><div><section class="card guard-panel"><div class="guard-list">${guardRows || '<div class="empty-state">No hi ha guàrdies internes.</div>'}</div></section></div><aside><section class="card guard-help"><div class="card-kicker">COM FUNCIONA</div><h3>Dos moviments clars</h3><dl><div><dt>Cessió</dt><dd>Canvia el responsable d’una data. Una part pot ser exterior.</dd></div><div><dt>Intercanvi</dt><dd>Permuta dues guàrdies. Amb Exterior, la guàrdia surt del calendari intern.</dd></div></dl><p>Abans d’aplicar, Pinendar ensenya els canvis mínims al calendari.</p></section></aside></section><section class="section guard-history"><div class="section-head"><div><h2>Històric de canvis</h2><p class="muted">Les cobertures exteriors només consten aquí.</p></div></div><div class="card guard-history-list">${historyRows || '<div class="empty-state">Encara no s’ha modificat cap guàrdia.</div>'}</div></section>`;
 }
 function guardOperationPayload(formElement, operation) {
   const form = new FormData(formElement);
@@ -1006,7 +1042,7 @@ function guardOperationPayload(formElement, operation) {
   }
   const secondRef = form.get('secondRef');
   if (!secondRef) return null;
-  const second = currentProposalGuards().find((item) => item.id === secondRef);
+  const second = activeGuards().find((item) => item.id === secondRef);
   return {
     firstGuardId: form.get('firstGuardId'),
     firstDate: form.get('firstDate'),
@@ -1068,25 +1104,25 @@ function guardInlineImpact(preview, loading = false, error = '') {
 }
 
 function guardActionModal() {
-  const guard = currentProposalGuards().find((item) => item.id === modal.guardId);
+  const guard = activeGuards().find((item) => item.id === modal.guardId);
   if (!guard) return '';
   const member = person(guard.memberId);
   return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIA</div><h2>Gestiona la guàrdia</h2><div class="muted">${esc(member?.name || '—')} · ${fmtDate(guard.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options"><button type="button" class="guard-action-option" data-action="open-guard-cession" data-guard-id="${guard.id}"><b>Cedeix</b><span>Canvia el responsable d’aquesta guàrdia.</span></button><button type="button" class="guard-action-option" data-action="open-guard-exchange" data-guard-id="${guard.id}"><b>Intercanvia</b><span>Permuta-la amb una altra guàrdia.</span></button></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></section></div>`;
 }
 
 function guardCessionModal() {
-  const guard = modal.guardId ? currentProposalGuards().find((item) => item.id === modal.guardId) : null;
+  const guard = modal.guardId ? activeGuards().find((item) => item.id === modal.guardId) : null;
   const sourceName = guard ? person(guard.memberId)?.name || '—' : 'Exterior';
   const dateValue = guard?.date || modal.date || '';
   const selectedTarget = Object.hasOwn(modal, 'toMemberId') ? (modal.toMemberId ?? 'external') : '';
   const dateField = guard
     ? `<div class="field"><label>Data de la guàrdia</label><div class="guard-fixed-date">${fmtDate(guard.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div><input type="hidden" name="date" value="${guard.date}"></div>`
-    : `<div class="field"><label>Data de la guàrdia</label><input type="date" name="date" required value="${dateValue}" min="${periodBounds(state.draft).start}" max="${periodBounds(state.draft).end}"></div>`;
+    : `<div class="field"><label>Data de la guàrdia</label><input type="date" name="date" required value="${dateValue}"></div>`;
   return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CESSIÓ DE GUÀRDIA</div><h2>${guard ? 'Canvia el responsable' : 'Entrada des de l’exterior'}</h2><div class="muted">Origen: ${esc(sourceName)}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-cession-form"><input type="hidden" name="guardId" value="${guard?.id || ''}"><div class="modal-body"><div class="form-grid">${dateField}<div class="field"><label>Nou responsable</label><select name="toMemberId" required>${guardMemberOptions(selectedTarget, Boolean(guard), guard?.memberId || '')}</select></div></div>${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2" placeholder="Motiu o referència del canvi">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
 }
 function guardExchangeModal() {
-  const first = currentProposalGuards().find((item) => item.id === modal.guardId);
-  const others = currentProposalGuards().filter((item) => item.id !== first?.id);
+  const first = activeGuards().find((item) => item.id === modal.guardId);
+  const others = activeGuards().filter((item) => item.id !== first?.id);
   const selected = modal.secondRef || '';
   const second = others.find((item) => item.id === selected);
   const exchangeSummary = second ? `<div class="guard-exchange-summary"><span>${fmtDate(first?.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(first?.memberId)?.name || '—')}</b><i>⇄</i><span>${fmtDate(second.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(second.memberId)?.name || '—')}</b></div>` : '';
@@ -1116,7 +1152,7 @@ function refreshFixedRulePeers(row) { const agendaId = $('[name="rule-type"]', r
 function refreshFixedRuleType(row, formElement) { const selected = $('[name="rule-type"]', row); const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value); const agendaIds = fixedRuleAgendaIds(allowed, Number($('[name="rule-weekday"]', row).value)); const previous = selected.value; selected.innerHTML = typeOptions(previous, agendaIds); selected.disabled = !agendaIds.length; rebuildEnhancedSelect(selected); refreshFixedRulePeers(row); }
 function generationCondition(item, kind) {
   const member = person(item.memberId); const label = kind === 'guard' ? `Guàrdia · ${item.date}` : `Vacances · ${item.start}${item.end !== item.start ? ` — ${item.end}` : ''}`;
-  return `<div class="generation-condition"><span><b>${esc(member?.name || '—')}</b><small>${esc(label)}</small></span><button type="button" class="icon-button danger-icon" data-remove-proposal-condition="${kind}:${item.id}" aria-label="Elimina condicionant">×</button></div>`;
+  return `<div class="generation-condition"><span><b>${esc(member?.name || '—')}</b><small>${esc(label)}</small></span><button type="button" class="icon-button danger-icon" data-remove-generation-condition="${kind}:${item.id}" aria-label="Elimina condicionant">×</button></div>`;
 }
 function emptyMemberOptions() { return `<option value="">Selecciona una persona</option>${memberOptions()}`; }
 function generationDateBounds() {
@@ -1237,12 +1273,12 @@ function generationModal() {
   const bounds = generationDateBounds();
   const monthMode = modal.periodMode !== 'custom';
   const periodControls = `<div class="generation-objective-options generation-period-options"><label><input type="radio" name="periodMode" value="month" ${monthMode ? 'checked' : ''}/><span><b>Mes complet</b><small>Selecciona directament un mes i un any.</small></span></label><label><input type="radio" name="periodMode" value="custom" ${monthMode ? '' : 'checked'}/><span><b>Període personalitzat</b><small>Escull manualment les dates dins d’un únic mes.</small></span></label></div><div class="period-fields ${monthMode ? 'single' : ''}">${monthMode ? monthYearPicker('generationMonth', modal.startMonth, 'Mes a generar') : `<div class="field"><label>Data inicial</label><input type="date" name="generationStartDate" value="${modal.startDate}" required /></div><span>→</span><div class="field"><label>Data final</label><input type="date" name="generationEndDate" value="${modal.endDate}" min="${modal.startDate}" max="${modal.startDate ? endOfMonth(modal.startDate) : ''}" required /></div>`}</div><p class="period-help">${monthMode ? 'Es generarà únicament el mes seleccionat.' : 'Les dues dates han de pertànyer al mateix mes natural.'}</p>`;
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true" aria-labelledby="generation-title"><div class="modal-head"><div><div class="card-kicker">NOVA PROPOSTA</div><h2 id="generation-title">Genera el calendari</h2><div class="muted">Defineix el període i les incidències pròpies d’aquesta proposta.</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="generation-form"><div class="modal-body"><section class="generation-period"><div class="step-number">1</div><div>${periodControls}</div></section>${modal.conflict ? `<div class="generation-warning"><b>No es pot generar aquest període</b><span>${esc(modal.conflict)}</span></div>` : ''}<section class="generation-conditions"><div class="step-title"><span class="step-number">2</span><div><h3>Condicionants variables</h3><p>Comencen buits i només afecten aquesta proposta. Les vacances del perfil i els festius ja s’apliquen automàticament.</p></div></div><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-proposal-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: ${state.language === 'es' ? 'columnas' : 'columnes'} <b>Persona</b> i <b>Data</b>.</p></div><div class="condition-box"><div class="condition-box-head"><h4>Vacances puntuals</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-absences-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-absences-file" /></label></div></div><div class="condition-inputs absence-inputs"><div class="field"><label>Persona</label><select name="absence-member">${emptyMemberOptions()}</select></div><div class="field"><label>Inici</label><input type="date" name="absence-start" min="${bounds.start}" max="${bounds.end}" /></div><div class="field"><label>Final</label><input type="date" name="absence-end" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-proposal-absence">Afegeix</button></div><div class="condition-list">${absenceItems || '<span class="muted">Sense vacances puntuals.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: <b>Persona</b>, <b>Inici</b> i <b>Final</b>.</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal" ${modal.busy ? 'disabled' : ''}>Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.busy ? 'disabled' : ''}>${modal.busy ? 'Generant…' : 'Genera proposta'}</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true" aria-labelledby="generation-title"><div class="modal-head"><div><div class="card-kicker">NOU PERÍODE</div><h2 id="generation-title">Genera el calendari</h2><div class="muted">Defineix el període i les incidències noves.</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="generation-form"><div class="modal-body"><section class="generation-period"><div class="step-number">1</div><div>${periodControls}</div></section>${modal.conflict ? `<div class="generation-warning"><b>${modal.overlap ? 'Aquest període ja té esdeveniments' : 'No es pot generar aquest període'}</b><span>${esc(modal.conflict)}</span>${modal.overlap ? '<button type="button" class="button danger small" data-action="confirm-generation-overwrite">Regenera només aquest període</button>' : ''}</div>` : ''}<section class="generation-conditions"><div class="step-title"><span class="step-number">2</span><div><h3>Condicionants variables</h3><p>Les guardies i absències existents s’apliquen automàticament. Aquí només cal afegir-ne de noves.</p></div></div><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: ${state.language === 'es' ? 'columnas' : 'columnes'} <b>Persona</b> i <b>Data</b>.</p></div><div class="condition-box"><div class="condition-box-head"><h4>Vacances puntuals</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-absences-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-absences-file" /></label></div></div><div class="condition-inputs absence-inputs"><div class="field"><label>Persona</label><select name="absence-member">${emptyMemberOptions()}</select></div><div class="field"><label>Inici</label><input type="date" name="absence-start" min="${bounds.start}" max="${bounds.end}" /></div><div class="field"><label>Final</label><input type="date" name="absence-end" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-absence">Afegeix</button></div><div class="condition-list">${absenceItems || '<span class="muted">Sense vacances puntuals noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: <b>Persona</b>, <b>Inici</b> i <b>Final</b>.</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal" ${modal.busy ? 'disabled' : ''}>Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.busy ? 'disabled' : ''}>${modal.busy ? 'Generant…' : 'Genera calendari'}</button></div></form></section></div>`;
 }
 function guardEditorModal() {
   const guards = modal.guards || []; const bounds = generationDateBounds();
   const guardItems = guards.map((item) => generationCondition(item, 'guard')).join('') + guardImportReview();
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIES</div><h2>Edita les guàrdies</h2><div class="muted">Són esdeveniments independents de les agendes. Només bloquegen el post-guàrdia.</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-editor-form"><div class="modal-body"><section class="generation-conditions"><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-proposal-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies.</span>'}</div><p class="import-hint">${conditionDateHint()}</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal">Desa guàrdies</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIES</div><h2>Edita les guàrdies</h2><div class="muted">Són esdeveniments independents de les agendes. Només bloquegen el post-guàrdia.</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-editor-form"><div class="modal-body"><section class="generation-conditions"><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies.</span>'}</div><p class="import-hint">${conditionDateHint()}</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal">Desa guàrdies</button></div></form></section></div>`;
 }
 function memberModal(member = null) {
   const allowed = member?.allowedTypes || state.agendas.map((item) => item.id);
@@ -1272,13 +1308,13 @@ function agendaRulesInfoModal() {
 }
 function manualHospitalModal() { return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CENTRE MANUAL</div><h2>${esc(modal.name)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="deletion-warning neutral"><b>Localització desconeguda</b><span>El centre s’afegirà sense àrea al mapa. Es podrà usar a les agendes, però no es podrà clicar ni centrar al mapa.</span></div></div><div class="modal-actions"><button class="button ghost" data-action="close-modal">Cancel·la</button><button class="button" data-action="confirm-manual-hospital">Afegeix centre</button></div></section></div>`; }
 function deletionConfirmationWord() { return state.language === 'es' ? 'BORRAR' : 'ESBORRAR'; }
-function clearCalendarModal() { const word = deletionConfirmationWord(); const scope = state.language === 'es' ? 'Se eliminarán todas las asignaciones, vacantes y vacaciones puntuales de la propuesta actual entre ambas fechas. Las guardias se conservarán. No se modificarán festivos, vacaciones del perfil ni históricos.' : 'S’eliminaran totes les assignacions, vacants i vacances puntuals de la proposta actual entre les dues dates. Les guàrdies es conservaran. No es modificaran festius, vacances del perfil ni històrics.'; return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker danger-text">ESBORRA PERÍODE</div><h2>Contingut del calendari</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="clear-calendar-form"><div class="modal-body"><div class="deletion-warning"><b>Aquesta acció no es pot desfer</b><span>${scope}</span></div><div class="form-grid"><div class="field"><label>Data d’inici</label><input type="date" name="startDate" required value="${modal.startDate}" /></div><div class="field"><label>Data final</label><input type="date" name="endDate" required value="${modal.endDate}" /></div></div><div class="field deletion-confirmation"><label>${state.language === 'es' ? `Escribe ${word} para confirmar` : `Escriu ${word} per confirmar`}</label><input name="confirmation" required autocomplete="off" spellcheck="false" /></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button danger" data-action="submit-modal">Esborra període</button></div></form></section></div>`; }
-function generationUnassignedModal() { const es = state.language === 'es'; const days = modal.count; const people = modal.people; return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small" role="dialog" aria-modal="true" aria-labelledby="unassigned-title"><div class="modal-head"><div><div class="card-kicker">${es ? 'PROPUESTA GENERADA' : 'PROPOSTA GENERADA'}</div><h2 id="unassigned-title">${es ? 'Hay días sin asignación' : 'Hi ha dies sense assignació'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="${es ? 'Cerrar' : 'Tanca'}">×</button></div><div class="modal-body"><div class="deletion-warning neutral"><b>${people} ${es ? (people === 1 ? 'persona afectada' : 'personas afectadas') : (people === 1 ? 'persona afectada' : 'persones afectades')}</b><span>${es ? `La propuesta contiene ${days} ${days === 1 ? 'día-persona' : 'días-persona'} sin agenda. Se muestran en rojo como “Sin asignación”.` : `La proposta conté ${days} ${days === 1 ? 'dia-persona' : 'dies-persona'} sense agenda. Es mostren en vermell com a “Sense assignació”.`}</span></div></div><div class="modal-actions"><button class="button" data-action="close-modal">${es ? 'Entendido' : 'Entesos'}</button></div></section></div>`; }
+function clearCalendarModal() { const word = deletionConfirmationWord(); const scope = state.language === 'es' ? 'Se eliminarán todas las asignaciones y vacantes entre ambas fechas. Las guardias y ausencias se conservarán.' : 'S’eliminaran totes les assignacions i vacants entre les dues dates. Les guàrdies i absències es conservaran.'; return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker danger-text">ESBORRA PERÍODE</div><h2>Contingut del calendari</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="clear-calendar-form"><div class="modal-body"><div class="deletion-warning"><b>Aquesta acció no es pot desfer</b><span>${scope}</span></div><div class="form-grid"><div class="field"><label>Data d’inici</label><input type="date" name="startDate" required value="${modal.startDate}" /></div><div class="field"><label>Data final</label><input type="date" name="endDate" required value="${modal.endDate}" /></div></div><div class="field deletion-confirmation"><label>${state.language === 'es' ? `Escribe ${word} para confirmar` : `Escriu ${word} per confirmar`}</label><input name="confirmation" required autocomplete="off" spellcheck="false" /></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button danger" data-action="submit-modal">Esborra període</button></div></form></section></div>`; }
+function generationUnassignedModal() { const es = state.language === 'es'; const days = modal.count; const people = modal.people; return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small" role="dialog" aria-modal="true" aria-labelledby="unassigned-title"><div class="modal-head"><div><div class="card-kicker">${es ? 'PERÍODO GENERADO' : 'PERÍODE GENERAT'}</div><h2 id="unassigned-title">${es ? 'Hay días sin asignación' : 'Hi ha dies sense assignació'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="${es ? 'Cerrar' : 'Tanca'}">×</button></div><div class="modal-body"><div class="deletion-warning neutral"><b>${people} ${es ? (people === 1 ? 'persona afectada' : 'personas afectadas') : (people === 1 ? 'persona afectada' : 'persones afectades')}</b><span>${es ? `El período contiene ${days} ${days === 1 ? 'día-persona' : 'días-persona'} sin agenda. Se muestran en rojo como “Sin asignación”.` : `El període conté ${days} ${days === 1 ? 'dia-persona' : 'dies-persona'} sense agenda. Es mostren en vermell com a “Sense assignació”.`}</span></div></div><div class="modal-actions"><button class="button" data-action="close-modal">${es ? 'Entendido' : 'Entesos'}</button></div></section></div>`; }
 function fixedAssignmentWarningModal() {
-  const item = state.draft?.assignments.find((assignment) => assignment.id === modal.id);
+  const item = calendarEvents().find((assignment) => assignment.id === modal.id);
   const member = person(item?.memberId);
   const itemAgenda = agenda(item?.type);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">ASSIGNACIÓ FIXA</div><h2>Vols canviar-la?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>${esc(member?.name || '—')} · ${esc(itemAgenda?.name || '—')}</b><span>Aquesta assignació prové d’una regla fixa. Si continues, el canvi només afectarà la proposta actual; la regla recurrent del perfil es conservarà.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="confirm-fixed-exchange">Sí, continua</button></div></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">ASSIGNACIÓ FIXA</div><h2>Vols canviar-la?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>${esc(member?.name || '—')} · ${esc(itemAgenda?.name || '—')}</b><span>Aquesta assignació prové d’una regla fixa. Si continues, el canvi només afectarà aquest dia; la regla recurrent del perfil es conservarà.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="confirm-fixed-exchange">Sí, continua</button></div></section></div>`;
 }
 
 function recoveryCodeModal() {
@@ -1291,7 +1327,7 @@ function recoveryCodeModal() {
 function guideOnboardingModal() {
   const es = state.language === 'es';
   const g = (ca, translated) => es ? translated : ca;
-  return `<div class="modal-backdrop"><section class="modal-card modal-small guide-onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="guide-onboarding-title"><div class="modal-head"><div><div class="card-kicker">${g('BENVINGUDA A PINENDAR', 'BIENVENIDA A PINENDAR')}</div><h2 id="guide-onboarding-title">${g('Vols veure com funciona?', '¿Quieres ver cómo funciona?')}</h2></div></div><div class="modal-body"><div class="guide-onboarding-mark" aria-hidden="true">?</div><p>${g('Hem preparat una guia molt breu per entendre el flux, les regles del calendari i què significa cada avís.', 'Hemos preparado una guía muy breve para entender el flujo, las reglas del calendario y qué significa cada aviso.')}</p><ul><li>${g('Preparar equip, agendes i guàrdies', 'Preparar equipo, agendas y guardias')}</li><li>${g('Entendre com decideix el planificador', 'Entender cómo decide el planificador')}</li><li>${g('Revisar i ajustar la proposta', 'Revisar y ajustar la propuesta')}</li></ul></div><div class="modal-actions"><button type="button" class="button ghost" data-action="dismiss-guide-onboarding">${g('Més tard', 'Más tarde')}</button><button type="button" class="button" data-action="open-guide-onboarding">${g('Llegir la guia', 'Leer la guía')}</button></div></section></div>`;
+  return `<div class="modal-backdrop"><section class="modal-card modal-small guide-onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="guide-onboarding-title"><div class="modal-head"><div><div class="card-kicker">${g('BENVINGUDA A PINENDAR', 'BIENVENIDA A PINENDAR')}</div><h2 id="guide-onboarding-title">${g('Vols veure com funciona?', '¿Quieres ver cómo funciona?')}</h2></div></div><div class="modal-body"><div class="guide-onboarding-mark" aria-hidden="true">?</div><p>${g('Hem preparat una guia molt breu per entendre el flux, les regles del calendari i què significa cada avís.', 'Hemos preparado una guía muy breve para entender el flujo, las reglas del calendario y qué significa cada aviso.')}</p><ul><li>${g('Preparar equip, agendes i guàrdies', 'Preparar equipo, agendas y guardias')}</li><li>${g('Entendre com decideix el planificador', 'Entender cómo decide el planificador')}</li><li>${g('Revisar i ajustar el calendari', 'Revisar y ajustar el calendario')}</li></ul></div><div class="modal-actions"><button type="button" class="button ghost" data-action="dismiss-guide-onboarding">${g('Més tard', 'Más tarde')}</button><button type="button" class="button" data-action="open-guide-onboarding">${g('Llegir la guia', 'Leer la guía')}</button></div></section></div>`;
 }
 function assignmentModal() {
   const fairnessBadge = (option) => {
@@ -1305,12 +1341,12 @@ function assignmentModal() {
     return `<span class="fairness-impact ${option.fairnessEffect}" title="${title}">${label}</span>`;
   };
   if (modal.type === 'assignment-exchange') {
-    const source = state.draft.assignments.find((item) => item.id === modal.id);
+    const source = calendarEvents().find((item) => item.id === modal.id);
     const sourceMember = person(source?.memberId);
     const sourceAgenda = agenda(source?.type);
     const options = modal.payload?.options || [];
     const rows = options.map((option) => {
-      const target = state.draft.assignments.find((item) => item.id === option.targetAssignmentId);
+      const target = calendarEvents().find((item) => item.id === option.targetAssignmentId);
       const targetMember = person(option.targetMemberId || target?.memberId);
       const targetAgenda = agenda(option.targetAgendaId || target?.type);
       const targetHospital = agendaHospital(targetAgenda);
@@ -1455,22 +1491,21 @@ function render() {
 }
 
 function quarterLabel(value) { const [year, month] = value.split('-').map(Number); return `T${Math.floor((month - 1) / 3) + 1} ${year}`; }
-function recordStartMonth(record) { return record?.startMonth || record?.quarter || currentQuarter(); }
-function recordEndMonth(record) { return record?.endMonth || monthKey(addMonths(`${recordStartMonth(record)}-01`, 2)); }
+function projectionStartMonth(projection) { return projection?.startMonth || projection?.quarter || currentQuarter(); }
+function projectionEndMonth(projection) { return projection?.endMonth || monthKey(addMonths(`${projectionStartMonth(projection)}-01`, 2)); }
 function periodLabel(startMonth, endMonth) { const start = fmtDate(`${startMonth}-01`, { month: 'short', year: 'numeric' }); const end = fmtDate(`${endMonth}-01`, { month: 'short', year: 'numeric' }); return startMonth === endMonth ? start : `${start} — ${end}`; }
-function recordPeriodLabel(record) { return periodLabel(recordStartMonth(record), recordEndMonth(record)); }
-function periodBounds(record) { return { start: record.startDate || `${recordStartMonth(record)}-01`, end: record.endDate || endOfMonth(`${recordEndMonth(record)}-01`) }; }
+function projectionPeriodLabel(projection) { return periodLabel(projectionStartMonth(projection), projectionEndMonth(projection)); }
+function periodBounds(projection) { return { start: projection.startDate || `${projectionStartMonth(projection)}-01`, end: projection.endDate || endOfMonth(`${projectionEndMonth(projection)}-01`) }; }
 function periodMonthCount(startMonth, endMonth) { const [startYear, start] = startMonth.split('-').map(Number); const [endYear, end] = endMonth.split('-').map(Number); return (endYear - startYear) * 12 + end - start + 1; }
 function isHoliday(key) { return state.holidays.includes(key); }
 function historicalCounts() {
-  const records = [...(state.published || [])];
-  if (state.draft && !records.some((item) => item.generatedAt === state.draft.generatedAt)) records.push(state.draft);
+  const records = hasCalendarContent() ? [calendarProjection()] : [];
   return historicalActivityCounts(state.team, activeActivities(), records);
 }
 function fairnessCounts() { return historicalCounts(); }
 function download(name, content, mime) { const anchor = document.createElement('a'); const url = URL.createObjectURL(new Blob([content], { type: mime })); anchor.href = url; anchor.download = name; document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-function exportRows() { return (state.draft?.assignments || []).filter((item) => (!selectedMemberFilters.size || selectedMemberFilters.has(item.memberId)) && (!selectedAgendaFilters.size || selectedAgendaFilters.has(item.type))); }
-function exportName() { return `pinendar-${recordStartMonth(state.draft)}-${recordEndMonth(state.draft)}`; }
+function exportRows() { return calendarEvents().filter((item) => (!selectedMemberFilters.size || selectedMemberFilters.has(item.memberId)) && (!selectedAgendaFilters.size || selectedAgendaFilters.has(item.type))); }
+function exportName() { return `pinendar-${projectionStartMonth(calendarProjection())}-${projectionEndMonth(calendarProjection())}`; }
 function exportData() { return exportRows().map((item) => { const member = person(item.memberId) || {}; const agendaItem = agenda(item.type); return { Data: item.date, Metge: member.name || '', Correu: member.email || '', Agenda: item.type === 'no_assignment' ? 'NO ASSIGNACIÓ' : agendaItem.name, Hospital: item.type === 'no_assignment' ? '' : agendaHospital(agendaItem)?.name || '' }; }); }
 function exportCsv() { const rows = [['Data', 'Metge', 'Correu', 'Agenda', 'Hospital'], ...exportData().map((item) => Object.values(item))]; download(`${exportName()}.csv`, `\ufeff${rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\n')}`, 'text/csv;charset=utf-8'); }
 function icsText(value = '') { return String(value).replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll(',', '\\,').replaceAll(';', '\\;'); }
@@ -1606,7 +1641,7 @@ window.addEventListener('resize', () => $$('.enhanced-select.open').forEach(posi
 document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.enhanced-select-menu')) $$('.enhanced-select.open').forEach(positionEnhancedSelect); }, true);
 
 document.addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-proposal-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
+  const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
   if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
   if (button.dataset.calendarIssueFilter) { const issue = button.dataset.calendarIssueFilter; if (selectedCalendarIssueFilters.has(issue)) selectedCalendarIssueFilters.delete(issue); else selectedCalendarIssueFilters.add(issue); syncNavigationUrl('replace'); render(); return; }
   if (button.dataset.calendarView) { if (calendarView !== button.dataset.calendarView) { calendarView = button.dataset.calendarView; syncNavigationUrl('push'); render(); } return; }
@@ -1617,7 +1652,7 @@ document.addEventListener('click', async (event) => {
   if (button.dataset.editAgenda) { const item = agenda(button.dataset.editAgenda); modal = { type: 'agenda', id: item.id, color: item.color }; render(); return; }
   if (button.dataset.deleteAgenda) { modal = { type: 'delete-agenda', id: button.dataset.deleteAgenda }; render(); return; }
   if (button.dataset.editAssignment) {
-    const item = state.draft?.assignments.find((assignment) => assignment.id === button.dataset.editAssignment);
+    const item = calendarEvents().find((assignment) => assignment.id === button.dataset.editAssignment);
     if (!item) return;
     if (item.type === 'management') return toast('La gestió no es pot intercanviar des del calendari');
     if (item.fixed) { modal = { type: 'fixed-assignment-warning', id: item.id }; render(); return; }
@@ -1656,11 +1691,12 @@ document.addEventListener('click', async (event) => {
     }
     return;
   }
-  if (button.dataset.removeProposalCondition) { const [kind, id] = button.dataset.removeProposalCondition.split(':'); if (kind === 'guard') modal.guards = modal.guards.filter((item) => item.id !== id); else modal.absences = modal.absences.filter((item) => item.id !== id); render(); return; }
+  if (button.dataset.removeGenerationCondition) { const [kind, id] = button.dataset.removeGenerationCondition.split(':'); if (kind === 'guard') modal.guards = modal.guards.filter((item) => item.id !== id); else modal.absences = modal.absences.filter((item) => item.id !== id); render(); return; }
   if (button.dataset.removeGuard) { try { await api.deleteGuard(button.dataset.removeGuard); await reloadState(); } catch (error) { showError(error); } render(); return; }
   if (button.dataset.removeTime) { const [, date] = button.dataset.removeTime.split(':'); try { await api.deleteHoliday(date); await reloadState(); } catch (error) { showError(error); } render(); return; }
   const action = button.dataset.action;
   if (action === 'submit-modal') { event.preventDefault(); const formElement = button.closest('form'); if (formElement.reportValidity()) await handleForm(formElement); return; }
+  if (action === 'confirm-generation-overwrite') { modal.replaceExisting = true; modal.overlap = null; modal.conflict = ''; await handleForm(button.closest('form')); return; }
   if (action === 'confirm-fixed-exchange') {
     const assignmentId = modal.id;
     try {
@@ -1683,15 +1719,15 @@ document.addEventListener('click', async (event) => {
   if (action === 'open-agenda') { modal = { type: 'agenda' }; render(); return; }
   if (action === 'add-manual-hospital') { const name = hospitalSearchQuery.trim(); if (name.length < 2) return; modal = { type: 'manual-hospital', name }; render(); return; }
   if (action === 'confirm-manual-hospital') { try { await api.selectHospital({ name: modal.name }); modal = null; hospitalSearchResults = []; hospitalSearchStatus = ''; hospitalSearchQuery = ''; await reloadState('Centre afegit'); render(); } catch (error) { showError(error); } return; }
-  if (action === 'open-clear-calendar') { const bounds = state.draft ? periodBounds(state.draft) : { start: `${monthKey(calendarDate)}-01`, end: endOfMonth(calendarDate) }; modal = { type: 'clear-calendar', startDate: bounds.start, endDate: bounds.end }; render(); return; }
-  if (action === 'open-generation') { const startMonth = state.draft ? monthKey(addMonths(`${recordEndMonth(state.draft)}-01`, 1)) : monthKey(calendarDate); const startDate = `${startMonth}-01`; modal = { type: 'generation', periodMode: 'month', startMonth, endMonth: startMonth, startDate, endDate: endOfMonth(startDate), guards: [], absences: [], conflict: '' }; render(); return; }
-  if (action === 'open-guard-editor') { const draft = state.draft; if (!draft) return; const bounds = periodBounds(draft); modal = { type: 'guard-editor', startMonth: recordStartMonth(draft), endMonth: recordEndMonth(draft), startDate: bounds.start, endDate: bounds.end, guards: structuredClone(draft.conditions?.guards || []), conflict: '' }; render(); return; }
+  if (action === 'open-clear-calendar') { const bounds = hasCalendarContent() ? calendarBounds() : { start: `${monthKey(calendarDate)}-01`, end: endOfMonth(calendarDate) }; modal = { type: 'clear-calendar', startDate: bounds.start, endDate: bounds.end }; render(); return; }
+  if (action === 'open-generation') { const startMonth = nextGenerationMonth(); const startDate = `${startMonth}-01`; modal = { type: 'generation', periodMode: 'month', startMonth, endMonth: startMonth, startDate, endDate: endOfMonth(startDate), guards: [], absences: [], conflict: '' }; render(); return; }
+  if (action === 'open-guard-editor') { const bounds = calendarBounds(); modal = { type: 'guard-editor', startMonth: projectionStartMonth(calendarProjection()), endMonth: projectionEndMonth(calendarProjection()), startDate: bounds.start, endDate: bounds.end, guards: structuredClone(calendarGuards()), conflict: '' }; render(); return; }
   if (action === 'open-incoming-guard') { modal = { type: 'guard-cession', guardId: null, date: '' }; render(); return; }
   if (action === 'open-calendar-guard') { modal = { type: 'guard-action', guardId: button.dataset.guardId }; render(); return; }
   if (action === 'open-guard-cession') { modal = { type: 'guard-cession', guardId: button.dataset.guardId }; render(); return; }
   if (action === 'open-guard-exchange') { modal = { type: 'guard-exchange', guardId: button.dataset.guardId, secondRef: '' }; render(); return; }
-  if (action === 'add-proposal-guard') { const formElement = button.closest('form'); const date = $('[name="guard-date"]', formElement).value; const memberId = $('[name="guard-member"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!date) return toast('Selecciona la data de la guàrdia'); if (date < bounds.start || date > bounds.end) return toast('La guàrdia ha d’estar dins del període seleccionat'); if (!modal.guards.some((item) => item.memberId === memberId && item.date === date)) modal.guards.push({ id: uid(), date, memberId }); modal.conflict = ''; render(); return; }
-  if (action === 'add-proposal-absence') { const formElement = button.closest('form'); const memberId = $('[name="absence-member"]', formElement).value; const start = $('[name="absence-start"]', formElement).value; const end = $('[name="absence-end"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!start || !end) return toast('Completa l’inici i el final de les vacances'); if (start < bounds.start || end > bounds.end) return toast('Les vacances han d’estar dins del període seleccionat'); if (end < start) return toast('La data final no pot ser anterior'); modal.absences.push({ id: uid(), memberId, start, end }); modal.conflict = ''; render(); return; }
+  if (action === 'add-generation-guard') { const formElement = button.closest('form'); const date = $('[name="guard-date"]', formElement).value; const memberId = $('[name="guard-member"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!date) return toast('Selecciona la data de la guàrdia'); if (date < bounds.start || date > bounds.end) return toast('La guàrdia ha d’estar dins del període seleccionat'); if (!modal.guards.some((item) => item.memberId === memberId && item.date === date)) modal.guards.push({ id: uid(), date, memberId }); modal.conflict = ''; render(); return; }
+  if (action === 'add-generation-absence') { const formElement = button.closest('form'); const memberId = $('[name="absence-member"]', formElement).value; const start = $('[name="absence-start"]', formElement).value; const end = $('[name="absence-end"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!start || !end) return toast('Completa l’inici i el final de les vacances'); if (start < bounds.start || end > bounds.end) return toast('Les vacances han d’estar dins del període seleccionat'); if (end < start) return toast('La data final no pot ser anterior'); modal.absences.push({ id: uid(), memberId, start, end }); modal.conflict = ''; render(); return; }
   if (action === 'vacation-prev' || action === 'vacation-next') { modal.vacationMonth = monthKey(addMonths(`${modal.vacationMonth}-01`, action === 'vacation-prev' ? -1 : 1)); modal.tab = 'vacations'; render(); return; }
   if (action === 'toggle-vacation') { const key = button.dataset.vacationDate; if (!key || key < dateKey(new Date())) return; const selected = new Set(modal.vacationDates); if (selected.has(key)) selected.delete(key); else selected.add(key); modal.vacationDates = [...selected].sort(); modal.tab = 'vacations'; render(); return; }
   if (action === 'export-guards-template') { conditionTemplate('guards'); return; }
@@ -1750,9 +1786,9 @@ document.addEventListener('change', async (event) => {
   if (modal?.type === 'member' && (event.target.dataset.patternWorking !== undefined || event.target.dataset.patternTele !== undefined)) { refreshPatternDependentFields(event.target.closest('form')); return; }
   if (modal?.type === 'member' && event.target.name === 'rule-weekday') { const row = event.target.closest('.fixed-rule-row'); refreshFixedRuleType(row, event.target.closest('form')); return; }
   if (modal?.type === 'member' && event.target.name === 'rule-type') { refreshFixedRulePeers(event.target.closest('.fixed-rule-row')); return; }
-  if (modal?.type === 'generation' && event.target.name === 'periodMode') { modal.periodMode = event.target.value; modal.conflict = ''; render(); return; }
-  if (modal?.type === 'generation' && event.target.dataset.monthPart) { const picker = event.target.closest('[data-month-picker]'); const month = $('[data-month-part="month"]', picker).value; const year = $('[data-month-part="year"]', picker).value; const next = `${year}-${month}`; modal.startMonth = next; modal.endMonth = next; modal.startDate = `${next}-01`; modal.endDate = endOfMonth(modal.startDate); modal.conflict = ''; render(); return; }
-  if (modal?.type === 'generation' && ['generationStartDate', 'generationEndDate'].includes(event.target.name)) { const formElement = event.target.closest('form'); const startInput = $('[name="generationStartDate"]', formElement); const endInput = $('[name="generationEndDate"]', formElement); if (event.target.name === 'generationStartDate') { modal.startDate = event.target.value; if (modal.startDate && (!modal.endDate || modal.endDate < modal.startDate || monthKey(modal.endDate) !== monthKey(modal.startDate))) modal.endDate = endOfMonth(modal.startDate); } else modal.endDate = event.target.value; if (modal.startDate) modal.startMonth = monthKey(modal.startDate); if (modal.endDate) modal.endMonth = monthKey(modal.endDate); if (endInput) { endInput.value = modal.endDate || ''; endInput.min = modal.startDate || ''; endInput.max = modal.startDate ? endOfMonth(modal.startDate) : ''; } modal.conflict = generationPeriodError(); startInput?.setCustomValidity(modal.conflict); endInput?.setCustomValidity(modal.conflict); const warning = $('.generation-warning', formElement); if (warning) { warning.hidden = !modal.conflict; const message = $('span', warning); if (message) message.textContent = modal.conflict; } return; }
+  if (modal?.type === 'generation' && event.target.name === 'periodMode') { modal.periodMode = event.target.value; modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
+  if (modal?.type === 'generation' && event.target.dataset.monthPart) { const picker = event.target.closest('[data-month-picker]'); const month = $('[data-month-part="month"]', picker).value; const year = $('[data-month-part="year"]', picker).value; const next = `${year}-${month}`; modal.startMonth = next; modal.endMonth = next; modal.startDate = `${next}-01`; modal.endDate = endOfMonth(modal.startDate); modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
+  if (modal?.type === 'generation' && ['generationStartDate', 'generationEndDate'].includes(event.target.name)) { const formElement = event.target.closest('form'); const startInput = $('[name="generationStartDate"]', formElement); const endInput = $('[name="generationEndDate"]', formElement); if (event.target.name === 'generationStartDate') { modal.startDate = event.target.value; if (modal.startDate && (!modal.endDate || modal.endDate < modal.startDate || monthKey(modal.endDate) !== monthKey(modal.startDate))) modal.endDate = endOfMonth(modal.startDate); } else modal.endDate = event.target.value; if (modal.startDate) modal.startMonth = monthKey(modal.startDate); if (modal.endDate) modal.endMonth = monthKey(modal.endDate); modal.replaceExisting = false; modal.overlap = null; if (endInput) { endInput.value = modal.endDate || ''; endInput.min = modal.startDate || ''; endInput.max = modal.startDate ? endOfMonth(modal.startDate) : ''; } modal.conflict = generationPeriodError(); startInput?.setCustomValidity(modal.conflict); endInput?.setCustomValidity(modal.conflict); const warning = $('.generation-warning', formElement); if (warning) { warning.hidden = !modal.conflict; const message = $('span', warning); if (message) message.textContent = modal.conflict; } return; }
   if (event.target.dataset.calendarFilterAll) { const kind = event.target.dataset.calendarFilterAll; openCalendarFilter = kind; (kind === 'member' ? selectedMemberFilters : selectedAgendaFilters).clear(); syncNavigationUrl('replace'); render(); return; }
   if (event.target.dataset.calendarFilterOption) { const kind = event.target.dataset.calendarFilterOption; const selected = kind === 'member' ? selectedMemberFilters : selectedAgendaFilters; openCalendarFilter = kind; if (event.target.checked) selected.add(event.target.value); else selected.delete(event.target.value); syncNavigationUrl('replace'); render(); return; }
   if (event.target.dataset.action === 'history-member') { historyMemberFilter = event.target.value; render(); }
@@ -1781,7 +1817,7 @@ async function handleForm(formElement) {
       if (!guardImportReady()) return toast('Revisa las coincidencias del XLSX');
       const bounds = generationDateBounds();
       if (modal.guards.some((item) => item.date < bounds.start || item.date > bounds.end)) return toast('Hay guardias fuera del período');
-      await api.replaceCurrentProposalGuards({ guards: modal.guards });
+      await api.replaceGuards({ guards: modal.guards });
       modal = null; await reloadState('Guardias actualizadas'); render(); return;
     }
     if (formId === 'generation-form') {
@@ -1794,17 +1830,17 @@ async function handleForm(formElement) {
       const loadingTimer = startGenerationLoadingAnimation();
       let job;
       try {
-        const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, guards: modal.guards, absences: modal.absences });
+        const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, guards: modal.guards, absences: modal.absences, replaceExisting: Boolean(modal.replaceExisting) });
         job = await waitForGeneration(queued.id);
       } finally {
         window.clearInterval(loadingTimer);
       }
-      if (job.status !== 'succeeded') throw new Error(job.error?.message || 'No s’ha pogut generar la proposta');
+      if (job.status !== 'succeeded') throw new Error(job.error?.message || 'No s’ha pogut generar el calendari');
       quarter = startMonth; calendarDate = startDate; modal = null; await reloadState();
-      const unassigned = state.draft?.assignments.filter((item) => item.type === 'no_assignment') || [];
+      const unassigned = calendarEvents().filter((item) => item.type === 'no_assignment' && item.date >= startDate && item.date <= endDate);
       const affectedPeople = new Set(unassigned.map((item) => item.memberId)).size;
       modal = unassigned.length ? { type: 'generation-unassigned', count: unassigned.length, people: affectedPeople } : null;
-      render(); if (!unassigned.length) toast('Proposta generada'); return;
+      render(); if (!unassigned.length) toast('Calendari generat'); return;
     }
     if (formId === 'member-form') {
       const allowedTypes = form.getAll('allowed'); const managementEnabled = form.get('managementEnabled') === 'on'; const managementQuota = managementEnabled ? Number(form.get('quota')) : 0;
@@ -1843,7 +1879,17 @@ async function handleForm(formElement) {
     if (formId === 'clear-calendar-form') { const startDate = form.get('startDate'); const endDate = form.get('endDate'); if (endDate < startDate) return toast('La data final no pot ser anterior a la data inicial'); if (String(form.get('confirmation') || '').trim().toUpperCase() !== deletionConfirmationWord()) return toast(`${state.language === 'es' ? 'Escribe' : 'Escriu'} ${deletionConfirmationWord()} ${state.language === 'es' ? 'exactamente' : 'exactament'}`); await api.deleteCalendarRange(startDate, endDate); modal = null; await reloadState(); render(); toast('Contingut del calendari eliminat dins del període seleccionat'); return; }
     if (formId === 'holiday-form') { await api.addHoliday(form.get('date')); await reloadState('Configuració desada'); render(); }
   } catch (error) {
-    if (formId === 'generation-form') { modal.busy = false; modal.conflict = error.message; render(); }
+    if (formId === 'generation-form') {
+      modal.busy = false;
+      if (error.code === 'PERIOD_OVERLAP' && error.details?.canReplace) {
+        modal.overlap = error.details;
+        modal.conflict = `${error.details.events || 0} esdeveniments i ${error.details.vacancies || 0} vacants seran recalculats. Els ${error.details.preservedManualEvents || 0} canvis manuals es conservaran.`;
+      } else {
+        modal.overlap = null;
+        modal.conflict = error.message;
+      }
+      render();
+    }
     else { showError(error); }
   }
 }
@@ -1874,7 +1920,7 @@ window.addEventListener('popstate', () => {
 async function load() {
   try {
     state = normalizeBootstrapState(await api.bootstrap());
-    if (state.draft) { quarter = recordStartMonth(state.draft); calendarDate = `${quarter}-01`; }
+    if (hasCalendarContent()) { quarter = projectionStartMonth(calendarProjection()); calendarDate = `${quarter}-01`; }
     restoreNavigation();
     modal = state.account?.guideOnboardingPending ? { type: 'guide-onboarding' } : null;
     syncNavigationUrl('replace');

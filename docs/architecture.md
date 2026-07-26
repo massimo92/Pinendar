@@ -12,9 +12,9 @@ El frontend carga `GET /api/v1/bootstrap`, pero cada escritura utiliza un endpoi
 
 ## Generación
 
-`POST /api/v1/generation-jobs` valida el periodo, captura una instantánea versionada y crea un trabajo persistente. Un dispatcher ejecuta `CpSatScheduler` con OR-Tools en otro proceso. El resultado solo se aplica si no cambió `planning_revision`, el periodo continúa libre y el calendario supera una validación independiente.
+`POST /api/v1/generation-jobs` valida el periodo, captura una instantánea versionada y crea un trabajo persistente. Un dispatcher ejecuta `CpSatScheduler` con OR-Tools en otro proceso. El resultado solo se aplica si no cambió `planning_revision` y supera una validación independiente.
 
-Los estados son `queued`, `running`, `succeeded`, `failed` y `stale`. Solo una solución factible crea una propuesta y archiva la anterior. Inviabilidad, límite sin solución, modelo inválido, cambio de revisión o resultado inconsistente no modifican calendarios.
+Los estados son `queued`, `running`, `succeeded`, `failed` y `stale`. Una solución factible sustituye atómicamente solo los eventos y vacantes del rango solicitado. Si ya existen, la API exige `replaceExisting` tras confirmación. Inviabilidad, timeout, modelo inválido, cambio de revisión o resultado inconsistente no modifican el calendario.
 
 El modelo permite una carga diaria del 0%, 50% o 100%. La jornada ordinaria es una agenda completa o dos agendas diferentes del 50%; una única media agenda es una jornada parcial excepcional. Optimiza lexicográficamente cobertura muy alta, reparto de Gestión por rondas, cobertura alta, moderada y baja, jornadas parciales, protección de la agenda más prioritaria en el desempate de parciales, personas-día sin actividad, equidad histórica y preferencia viernes–lunes.
 
@@ -24,7 +24,11 @@ Gestión es una asignación especial con `agenda_id` nulo y tipo propio. Ocupa e
 
 Miembros y agendas se archivan. Su histórico se conserva; configuración y eventos futuros se eliminan desde la fecha de archivo. El catálogo hospitalario común sigue versionado como JSON y la base solo almacena sus referencias.
 
-La primera migración importa `app_state`, conserva la tabla original y crea una copia SQLite previa.
+`PlanningEvent` conserva persona, fecha, tipo, carga y banderas fija, extraordinaria y manual. Vacantes, guardias, ausencias e histórico de guardias son entidades separadas. `GenerationJob` solo audita ejecuciones mediante una relación opcional y nunca limita las consultas.
+
+`GET /api/v1/bootstrap` entrega `calendar.events`, `calendar.vacancies`, `calendar.guards` y `calendar.absences`. Día, semana, mes, exportaciones y métricas proyectan todas estas entidades por fecha. No existen borradores, publicaciones ni una propuesta actual.
+
+Las migraciones crean una copia SQLite previa. La migración al calendario por eventos conserva, para cada fecha solapada, la versión antigua generada más recientemente y valida los recuentos antes de retirar las tablas de propuestas.
 
 ## Operación
 

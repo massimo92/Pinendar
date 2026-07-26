@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date
 
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select, update
@@ -8,12 +8,11 @@ from pinendar.infrastructure.models import (
     AgendaRecurrence,
     Assignment,
     Coverage,
+    Guard,
     GuardTransfer,
     Member,
     MemberAvailableDay,
     MemberCapability,
-    Proposal,
-    ProposalGuard,
 )
 
 
@@ -73,29 +72,16 @@ def _guard_fixture(authenticated_client: TestClient) -> dict[str, str]:
                     MemberCapability(member_id=member_id, agenda_id="guard-extra"),
                 ]
             )
-        session.add(
-            Proposal(
-                id="guard-proposal",
-                status="current",
-                start_month="2026-08",
-                end_month="2026-08",
-                generated_at=datetime.now(),
-                input_revision=1,
-            )
-        )
-        session.flush()
         session.add_all(
             [
                 Assignment(
                     id="guard-owner-base",
-                    proposal_id="guard-proposal",
                     date=date(2026, 8, 11),
                     member_id="guard-owner",
                     agenda_id="guard-base",
                 ),
                 Assignment(
                     id="guard-backup-extra",
-                    proposal_id="guard-proposal",
                     date=date(2026, 8, 11),
                     member_id="guard-backup",
                     agenda_id="guard-extra",
@@ -119,10 +105,10 @@ def test_external_guard_cession_repairs_base_before_extra_and_records_history(
     }
 
     preview = authenticated_client.post(
-        "/api/v1/proposals/current/guard-cessions/preview", json=payload
+        "/api/v1/guard-cessions/preview", json=payload
     )
     applied = authenticated_client.post(
-        "/api/v1/proposals/current/guard-cessions", json=payload
+        "/api/v1/guard-cessions", json=payload
     )
 
     assert preview.status_code == 200
@@ -131,15 +117,12 @@ def test_external_guard_cession_repairs_base_before_extra_and_records_history(
     database = authenticated_client.app.state.database
     with database.session_factory() as session:
         guard = session.scalar(
-            select(ProposalGuard).where(
-                ProposalGuard.proposal_id == "guard-proposal"
-            )
+            select(Guard)
         )
         assert guard and guard.member_id == "guard-owner"
         owner_rows = list(
             session.scalars(
                 select(Assignment).where(
-                    Assignment.proposal_id == "guard-proposal",
                     Assignment.date == date(2026, 8, 11),
                     Assignment.member_id == "guard-owner",
                 )
@@ -149,7 +132,6 @@ def test_external_guard_cession_repairs_base_before_extra_and_records_history(
         backup_rows = list(
             session.scalars(
                 select(Assignment).where(
-                    Assignment.proposal_id == "guard-proposal",
                     Assignment.date == date(2026, 8, 11),
                     Assignment.member_id == "guard-backup",
                 )
@@ -171,16 +153,15 @@ def test_exchange_with_exterior_removes_internal_guard_without_a_new_date(
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
         session.add(
-            ProposalGuard(
+            Guard(
                 id="guard-to-move",
-                proposal_id="guard-proposal",
                 member_id="guard-owner",
                 date=date(2026, 8, 10),
             )
         )
 
     response = authenticated_client.post(
-        "/api/v1/proposals/current/guard-exchanges",
+        "/api/v1/guard-exchanges",
         json={
             "firstGuardId": "guard-to-move",
             "firstDate": "2026-08-10",
@@ -190,7 +171,7 @@ def test_exchange_with_exterior_removes_internal_guard_without_a_new_date(
 
     assert response.status_code == 201
     with database.session_factory() as session:
-        guard = session.get(ProposalGuard, "guard-to-move")
+        guard = session.get(Guard, "guard-to-move")
         assert guard is None
         transfers = list(
             session.scalars(
@@ -210,7 +191,7 @@ def test_guard_operation_rejects_a_stale_revision(
     _guard_fixture(authenticated_client)
 
     response = authenticated_client.post(
-        "/api/v1/proposals/current/guard-cessions",
+        "/api/v1/guard-cessions",
         json={
             "date": "2026-08-10",
             "toMemberId": "guard-owner",

@@ -1,8 +1,8 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 
-from pinendar.infrastructure.models import Assignment, Proposal
+from pinendar.infrastructure.models import Assignment
 
 
 def test_fairness_averages_person_profiles_without_tenure_weight(authenticated_client: TestClient) -> None:
@@ -10,15 +10,6 @@ def test_fairness_averages_person_profiles_without_tenure_weight(authenticated_c
     first, second = state["team"][:2]
     agenda_a, agenda_b = state["agendas"][:2]
     with authenticated_client.app.state.database.session_factory.begin() as session:
-        proposal = Proposal(
-            id="fairness-history",
-            status="historical",
-            start_month="2025-01",
-            end_month="2025-01",
-            generated_at=datetime.now(UTC).replace(tzinfo=None),
-        )
-        session.add(proposal)
-        session.flush()
         day = date(2025, 1, 1)
         profiles = {
             first["id"]: [agenda_a["id"]] * 6 + [agenda_b["id"]] * 4,
@@ -29,7 +20,6 @@ def test_fairness_averages_person_profiles_without_tenure_weight(authenticated_c
                 session.add(
                     Assignment(
                         id=f"{member_id}-{index}",
-                        proposal_id=proposal.id,
                         date=day + timedelta(days=index),
                         member_id=member_id,
                         agenda_id=agenda_id,
@@ -38,7 +28,6 @@ def test_fairness_averages_person_profiles_without_tenure_weight(authenticated_c
         session.add(
             Assignment(
                 id="management-first",
-                proposal_id=proposal.id,
                 date=day + timedelta(days=20),
                 member_id=first["id"],
                 kind="management",

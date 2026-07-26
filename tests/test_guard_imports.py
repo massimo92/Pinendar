@@ -95,7 +95,7 @@ def test_confirmed_alias_is_used_on_later_import(authenticated_client: TestClien
     assert item["reason"] == "alias confirmado"
 
 
-def test_preview_does_not_create_guards_or_proposals(authenticated_client: TestClient) -> None:
+def test_preview_does_not_create_guards(authenticated_client: TestClient) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
     member = state["team"][0]
     response = authenticated_client.post(
@@ -109,5 +109,5 @@ def test_preview_does_not_create_guards_or_proposals(authenticated_client: TestC
 
     assert response.status_code == 200
     after = authenticated_client.get("/api/v1/bootstrap").json()
-    assert after["guards"] == []
-    assert after["draft"] is None
+    assert after["calendar"]["guards"] == []
+    assert after["calendar"]["events"] == []

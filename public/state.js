@@ -19,9 +19,18 @@ export function normalizeBootstrapState(payload) {
   payload.archivedTeam = Array.isArray(payload.archivedTeam) ? payload.archivedTeam : [];
   payload.archivedAgendas = Array.isArray(payload.archivedAgendas) ? payload.archivedAgendas : [];
   payload.coverage ||= {};
-  payload.guards = Array.isArray(payload.guards) ? payload.guards : [];
+  payload.calendar = payload.calendar && typeof payload.calendar === 'object' ? payload.calendar : {};
+  payload.calendar.events = Array.isArray(payload.calendar.events) ? payload.calendar.events : [];
+  payload.calendar.vacancies = Array.isArray(payload.calendar.vacancies) ? payload.calendar.vacancies : [];
+  payload.calendar.guards = Array.isArray(payload.calendar.guards) ? payload.calendar.guards : [];
+  payload.calendar.guardTransfers = Array.isArray(payload.calendar.guardTransfers) ? payload.calendar.guardTransfers : [];
+  payload.calendar.absences = Array.isArray(payload.calendar.absences) ? payload.calendar.absences : [];
+  for (const event of payload.calendar.events) {
+    if ([0, 50, 100].includes(Number(event.loadPercentage))) {
+      event.loadPercentage = Number(event.loadPercentage);
+    }
+  }
   payload.holidays = Array.isArray(payload.holidays) ? payload.holidays : [];
-  payload.published = Array.isArray(payload.published) ? payload.published : [];
   for (let day = 1; day <= 5; day += 1) payload.coverage[day] ||= {};
   for (const member of [...payload.team, ...payload.archivedTeam]) {
     member.availableDays = Array.isArray(member.availableDays) ? member.availableDays : [];

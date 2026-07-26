@@ -30,8 +30,15 @@ def test_bootstrap_exposes_normalized_initial_state(authenticated_client: TestCl
     assert len(body["agendas"]) == 9
     assert {agenda["shift"] for agenda in body["agendas"]} == {"morning"}
     assert {hospital["catalogId"] for hospital in body["hospitals"]} == {"170010", "170301"}
-    assert body["draft"] is None
-    assert body["published"] == []
+    assert body["calendar"] == {
+        "events": [],
+        "vacancies": [],
+        "guards": [],
+        "guardTransfers": [],
+        "absences": [],
+    }
+    assert "draft" not in body
+    assert "published" not in body
 
 
 def test_legacy_state_endpoint_is_removed(client: TestClient) -> None:

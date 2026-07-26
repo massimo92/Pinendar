@@ -2,7 +2,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any
 
 import pytest
@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 import pinendar.application.jobs as jobs_module
 from pinendar.application.jobs import JobDispatcher, enqueue_job
 from pinendar.application.state import DomainError, job_payload
-from pinendar.infrastructure.models import AppSettings, GenerationJob, Proposal, ProposalGuard
+from pinendar.infrastructure.models import AppSettings, Assignment, GenerationJob, Guard
 
 
 def wait_for_job(client: TestClient, job_id: str) -> dict:
@@ -24,7 +24,7 @@ def wait_for_job(client: TestClient, job_id: str) -> dict:
     raise AssertionError("Generation job did not finish")
 
 
-def test_generation_job_creates_current_proposal(authenticated_client: TestClient) -> None:
+def test_generation_job_creates_calendar_events(authenticated_client: TestClient) -> None:
     authenticated_client.app.state.job_dispatcher.start()
     team = authenticated_client.get("/api/v1/bootstrap").json()["team"]
     absences = [
@@ -50,9 +50,9 @@ def test_generation_job_creates_current_proposal(authenticated_client: TestClien
     assert response.status_code == 202
     job = wait_for_job(authenticated_client, response.json()["id"])
     assert job["status"] == "succeeded"
-    proposal = authenticated_client.get("/api/v1/proposals/current").json()
-    assert proposal["startMonth"] == "2027-01"
-    assert proposal["assignments"]
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
+    assert calendar["events"]
+    assert all(item["date"].startswith("2027-01") for item in calendar["events"])
 
     overlap = authenticated_client.post(
         "/api/v1/generation-jobs",
@@ -62,28 +62,13 @@ def test_generation_job_creates_current_proposal(authenticated_client: TestClien
     assert overlap.json()["error"]["code"] == "PERIOD_TOO_LONG"
 
 
-def test_empty_current_proposal_does_not_block_regeneration(authenticated_client: TestClient) -> None:
-    database = authenticated_client.app.state.database
-    with database.session_factory.begin() as session:
-        session.add(
-            Proposal(
-                id="empty-current-proposal",
-                status="current",
-                start_month="2027-02",
-                end_month="2027-02",
-                generated_at=datetime.now(UTC).replace(tzinfo=None),
-                input_revision=1,
-            )
-        )
-
+def test_empty_period_does_not_block_generation(authenticated_client: TestClient) -> None:
     response = authenticated_client.post(
         "/api/v1/generation-jobs",
         json={"startMonth": "2027-02", "endMonth": "2027-02", "guards": [], "absences": []},
     )
 
     assert response.status_code == 202
-    with database.session_factory() as session:
-        assert session.get(Proposal, "empty-current-proposal") is None
 
 
 def test_generation_with_excess_people_succeeds_with_no_assignment_events(
@@ -112,40 +97,209 @@ def test_generation_with_excess_people_succeeds_with_no_assignment_events(
     )
     first_job = wait_for_job(authenticated_client, first.json()["id"])
     assert first_job["status"] == "succeeded", first_job
-    current_id = authenticated_client.get("/api/v1/proposals/current").json()["id"]
+    january = [
+        item["id"]
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+    ]
 
     second = authenticated_client.post(
         "/api/v1/generation-jobs",
         json={"startMonth": "2027-02", "endMonth": "2027-02", "guards": [], "absences": []},
     )
     completed = wait_for_job(authenticated_client, second.json()["id"])
-    current = authenticated_client.get("/api/v1/proposals/current").json()
+    events = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
 
     assert completed["status"] == "succeeded"
-    assert current["id"] != current_id
-    assert any(item["type"] == "no_assignment" for item in current["assignments"])
+    assert set(january).issubset({item["id"] for item in events})
+    assert any(item["type"] == "no_assignment" for item in events)
+    assert any(item["date"].startswith("2027-02") for item in events)
 
 
-def test_guard_only_proposal_does_not_reserve_period(
+def test_regeneration_requires_confirmation_and_preserves_manual_events(
+    authenticated_client: TestClient,
+) -> None:
+    authenticated_client.app.state.job_dispatcher.start()
+    payload = {
+        "startMonth": "2032-01",
+        "endMonth": "2032-01",
+        "guards": [],
+        "absences": [],
+    }
+    first = authenticated_client.post("/api/v1/generation-jobs", json=payload)
+    assert wait_for_job(authenticated_client, first.json()["id"])["status"] == "succeeded"
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
+    event = next(
+        item
+        for item in calendar["events"]
+        if item["date"].startswith("2032-01")
+        and item["type"] not in {"management", "no_assignment"}
+    )
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        stored = session.get(Assignment, event["id"])
+        assert stored is not None
+        stored.locked = True
+        stored.manually_modified = True
+    unchanged_ids = {
+        item["id"]
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2032-01")
+    }
+
+    conflict = authenticated_client.post("/api/v1/generation-jobs", json=payload)
+
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "PERIOD_OVERLAP"
+    assert conflict.json()["error"]["details"]["canReplace"] is True
+    assert conflict.json()["error"]["details"]["preservedManualEvents"] == 1
+    after_conflict_ids = {
+        item["id"]
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2032-01")
+    }
+    assert after_conflict_ids == unchanged_ids
+
+    replacement = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={**payload, "replaceExisting": True},
+    )
+    assert replacement.status_code == 202
+    completed = wait_for_job(authenticated_client, replacement.json()["id"])
+    assert completed["status"] == "succeeded", completed
+    regenerated = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+    preserved = next(item for item in regenerated if item["id"] == event["id"])
+    assert preserved["locked"] is True
+    assert preserved["manuallyModified"] is True
+    assert preserved["date"] == event["date"]
+    assert preserved["memberId"] == event["memberId"]
+    assert preserved["type"] == event["type"]
+
+
+def test_impossible_preserved_change_fails_without_modifying_the_range(
+    authenticated_client: TestClient,
+) -> None:
+    authenticated_client.app.state.job_dispatcher.start()
+    payload = {
+        "startMonth": "2032-02",
+        "endMonth": "2032-02",
+        "guards": [],
+        "absences": [],
+    }
+    first = authenticated_client.post("/api/v1/generation-jobs", json=payload)
+    assert wait_for_job(authenticated_client, first.json()["id"])["status"] == "succeeded"
+    database = authenticated_client.app.state.database
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
+    clinical = next(
+        item
+        for item in calendar["events"]
+        if item["date"].startswith("2032-02")
+        and item["type"] not in {"management", "no_assignment"}
+    )
+    with database.session_factory.begin() as session:
+        for row in session.scalars(
+            select(Assignment).where(
+                Assignment.date == date.fromisoformat(clinical["date"]),
+                Assignment.member_id == clinical["memberId"],
+            )
+        ):
+            row.locked = True
+            row.manually_modified = True
+        session.add(
+            Assignment(
+                id="impossible-locked-unassigned",
+                date=date.fromisoformat(clinical["date"]),
+                member_id=clinical["memberId"],
+                kind="no_assignment",
+                load_percentage=0,
+                locked=True,
+                manually_modified=True,
+            )
+        )
+    before = {
+        item["id"]: item
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2032-02")
+    }
+
+    replacement = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={**payload, "replaceExisting": True},
+    )
+    completed = wait_for_job(authenticated_client, replacement.json()["id"])
+
+    assert completed["status"] == "failed"
+    after = {
+        item["id"]: item
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2032-02")
+    }
+    assert after == before
+
+
+def test_partial_regeneration_changes_only_the_confirmed_dates(
+    authenticated_client: TestClient,
+) -> None:
+    authenticated_client.app.state.job_dispatcher.start()
+    base = {
+        "startMonth": "2033-01",
+        "endMonth": "2033-01",
+        "guards": [],
+        "absences": [],
+    }
+    for start, end in (("2033-01-01", "2033-01-10"), ("2033-01-11", "2033-01-20")):
+        queued = authenticated_client.post(
+            "/api/v1/generation-jobs",
+            json={**base, "startDate": start, "endDate": end},
+        )
+        assert queued.status_code == 202
+        assert wait_for_job(authenticated_client, queued.json()["id"])["status"] == "succeeded"
+    before = {
+        item["id"]: item
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2033-01")
+    }
+    outside_before = {
+        item_id: item
+        for item_id, item in before.items()
+        if not "2033-01-05" <= item["date"] <= "2033-01-07"
+    }
+
+    replacement = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={
+            **base,
+            "startDate": "2033-01-05",
+            "endDate": "2033-01-07",
+            "replaceExisting": True,
+        },
+    )
+    assert replacement.status_code == 202
+    assert wait_for_job(authenticated_client, replacement.json()["id"])["status"] == "succeeded"
+    after = {
+        item["id"]: item
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
+        if item["date"].startswith("2033-01")
+    }
+    outside_after = {
+        item_id: item
+        for item_id, item in after.items()
+        if not "2033-01-05" <= item["date"] <= "2033-01-07"
+    }
+
+    assert outside_after == outside_before
+    assert any("2033-01-05" <= item["date"] <= "2033-01-07" for item in after.values())
+
+
+def test_guard_does_not_reserve_period(
     authenticated_client: TestClient,
 ) -> None:
     authenticated_client.app.state.job_dispatcher.start()
     state = authenticated_client.get("/api/v1/bootstrap").json()
     database = authenticated_client.app.state.database
     with database.session_factory.begin() as session:
-        proposal = Proposal(
-            id="proposal-guard-only-period",
-            status="current",
-            start_month="2027-03",
-            end_month="2027-03",
-            generated_at=datetime.now(),
-            input_revision=1,
-        )
-        session.add(proposal)
         session.add(
-            ProposalGuard(
+            Guard(
                 id="guard-only-period",
-                proposal_id=proposal.id,
                 member_id=state["team"][0]["id"],
                 date=date(2027, 3, 12),
             )
@@ -158,8 +312,8 @@ def test_guard_only_proposal_does_not_reserve_period(
 
     assert response.status_code == 202
     assert wait_for_job(authenticated_client, response.json()["id"])["status"] == "succeeded"
-    current = authenticated_client.get("/api/v1/proposals/current").json()
-    assert [(item["memberId"], item["date"]) for item in current["conditions"]["guards"]] == [
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
+    assert [(item["memberId"], item["date"]) for item in calendar["guards"]] == [
         (state["team"][0]["id"], "2027-03-12")
     ]
 
@@ -203,12 +357,10 @@ def test_generation_accepts_custom_period_and_rejects_more_than_31_days(
 
     assert response.status_code == 202
     assert wait_for_job(authenticated_client, response.json()["id"])["status"] == "succeeded"
-    proposal = authenticated_client.get("/api/v1/proposals/current").json()
-    assert proposal["startDate"] == "2030-04-10"
-    assert proposal["endDate"] == "2030-04-30"
+    calendar = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]
     generated_dates = [
         item["date"]
-        for item in [*proposal["assignments"], *proposal["unfilled"]]
+        for item in [*calendar["events"], *calendar["vacancies"]]
     ]
     assert generated_dates
     assert all("2030-04-10" <= value <= "2030-04-30" for value in generated_dates)
@@ -301,24 +453,13 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
     assert invalid.status_code == 422
 
 
-def test_proposal_guard_before_period_creates_post_guard_absence(authenticated_client: TestClient) -> None:
+def test_guard_before_period_creates_post_guard_absence(authenticated_client: TestClient) -> None:
     database = authenticated_client.app.state.database
     team = authenticated_client.get("/api/v1/bootstrap").json()["team"]
     with database.session_factory.begin() as session:
-        proposal = Proposal(
-            id="prior-proposal",
-            status="historical",
-            start_month="2026-12",
-            end_month="2026-12",
-            generated_at=datetime(2026, 12, 1, tzinfo=UTC).replace(tzinfo=None),
-            archived_at=datetime(2026, 12, 31, tzinfo=UTC).replace(tzinfo=None),
-            input_revision=1,
-        )
-        session.add(proposal)
         session.add(
-            ProposalGuard(
+            Guard(
                 id="prior-guard",
-                proposal_id=proposal.id,
                 member_id=team[0]["id"],
                 date=date(2026, 12, 31),
             )
@@ -348,28 +489,17 @@ def test_proposal_guard_before_period_creates_post_guard_absence(authenticated_c
     assert response.status_code == 202
     job = wait_for_job(authenticated_client, response.json()["id"])
     assert job["status"] == "succeeded", job
-    assignments = authenticated_client.get("/api/v1/proposals/current").json()["assignments"]
+    assignments = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
     assert not any(item["memberId"] == team[0]["id"] and item["date"] == "2027-01-01" for item in assignments)
 
 
-def test_generation_rejects_guard_already_stored_in_proposal(authenticated_client: TestClient) -> None:
+def test_generation_reuses_guard_already_stored(authenticated_client: TestClient) -> None:
     database = authenticated_client.app.state.database
     member_id = authenticated_client.get("/api/v1/bootstrap").json()["team"][0]["id"]
     with database.session_factory.begin() as session:
-        proposal = Proposal(
-            id="proposal-with-guard",
-            status="historical",
-            start_month="2027-01",
-            end_month="2027-01",
-            generated_at=datetime(2027, 1, 1, tzinfo=UTC).replace(tzinfo=None),
-            archived_at=datetime(2027, 1, 31, tzinfo=UTC).replace(tzinfo=None),
-            input_revision=1,
-        )
-        session.add(proposal)
         session.add(
-            ProposalGuard(
+            Guard(
                 id="stored-guard",
-                proposal_id=proposal.id,
                 member_id=member_id,
                 date=date(2027, 1, 4),
             )
@@ -385,13 +515,7 @@ def test_generation_rejects_guard_already_stored_in_proposal(authenticated_clien
         },
     )
 
-    assert response.status_code == 409
-    assert response.json()["error"] == {
-        "code": "DUPLICATE_GUARD_DATE",
-        "message": "Ja hi ha una guàrdia registrada el 2027-01-04",
-        "field": "guards",
-        "details": {"date": "2027-01-04"},
-    }
+    assert response.status_code == 202
 
 
 def test_job_payload_tolerates_corrupt_result_json() -> None:
