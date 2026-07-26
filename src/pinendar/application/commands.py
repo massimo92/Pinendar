@@ -1,0 +1,1475 @@
+from __future__ import annotations
+
+import random
+import re
+from datetime import date, datetime, timedelta
+from typing import Any
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from pinendar.application.state import (
+    DomainError,
+    bump_revision,
+    clear_agenda_coverage,
+    clear_member_configuration,
+    month_end,
+    normalized,
+    parse_date,
+    serialize_member,
+    uid,
+)
+from pinendar.infrastructure.catalog import HospitalCatalog
+from pinendar.infrastructure.models import (
+    Absence,
+    Agenda,
+    AgendaRecurrence,
+    AppSettings,
+    Assignment,
+    Coverage,
+    FixedRule,
+    Guard,
+    Holiday,
+    Hospital,
+    Member,
+    MemberAgendaPreference,
+    MemberAvailableDay,
+    MemberCapability,
+    MemberStatusChange,
+    MemberTeleDay,
+    Proposal,
+    ProposalAbsence,
+    ProposalGuard,
+    Vacancy,
+)
+
+
+def madrid_today() -> date:
+    return datetime.now(ZoneInfo("Europe/Madrid")).date()
+
+
+HSL_HUE = re.compile(r"hsl\(\s*(\d+(?:\.\d+)?)")
+
+
+def color_hue(color: str) -> int | None:
+    match = HSL_HUE.match(color)
+    return round(float(match.group(1))) % 360 if match else None
+
+
+def random_color(kind: str, used_colors: list[str] | None = None) -> str:
+    used_hues = [hue for color in used_colors or [] if (hue := color_hue(color)) is not None]
+    generator = random.SystemRandom()
+    if used_hues:
+        distances = {
+            hue: min(min(abs(hue - used), 360 - abs(hue - used)) for used in used_hues)
+            for hue in range(360)
+        }
+        best_distance = max(distances.values())
+        hue = generator.choice([candidate for candidate, distance in distances.items() if distance == best_distance])
+    else:
+        hue = generator.randrange(360)
+    return f"hsl({hue} {'58% 78%' if kind == 'member' else '90% 56%'})"
+
+
+def distinct_color(session: Session, kind: str, record_id: str | None = None, avoid: str | None = None) -> str:
+    model = Member if kind == "member" else Agenda
+    query = select(model.color).where(model.archived_at.is_(None))
+    if record_id:
+        query = query.where(model.id != record_id)
+    used = list(session.scalars(query))
+    if avoid:
+        used.append(avoid)
+    return random_color(kind, used)
+
+
+def reassign_agenda_colors(session: Session) -> int:
+    agendas = list(session.scalars(select(Agenda).where(Agenda.archived_at.is_(None)).order_by(Agenda.name)))
+    assigned: list[str] = []
+    for agenda in agendas:
+        agenda.color = random_color("agenda", assigned)
+        assigned.append(agenda.color)
+    settings = session.get(AppSettings, 1)
+    if settings:
+        settings.color_scheme_version = 4
+    return len(agendas)
+
+
+def assert_member_identity_available(session: Session, name: str, email: str, member_id: str | None = None) -> None:
+    name_query = select(Member).where(Member.normalized_name == normalized(name))
+    email_query = select(Member).where(Member.normalized_email == normalized(email))
+    if member_id:
+        name_query = name_query.where(Member.id != member_id)
+        email_query = email_query.where(Member.id != member_id)
+    name_match = session.scalar(name_query)
+    if name_match:
+        raise DomainError("MEMBER_NAME_EXISTS", f"Ja existeix una persona amb el nom {name}", field="name")
+    email_match = session.scalar(email_query)
+    if email_match:
+        raise DomainError("MEMBER_EMAIL_EXISTS", f"Ja existeix una persona amb el correu {email}", field="email")
+
+
+def normalize_work_pattern(payload: dict[str, Any]) -> list[dict[str, list[int]]]:
+    pattern = payload.get("workPattern")
+    legacy_tele = {int(day) for day in payload.get("teleDays", [])}
+    if pattern:
+        raw_weeks = pattern.get("weeks", [])
+    else:
+        raw_weeks = [payload.get("availableDays", [])]
+    weeks: list[dict[str, list[int]]] = []
+    for raw_week in raw_weeks:
+        if isinstance(raw_week, dict):
+            working_days = [int(day) for day in raw_week.get("workingDays", [])]
+            tele_days = [int(day) for day in raw_week.get("teleDays", [])]
+        else:
+            working_days = [int(day) for day in raw_week]
+            tele_days = sorted(legacy_tele.intersection(working_days))
+        weeks.append({"workingDays": working_days, "teleDays": tele_days})
+    if not 1 <= len(weeks) <= 5:
+        raise DomainError(
+            "INVALID_WORK_PATTERN",
+            "El patró de treball necessita entre una i cinc setmanes",
+            field="workPattern",
+        )
+    for week in weeks:
+        working = week["workingDays"]
+        tele = week["teleDays"]
+        if (
+            len(working) != len(set(working))
+            or len(tele) != len(set(tele))
+            or not set(working).issubset(range(1, 6))
+            or not set(tele).issubset(working)
+        ):
+            raise DomainError(
+                "INVALID_WORK_PATTERN",
+                "El patró de treball conté dies no vàlids, repetits o telemàtics fora dels dies treballats",
+                field="workPattern",
+            )
+    available = sorted({day for week in weeks for day in week["workingDays"]})
+    if not available:
+        raise DomainError(
+            "INVALID_WORK_PATTERN", "El patró de treball ha de contenir almenys un dia", field="workPattern"
+        )
+    payload["workPattern"] = {"weeks": weeks}
+    payload["availableDays"] = available
+    payload["teleDays"] = sorted({day for week in weeks for day in week["teleDays"]})
+    return weeks
+
+
+def validate_member_payload(session: Session, payload: dict[str, Any], member_id: str | None = None) -> None:
+    assert_member_identity_available(session, payload["name"], payload["email"], member_id)
+    weeks = normalize_work_pattern(payload)
+    available = {day for week in weeks for day in week["workingDays"]}
+    active_agendas = {item.id: item for item in session.scalars(select(Agenda).where(Agenda.archived_at.is_(None)))}
+    allowed = set(payload["allowedTypes"])
+    preferences = payload.get("agendaPreferences", {})
+    if not set(preferences).issubset(active_agendas) or any(
+        int(value) not in {-1, 0, 1} for value in preferences.values()
+    ):
+        raise DomainError(
+            "INVALID_AGENDA_PREFERENCE",
+            "Les preferències contenen una agenda o valor no vàlid",
+            field="agendaPreferences",
+        )
+    management_quota = int(payload.get("managementQuota", 0))
+    if not 0 <= management_quota <= 5:
+        raise DomainError(
+            "INVALID_MANAGEMENT_QUOTA",
+            "Els dies de gestió han d’estar entre 0 i 5",
+            field="managementQuota",
+        )
+    payload["managementQuota"] = management_quota
+    if not allowed.issubset(active_agendas):
+        raise DomainError("INVALID_CAPABILITY", "Hi ha una agenda no habilitada", field="allowedTypes")
+    current_rule_keys = (
+        {
+            (rule.weekday, rule.agenda_id)
+            for rule in session.scalars(select(FixedRule).where(FixedRule.member_id == member_id))
+        }
+        if member_id
+        else set()
+    )
+    weekdays: set[int] = set()
+    shared_rules: list[dict[str, Any]] = []
+    for rule in payload.get("fixedRules", []):
+        weekday = int(rule["weekday"])
+        agenda_id = rule["type"]
+        if weekday in weekdays:
+            raise DomainError(
+                "DUPLICATE_FIXED_RULE_DAY",
+                "Una persona no pot tenir dues regles fixes el mateix dia",
+                field="fixedRules",
+            )
+        weekdays.add(weekday)
+        if weekday not in available or agenda_id not in allowed:
+            raise DomainError(
+                "INVALID_FIXED_RULE", "La regla fixa utilitza una agenda o dia no habilitat", field="fixedRules"
+            )
+        if not active_agendas[agenda_id].telematic and any(
+            weekday in week["teleDays"] for week in weeks
+        ):
+            raise DomainError(
+                "TELEWORK_AGENDA_REQUIRED",
+                "En un dia telemàtic només es pot assignar una agenda telemàtica",
+                field="fixedRules",
+            )
+        coverage = (
+            session.scalar(select(Coverage.slots).where(Coverage.weekday == weekday, Coverage.agenda_id == agenda_id))
+            or 0
+        )
+        recurring_demand = session.scalar(
+            select(AgendaRecurrence.id).where(
+                AgendaRecurrence.weekday == weekday,
+                AgendaRecurrence.agenda_id == agenda_id,
+            )
+        )
+        if coverage <= 0 and recurring_demand is None:
+            raise DomainError(
+                "FIXED_RULE_CAPACITY", "La regla fixa necessita almenys una plaça de cobertura", field="fixedRules"
+            )
+        if (weekday, agenda_id) in current_rule_keys:
+            continue
+        peers_query = (
+            select(Member)
+            .join(FixedRule, FixedRule.member_id == Member.id)
+            .where(
+                FixedRule.weekday == weekday,
+                FixedRule.agenda_id == agenda_id,
+                Member.archived_at.is_(None),
+            )
+            .order_by(Member.name)
+        )
+        if member_id:
+            peers_query = peers_query.where(Member.id != member_id)
+        peers = list(session.scalars(peers_query))
+        if peers:
+            shared_rules.append(
+                {
+                    "weekday": weekday,
+                    "agendaId": agenda_id,
+                    "agendaName": active_agendas[agenda_id].name,
+                    "people": [{"id": peer.id, "name": peer.name} for peer in peers],
+                }
+            )
+    if shared_rules and not payload.get("confirmSharedFixedRules", False):
+        raise DomainError(
+            "SHARED_FIXED_RULE_CONFIRMATION_REQUIRED",
+            "La regla fixa ja s’aplica a altres persones",
+            field="fixedRules",
+            details={"rules": shared_rules},
+        )
+
+
+def save_member(session: Session, payload: dict[str, Any], member_id: str | None = None) -> dict[str, Any]:
+    validate_member_payload(session, payload, member_id)
+    pattern_weeks = payload["workPattern"]["weeks"]
+    member = session.get(Member, member_id) if member_id else None
+    if member_id and (not member or member.archived_at):
+        raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada")
+    if not member:
+        member = Member(
+            id=uid(),
+            name=payload["name"],
+            normalized_name=normalized(payload["name"]),
+            email=payload["email"],
+            normalized_email=normalized(payload["email"]),
+            color=distinct_color(session, "member"),
+            management_quota=int(payload.get("managementQuota", 0)),
+            is_active=bool(payload.get("active", True)),
+            work_pattern_weeks=len(pattern_weeks),
+        )
+        session.add(member)
+        session.flush()
+    else:
+        member.name = payload["name"]
+        member.normalized_name = normalized(payload["name"])
+        member.email = payload["email"]
+        member.normalized_email = normalized(payload["email"])
+        member.management_quota = int(payload.get("managementQuota", 0))
+        member.work_pattern_weeks = len(pattern_weeks)
+        next_active = bool(payload.get("active", True))
+        if member.is_active != next_active:
+            member.is_active = next_active
+            session.add(MemberStatusChange(id=uid(), member_id=member.id, active=next_active))
+        clear_member_configuration(session, member.id)
+        session.execute(
+            delete(MemberAgendaPreference).where(
+                MemberAgendaPreference.member_id == member.id
+            )
+        )
+    for week_index, week in enumerate(pattern_weeks):
+        for weekday in week["workingDays"]:
+            session.add(MemberAvailableDay(member_id=member.id, week_index=week_index, weekday=int(weekday)))
+        for weekday in week["teleDays"]:
+            session.add(MemberTeleDay(member_id=member.id, week_index=week_index, weekday=int(weekday)))
+    for agenda_id in payload["allowedTypes"]:
+        session.add(MemberCapability(member_id=member.id, agenda_id=agenda_id))
+    for agenda_id, preference in payload.get("agendaPreferences", {}).items():
+        if int(preference):
+            session.add(
+                MemberAgendaPreference(
+                    member_id=member.id,
+                    agenda_id=agenda_id,
+                    preference=int(preference),
+                )
+            )
+    for rule in payload.get("fixedRules", []):
+        session.add(
+            FixedRule(
+                id=rule.get("id") or uid(), member_id=member.id, weekday=int(rule["weekday"]), agenda_id=rule["type"]
+            )
+        )
+    replace_member_vacations(session, member, payload.get("vacationDates", []))
+    bump_revision(session)
+    session.flush()
+    return serialize_member(session, member)
+
+
+def vacation_dates(session: Session, member_id: str) -> set[date]:
+    dates: set[date] = set()
+    for item in session.scalars(select(Absence).where(Absence.member_id == member_id, Absence.category == "vacances")):
+        current = item.start
+        while current <= item.end:
+            dates.add(current)
+            current += timedelta(days=1)
+    return dates
+
+
+def replace_member_vacations(session: Session, member: Member, values: list[str]) -> None:
+    submitted = {parse_date(value) for value in values}
+    today = madrid_today()
+    existing_past = {value for value in vacation_dates(session, member.id) if value < today}
+    submitted_past = {value for value in submitted if value < today}
+    if submitted_past != existing_past:
+        raise DomainError(
+            "PAST_VACATIONS_IMMUTABLE",
+            "Els dies de vacances passats no es poden modificar",
+            field="vacationDates",
+        )
+    session.execute(
+        delete(Absence).where(Absence.member_id == member.id, Absence.category == "vacances")
+    )
+    ordered = sorted(submitted)
+    if not ordered:
+        return
+    start = end = ordered[0]
+    for value in ordered[1:]:
+        if value == end + timedelta(days=1):
+            end = value
+            continue
+        session.add(Absence(id=uid(), member_id=member.id, category="vacances", start=start, end=end))
+        start = end = value
+    session.add(Absence(id=uid(), member_id=member.id, category="vacances", start=start, end=end))
+
+
+def archive_member(session: Session, member_id: str) -> None:
+    member = session.get(Member, member_id)
+    if not member or member.archived_at:
+        raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada")
+    today = madrid_today()
+    yesterday = today - timedelta(days=1)
+    member.archived_at = today
+    clear_member_configuration(session, member_id)
+    session.execute(delete(Guard).where(Guard.member_id == member_id, Guard.date >= today))
+    session.execute(delete(ProposalGuard).where(ProposalGuard.member_id == member_id, ProposalGuard.date >= today))
+    session.execute(delete(Assignment).where(Assignment.member_id == member_id, Assignment.date >= today))
+    for item in session.scalars(select(Absence).where(Absence.member_id == member_id, Absence.end >= today)):
+        if item.start < today:
+            item.end = yesterday
+        else:
+            session.delete(item)
+    for proposal_absence in session.scalars(
+        select(ProposalAbsence).where(ProposalAbsence.member_id == member_id, ProposalAbsence.end >= today)
+    ):
+        if proposal_absence.start < today:
+            proposal_absence.end = yesterday
+        else:
+            session.delete(proposal_absence)
+    bump_revision(session)
+
+
+def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None = None) -> dict[str, Any]:
+    hospital = session.scalar(select(Hospital).where(Hospital.catalog_id == payload["hospitalId"]))
+    if not hospital:
+        raise DomainError("HOSPITAL_NOT_SELECTED", "Selecciona un hospital vàlid", field="hospitalId")
+    agenda = session.get(Agenda, agenda_id) if agenda_id else None
+    if agenda_id and (not agenda or agenda.archived_at):
+        raise DomainError("AGENDA_NOT_FOUND", "Agenda no trobada")
+    priority = int(payload.get("priority", 3))
+    if not 1 <= priority <= 4:
+        raise DomainError("INVALID_AGENDA_PRIORITY", "La prioritat ha d’estar entre 1 i 4", field="priority")
+    shift = payload.get("shift")
+    if shift not in {"morning", "afternoon"}:
+        raise DomainError(
+            "INVALID_AGENDA_SHIFT",
+            "El torn ha de ser de matí o tarda",
+            field="shift",
+        )
+    load_percentage = int(payload.get("loadPercentage", 100))
+    if load_percentage not in {50, 100}:
+        raise DomainError(
+            "INVALID_AGENDA_LOAD",
+            "La càrrega de l’agenda ha de ser del 50% o del 100%",
+            field="loadPercentage",
+        )
+    recurrences = payload.get("recurrences", [])
+    coverage_values = {weekday: int(payload.get("coverage", {}).get(str(weekday), 0)) for weekday in range(1, 6)}
+    for weekday, slots in coverage_values.items():
+        if slots < 0:
+            raise DomainError("INVALID_COVERAGE", "La cobertura no pot ser negativa", field=f"coverage.{weekday}")
+    conflicting_rules: list[tuple[FixedRule, Member]] = []
+    telework_rule_conflicts: list[tuple[FixedRule, Member]] = []
+    recurrence_weekdays = {int(recurrence["weekday"]) for recurrence in recurrences}
+    if agenda:
+        fixed_rules = session.execute(
+            select(FixedRule, Member)
+            .join(Member, Member.id == FixedRule.member_id)
+            .where(FixedRule.agenda_id == agenda.id)
+        ).all()
+        for weekday in range(1, 6):
+            weekday_rules = [(rule, member) for rule, member in fixed_rules if rule.weekday == weekday]
+            if weekday_rules and coverage_values[weekday] == 0 and weekday not in recurrence_weekdays:
+                conflicting_rules.extend(weekday_rules)
+        if not bool(payload.get("telematic", False)):
+            for rule, member in fixed_rules:
+                tele_day = session.scalar(
+                    select(MemberTeleDay.id)
+                    .where(
+                        MemberTeleDay.member_id == member.id,
+                        MemberTeleDay.weekday == rule.weekday,
+                    )
+                    .limit(1)
+                )
+                if tele_day:
+                    telework_rule_conflicts.append((rule, member))
+    if telework_rule_conflicts:
+        raise DomainError(
+            "TELEWORK_AGENDA_REQUIRED",
+            "Una regla fixa en dia telemàtic necessita una agenda telemàtica",
+            field="telematic",
+            details={
+                "rules": [
+                    {
+                        "id": rule.id,
+                        "memberId": member.id,
+                        "memberName": member.name,
+                        "weekday": rule.weekday,
+                        "agendaId": agenda.id,
+                        "agendaName": agenda.name,
+                    }
+                    for rule, member in telework_rule_conflicts
+                ]
+            },
+        )
+    if conflicting_rules and not payload.get("deleteConflictingFixedRules", False):
+        raise DomainError(
+            "FIXED_RULE_CAPACITY",
+            "La nova cobertura afecta regles fixes existents",
+            field="coverage",
+            details={
+                "rules": [
+                    {
+                        "id": rule.id,
+                        "memberId": member.id,
+                        "memberName": member.name,
+                        "weekday": rule.weekday,
+                        "agendaId": agenda.id,
+                        "agendaName": agenda.name,
+                    }
+                    for rule, member in conflicting_rules
+                ]
+            },
+        )
+    for rule, _member in conflicting_rules:
+        session.delete(rule)
+    recurrence_keys: set[tuple[int, int]] = set()
+    for index, recurrence in enumerate(recurrences):
+        ordinal = int(recurrence["ordinal"])
+        weekday = int(recurrence["weekday"])
+        slots = int(recurrence["slots"])
+        if not 1 <= ordinal <= 5 or not 1 <= weekday <= 5 or slots != 1:
+            raise DomainError(
+                "INVALID_AGENDA_RECURRENCE",
+                "La regla especial té valors invàlids",
+                field=f"recurrences.{index}",
+            )
+        key = (ordinal, weekday)
+        if key in recurrence_keys:
+            raise DomainError(
+                "DUPLICATE_AGENDA_RECURRENCE",
+                "No es pot repetir el mateix dia ordinal",
+                field=f"recurrences.{index}",
+            )
+        recurrence_keys.add(key)
+    if not agenda:
+        generated_id = f"agenda_{uuid4().hex[:10]}"
+        agenda = Agenda(
+            id=generated_id,
+            name=payload["name"],
+            hospital_catalog_id=payload["hospitalId"],
+            telematic=bool(payload["telematic"]),
+            shift=shift,
+            color=distinct_color(session, "agenda"),
+            priority=priority,
+            load_percentage=load_percentage,
+        )
+        session.add(agenda)
+        session.flush()
+    else:
+        agenda.name = payload["name"]
+        agenda.hospital_catalog_id = payload["hospitalId"]
+        agenda.telematic = bool(payload["telematic"])
+        agenda.shift = shift
+        agenda.priority = priority
+        agenda.load_percentage = load_percentage
+        clear_agenda_coverage(session, agenda.id)
+    for weekday in range(1, 6):
+        slots = coverage_values[weekday]
+        session.add(Coverage(agenda_id=agenda.id, weekday=weekday, slots=slots))
+    for recurrence in recurrences:
+        session.add(
+            AgendaRecurrence(
+                id=recurrence.get("id") or uid(),
+                agenda_id=agenda.id,
+                ordinal=int(recurrence["ordinal"]),
+                weekday=int(recurrence["weekday"]),
+                slots=int(recurrence["slots"]),
+            )
+        )
+    bump_revision(session)
+    session.flush()
+    return {
+        "id": agenda.id,
+        "name": agenda.name,
+        "hospitalId": agenda.hospital_catalog_id,
+        "telematic": agenda.telematic,
+        "shift": agenda.shift,
+        "color": agenda.color,
+        "priority": agenda.priority,
+        "loadPercentage": agenda.load_percentage,
+        "recurrences": [
+            {
+                "id": item.id,
+                "ordinal": item.ordinal,
+                "weekday": item.weekday,
+                "slots": item.slots,
+            }
+            for item in session.scalars(
+                select(AgendaRecurrence)
+                .where(AgendaRecurrence.agenda_id == agenda.id)
+                .order_by(AgendaRecurrence.ordinal, AgendaRecurrence.weekday)
+            )
+        ],
+    }
+
+
+def archive_agenda(session: Session, agenda_id: str) -> None:
+    agenda = session.get(Agenda, agenda_id)
+    if not agenda or agenda.archived_at:
+        raise DomainError("AGENDA_NOT_FOUND", "Agenda no trobada")
+    today = madrid_today()
+    agenda.archived_at = today
+    session.execute(delete(MemberCapability).where(MemberCapability.agenda_id == agenda_id))
+    session.execute(delete(FixedRule).where(FixedRule.agenda_id == agenda_id))
+    session.execute(delete(Coverage).where(Coverage.agenda_id == agenda_id))
+    session.execute(delete(AgendaRecurrence).where(AgendaRecurrence.agenda_id == agenda_id))
+    session.execute(delete(Assignment).where(Assignment.agenda_id == agenda_id, Assignment.date >= today))
+    session.execute(delete(Vacancy).where(Vacancy.agenda_id == agenda_id, Vacancy.date >= today))
+    bump_revision(session)
+
+
+def add_hospital(
+    session: Session,
+    catalog: HospitalCatalog,
+    catalog_id: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    clean_name = (name or "").strip()
+    if not catalog_id:
+        if len(clean_name) < 2:
+            raise DomainError("HOSPITAL_NAME_REQUIRED", "Escriu el nom del centre", field="name")
+        duplicate = session.scalar(
+            select(Hospital).where(func.lower(Hospital.name) == clean_name.lower())
+        )
+        if duplicate:
+            raise DomainError("HOSPITAL_ALREADY_SELECTED", "Aquest centre ja està afegit")
+        manual_id = f"manual_{uuid4().hex}"
+        hospital = Hospital(
+            id=uid(),
+            catalog_id=manual_id,
+            name=clean_name,
+            address=None,
+            location_known=False,
+        )
+        session.add(hospital)
+        bump_revision(session)
+        session.flush()
+        return {
+            "id": hospital.id,
+            "catalogId": hospital.catalog_id,
+            "name": hospital.name,
+            "address": "",
+            "locationKnown": False,
+        }
+    details = catalog.details(catalog_id)
+    if not details or catalog_id not in catalog.areas:
+        raise DomainError("HOSPITAL_NOT_AVAILABLE", "Aquest hospital no té una àrea disponible", field="catalogId")
+    existing = session.scalar(select(Hospital).where(Hospital.catalog_id == catalog_id))
+    if existing:
+        raise DomainError("HOSPITAL_ALREADY_SELECTED", "Aquest hospital ja està afegit")
+    hospital = Hospital(id=uid(), catalog_id=catalog_id, location_known=True)
+    session.add(hospital)
+    bump_revision(session)
+    session.flush()
+    return {
+        **{key: value for key, value in details.items() if key not in {"geometry", "id"}},
+        "id": hospital.id,
+        "catalogId": catalog_id,
+        "locationKnown": True,
+    }
+
+
+def delete_calendar_range(session: Session, start: date, end: date) -> dict[str, int]:
+    if end < start:
+        raise DomainError(
+            "INVALID_DATE_RANGE",
+            "La data final no pot ser anterior a la data inicial",
+            field="endDate",
+        )
+    current = session.scalar(select(Proposal).where(Proposal.status == "current"))
+    if not current:
+        return {"assignmentsDeleted": 0, "vacanciesDeleted": 0}
+    assignments = session.execute(
+        delete(Assignment).where(
+            Assignment.proposal_id == current.id,
+            Assignment.date >= start,
+            Assignment.date <= end,
+        )
+    ).rowcount
+    vacancies = session.execute(
+        delete(Vacancy).where(
+            Vacancy.proposal_id == current.id,
+            Vacancy.date >= start,
+            Vacancy.date <= end,
+        )
+    ).rowcount
+    absences_changed = False
+    absences = list(
+        session.scalars(
+            select(ProposalAbsence).where(
+                ProposalAbsence.proposal_id == current.id,
+                ProposalAbsence.start <= end,
+                ProposalAbsence.end >= start,
+            )
+        )
+    )
+    day_before = start - timedelta(days=1)
+    day_after = end + timedelta(days=1)
+    for absence in absences:
+        original_end = absence.end
+        if absence.start < start and absence.end > end:
+            absence.end = day_before
+            session.add(
+                ProposalAbsence(
+                    id=uid(),
+                    proposal_id=current.id,
+                    member_id=absence.member_id,
+                    category=absence.category,
+                    start=day_after,
+                    end=original_end,
+                )
+            )
+        elif absence.start < start:
+            absence.end = day_before
+        elif absence.end > end:
+            absence.start = day_after
+        else:
+            session.delete(absence)
+        absences_changed = True
+    removed_empty_proposal = False
+    session.flush()
+    remaining_content = any(
+        (
+            session.scalar(select(Assignment.id).where(Assignment.proposal_id == current.id).limit(1)),
+            session.scalar(select(Vacancy.date).where(Vacancy.proposal_id == current.id).limit(1)),
+            session.scalar(select(ProposalGuard.id).where(ProposalGuard.proposal_id == current.id).limit(1)),
+            session.scalar(select(ProposalAbsence.id).where(ProposalAbsence.proposal_id == current.id).limit(1)),
+        )
+    )
+    if not remaining_content:
+        session.delete(current)
+        removed_empty_proposal = True
+    if assignments or vacancies or absences_changed or removed_empty_proposal:
+        bump_revision(session)
+    return {
+        "assignmentsDeleted": int(assignments or 0),
+        "vacanciesDeleted": int(vacancies or 0),
+    }
+
+
+def remove_hospital(session: Session, hospital_id: str) -> None:
+    hospital = session.get(Hospital, hospital_id)
+    if not hospital:
+        raise DomainError("HOSPITAL_NOT_FOUND", "Hospital no trobat")
+    agenda = session.scalar(
+        select(Agenda).where(Agenda.hospital_catalog_id == hospital.catalog_id, Agenda.archived_at.is_(None))
+    )
+    if agenda:
+        raise DomainError(
+            "HOSPITAL_IN_USE", "No es pot eliminar un hospital amb agendes actives", details={"agendaId": agenda.id}
+        )
+    session.delete(hospital)
+    bump_revision(session)
+
+
+def _current_proposal(session: Session) -> Proposal:
+    proposal = session.scalar(select(Proposal).where(Proposal.status == "current"))
+    if not proposal:
+        raise DomainError("PROPOSAL_NOT_FOUND", "No hi ha cap proposta actual")
+    return proposal
+
+
+def _validate_member_planifiable(
+    session: Session,
+    proposal: Proposal,
+    member_id: str,
+    assignment_date: date,
+) -> Member:
+    member = session.get(Member, member_id)
+    if not member or member.archived_at or not member.is_active:
+        raise DomainError("MEMBER_NOT_PLANNABLE", "La persona no està activa", field="memberId")
+    proposal_start = proposal.start_date or date.fromisoformat(f"{proposal.start_month}-01")
+    proposal_end = proposal.end_date or month_end(proposal.end_month)
+    if assignment_date < proposal_start or assignment_date > proposal_end:
+        raise DomainError("DATE_OUTSIDE_PROPOSAL", "La data queda fora de la proposta actual", field="date")
+    week_index = (assignment_date.isocalendar().week - 1) % max(member.work_pattern_weeks, 1)
+    works = session.scalar(
+        select(MemberAvailableDay.id).where(
+            MemberAvailableDay.member_id == member_id,
+            MemberAvailableDay.week_index == week_index,
+            MemberAvailableDay.weekday == assignment_date.isoweekday(),
+        )
+    )
+    absent = session.scalar(
+        select(ProposalAbsence.id).where(
+            ProposalAbsence.proposal_id == proposal.id,
+            ProposalAbsence.member_id == member_id,
+            ProposalAbsence.start <= assignment_date,
+            ProposalAbsence.end >= assignment_date,
+        )
+    )
+    profile_absent = session.scalar(
+        select(Absence.id).where(
+            Absence.member_id == member_id,
+            Absence.start <= assignment_date,
+            Absence.end >= assignment_date,
+        )
+    )
+    holiday = session.get(Holiday, assignment_date)
+    if not works or absent or profile_absent or holiday:
+        raise DomainError("MEMBER_NOT_PLANNABLE", "La persona no és planificable en aquesta data", field="date")
+    return member
+
+
+def _validate_clinical_assignment(
+    session: Session,
+    proposal: Proposal,
+    member_id: str,
+    assignment_date: date,
+    agenda_id: str,
+    *,
+    exclude_assignment_ids: set[str] | None = None,
+) -> Agenda:
+    excluded = exclude_assignment_ids or set()
+    agenda = session.get(Agenda, agenda_id)
+    capability = session.scalar(
+        select(MemberCapability).where(
+            MemberCapability.member_id == member_id,
+            MemberCapability.agenda_id == agenda_id,
+        )
+    )
+    if not agenda or agenda.archived_at or not capability:
+        raise DomainError("ASSIGNMENT_NOT_ALLOWED", "La persona no pot fer aquesta agenda", field="agendaId")
+    member = session.get(Member, member_id)
+    if not member:
+        raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada", field="memberId")
+    week_index = (assignment_date.isocalendar().week - 1) % max(member.work_pattern_weeks, 1)
+    is_telework_day = session.scalar(
+        select(MemberTeleDay.id).where(
+            MemberTeleDay.member_id == member_id,
+            MemberTeleDay.week_index == week_index,
+            MemberTeleDay.weekday == assignment_date.isoweekday(),
+        )
+    )
+    if is_telework_day and not agenda.telematic:
+        raise DomainError(
+            "TELEWORK_AGENDA_REQUIRED",
+            "En un dia telemàtic només es pot assignar una agenda telemàtica",
+            field="agendaId",
+        )
+    siblings = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.proposal_id == proposal.id,
+                Assignment.date == assignment_date,
+                Assignment.member_id == member_id,
+                Assignment.id.not_in(excluded),
+            )
+        )
+    )
+    if any(item.kind == "management" or item.management for item in siblings):
+        raise DomainError(
+            "INVALID_DAILY_LOAD",
+            "La gestió necessita una jornada completament lliure",
+            field="agendaId",
+        )
+    sibling_agendas = [
+        sibling_agenda
+        for item in siblings
+        if item.kind == "assigned"
+        and item.agenda_id
+        and (sibling_agenda := session.get(Agenda, item.agenda_id))
+    ]
+    if any(item.id == agenda_id for item in sibling_agendas):
+        raise DomainError(
+            "DUPLICATE_DAILY_AGENDA",
+            "No es pot repetir la mateixa agenda el mateix dia",
+            field="agendaId",
+        )
+    daily_load = agenda.load_percentage + sum(item.load_percentage for item in sibling_agendas)
+    if daily_load not in {50, 100}:
+        raise DomainError(
+            "INVALID_DAILY_LOAD",
+            "La càrrega diària de la persona ha de sumar el 50% o el 100%",
+            field="agendaId",
+            details={"loadPercentage": daily_load},
+        )
+    return agenda
+
+
+def _fairness_context(session: Session) -> dict[str, Any]:
+    members = list(
+        session.scalars(
+            select(Member)
+            .where(Member.archived_at.is_(None), Member.is_active.is_(True))
+            .order_by(Member.id)
+        )
+    )
+    agendas = list(session.scalars(select(Agenda).where(Agenda.archived_at.is_(None)).order_by(Agenda.id)))
+    loads = {agenda.id: agenda.load_percentage / 100 for agenda in agendas}
+    counts = {member.id: {agenda.id: 0.0 for agenda in agendas} for member in members}
+    for item in session.scalars(select(Assignment).where(Assignment.agenda_id.is_not(None))):
+        if item.member_id in counts and item.agenda_id in loads:
+            counts[item.member_id][item.agenda_id] += loads[item.agenda_id]
+    capabilities = {
+        member.id: set(
+            session.scalars(select(MemberCapability.agenda_id).where(MemberCapability.member_id == member.id))
+        )
+        for member in members
+    }
+    return {
+        "memberIds": [member.id for member in members],
+        "agendaIds": [agenda.id for agenda in agendas],
+        "loads": loads,
+        "counts": counts,
+        "capabilities": capabilities,
+    }
+
+
+def _projected_fairness_score(
+    context: dict[str, Any],
+    changes: list[tuple[str, str | None, str | None]],
+) -> tuple[int, int]:
+    counts = {
+        member_id: dict(agenda_counts)
+        for member_id, agenda_counts in context["counts"].items()
+    }
+    loads: dict[str, float] = context["loads"]
+    for member_id, old_agenda_id, new_agenda_id in changes:
+        if member_id not in counts:
+            continue
+        if old_agenda_id in loads:
+            counts[member_id][old_agenda_id] -= loads[old_agenda_id]
+        if new_agenda_id in loads:
+            counts[member_id][new_agenda_id] += loads[new_agenda_id]
+    totals = {member_id: sum(values.values()) for member_id, values in counts.items()}
+    means: dict[str, float | None] = {}
+    for agenda_id in context["agendaIds"]:
+        comparable = [
+            member_id
+            for member_id in context["memberIds"]
+            if totals[member_id] and agenda_id in context["capabilities"][member_id]
+        ]
+        means[agenda_id] = (
+            sum(counts[member_id][agenda_id] / totals[member_id] for member_id in comparable)
+            / len(comparable)
+            if comparable
+            else None
+        )
+    personal_distances: list[float] = []
+    for member_id in context["memberIds"]:
+        if not totals[member_id]:
+            continue
+        measured = [
+            abs(counts[member_id][agenda_id] / totals[member_id] - means[agenda_id])
+            for agenda_id in context["agendaIds"]
+            if agenda_id in context["capabilities"][member_id] and means[agenda_id] is not None
+        ]
+        if measured:
+            personal_distances.append(sum(measured) / len(measured))
+    return (
+        round(max(personal_distances, default=0.0) * 10_000),
+        round(sum(personal_distances) * 10_000),
+    )
+
+
+def _fairness_result(baseline: tuple[int, int], projected: tuple[int, int]) -> dict[str, Any]:
+    worst_delta = baseline[0] - projected[0]
+    total_delta = baseline[1] - projected[1]
+    effect = "improves" if projected < baseline else "worsens" if projected > baseline else "neutral"
+    return {
+        "fairnessWorstDeltaBasisPoints": worst_delta,
+        "fairnessDeltaBasisPoints": total_delta,
+        "fairnessEffect": effect,
+    }
+
+
+def _validate_exchange(
+    session: Session,
+    source: Assignment,
+    target: Assignment,
+    *,
+    allow_fixed_source: bool = False,
+) -> tuple[Proposal, Agenda, Agenda]:
+    proposal = session.get(Proposal, source.proposal_id)
+    if (
+        not proposal
+        or proposal.status != "current"
+        or target.proposal_id != source.proposal_id
+        or target.date != source.date
+        or target.member_id == source.member_id
+    ):
+        raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquest intercanvi ja no està disponible")
+    if (
+        source.kind != "assigned"
+        or target.kind != "assigned"
+        or not source.agenda_id
+        or not target.agenda_id
+        or source.management
+        or target.management
+        or source.agenda_id == target.agenda_id
+    ):
+        raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquestes assignacions no es poden intercanviar")
+    if target.fixed:
+        raise DomainError(
+            "EXCHANGE_NOT_ALLOWED",
+            "Una assignació fixa només es pot canviar des de la persona que la té assignada",
+        )
+    if source.fixed and not allow_fixed_source:
+        raise DomainError(
+            "FIXED_ASSIGNMENT_CONFIRMATION_REQUIRED",
+            "Cal confirmar el canvi d'una assignació fixa",
+        )
+    source_agenda = session.get(Agenda, source.agenda_id)
+    target_agenda = session.get(Agenda, target.agenda_id)
+    if not source_agenda or not target_agenda or source_agenda.load_percentage != target_agenda.load_percentage:
+        raise DomainError("EXCHANGE_LOAD_MISMATCH", "Les agendes han de tenir la mateixa càrrega")
+    _validate_clinical_assignment(
+        session,
+        proposal,
+        source.member_id,
+        source.date,
+        target.agenda_id,
+        exclude_assignment_ids={source.id},
+    )
+    _validate_clinical_assignment(
+        session,
+        proposal,
+        target.member_id,
+        target.date,
+        source.agenda_id,
+        exclude_assignment_ids={target.id},
+    )
+    return proposal, source_agenda, target_agenda
+
+
+def exchange_options(
+    session: Session,
+    assignment_id: str,
+    *,
+    include_fixed: bool = False,
+) -> dict[str, Any]:
+    source = session.get(Assignment, assignment_id)
+    if not source:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    proposal = session.get(Proposal, source.proposal_id)
+    if not proposal or proposal.status != "current":
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    if source.kind != "assigned" or not source.agenda_id or source.management:
+        raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquesta activitat no es pot intercanviar")
+    if source.fixed and not include_fixed:
+        raise DomainError(
+            "FIXED_ASSIGNMENT_CONFIRMATION_REQUIRED",
+            "Cal confirmar el canvi d'una assignació fixa",
+        )
+    context = _fairness_context(session)
+    baseline = _projected_fairness_score(context, [])
+    options: list[dict[str, Any]] = []
+    targets = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.proposal_id == proposal.id,
+                Assignment.date == source.date,
+                Assignment.member_id != source.member_id,
+                Assignment.kind == "assigned",
+                Assignment.agenda_id.is_not(None),
+            )
+        )
+    )
+    for target in targets:
+        try:
+            _, source_agenda, target_agenda = _validate_exchange(
+                session,
+                source,
+                target,
+                allow_fixed_source=include_fixed,
+            )
+        except DomainError:
+            continue
+        projected = _projected_fairness_score(
+            context,
+            [
+                (source.member_id, source_agenda.id, target_agenda.id),
+                (target.member_id, target_agenda.id, source_agenda.id),
+            ],
+        )
+        target_member = session.get(Member, target.member_id)
+        options.append(
+            {
+                "targetAssignmentId": target.id,
+                "targetMemberId": target.member_id,
+                "targetMemberName": target_member.name if target_member else "—",
+                "targetAgendaId": target_agenda.id,
+                **_fairness_result(baseline, projected),
+            }
+        )
+    options.sort(
+        key=lambda item: (
+            -int(item["fairnessWorstDeltaBasisPoints"]),
+            -int(item["fairnessDeltaBasisPoints"]),
+            str(item["targetMemberName"]).casefold(),
+            str(item["targetAgendaId"]),
+        )
+    )
+    return {
+        "assignmentId": source.id,
+        "memberId": source.member_id,
+        "agendaId": source.agenda_id,
+        "date": source.date.isoformat(),
+        "sourceFixed": source.fixed,
+        "options": options,
+    }
+
+
+def exchange_assignments(
+    session: Session,
+    assignment_id: str,
+    target_assignment_id: str,
+    *,
+    confirm_fixed: bool = False,
+) -> dict[str, Any]:
+    source = session.get(Assignment, assignment_id)
+    target = session.get(Assignment, target_assignment_id)
+    if not source or not target:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    _, source_agenda, target_agenda = _validate_exchange(
+        session,
+        source,
+        target,
+        allow_fixed_source=confirm_fixed,
+    )
+    source_extra, target_extra = source.extra, target.extra
+    source.agenda_id = target_agenda.id
+    target.agenda_id = source_agenda.id
+    source.extra = target_extra
+    target.extra = source_extra
+    source.fixed = False
+    target.fixed = False
+    source.locked = True
+    target.locked = True
+    bump_revision(session)
+    return {
+        "source": {
+            "id": source.id,
+            "memberId": source.member_id,
+            "type": source.agenda_id,
+            "extra": source.extra,
+            "fixed": False,
+            "locked": True,
+        },
+        "target": {
+            "id": target.id,
+            "memberId": target.member_id,
+            "type": target.agenda_id,
+            "extra": target.extra,
+            "fixed": False,
+            "locked": True,
+        },
+    }
+
+
+def _unassigned_rows(
+    session: Session,
+    proposal: Proposal,
+    member_id: str,
+    assignment_date: date,
+) -> list[Assignment]:
+    return list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.proposal_id == proposal.id,
+                Assignment.member_id == member_id,
+                Assignment.date == assignment_date,
+            )
+        )
+    )
+
+
+def extra_assignment_options(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+) -> dict[str, Any]:
+    proposal = _current_proposal(session)
+    member = _validate_member_planifiable(session, proposal, member_id, assignment_date)
+    rows = _unassigned_rows(session, proposal, member_id, assignment_date)
+    if any(item.kind != "no_assignment" for item in rows):
+        raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
+    context = _fairness_context(session)
+    baseline = _projected_fairness_score(context, [])
+    options: list[dict[str, Any]] = []
+    agenda_ids = list(
+        session.scalars(
+            select(MemberCapability.agenda_id)
+            .join(Agenda, Agenda.id == MemberCapability.agenda_id)
+            .where(
+                MemberCapability.member_id == member_id,
+                Agenda.archived_at.is_(None),
+            )
+            .order_by(Agenda.name, Agenda.id)
+        )
+    )
+    excluded = {item.id for item in rows}
+    for agenda_id in agenda_ids:
+        try:
+            agenda = _validate_clinical_assignment(
+                session,
+                proposal,
+                member_id,
+                assignment_date,
+                agenda_id,
+                exclude_assignment_ids=excluded,
+            )
+        except DomainError:
+            continue
+        projected = _projected_fairness_score(context, [(member_id, None, agenda.id)])
+        options.append(
+            {
+                "agendaId": agenda.id,
+                **_fairness_result(baseline, projected),
+            }
+        )
+    options.sort(
+        key=lambda item: (
+            -int(item["fairnessWorstDeltaBasisPoints"]),
+            -int(item["fairnessDeltaBasisPoints"]),
+            str(item["agendaId"]),
+        )
+    )
+    return {
+        "memberId": member.id,
+        "memberName": member.name,
+        "date": assignment_date.isoformat(),
+        "options": options,
+    }
+
+
+def open_extra_assignment(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+    agenda_id: str,
+) -> dict[str, Any]:
+    proposal = _current_proposal(session)
+    _validate_member_planifiable(session, proposal, member_id, assignment_date)
+    rows = _unassigned_rows(session, proposal, member_id, assignment_date)
+    if any(item.kind != "no_assignment" for item in rows):
+        raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
+    agenda = _validate_clinical_assignment(
+        session,
+        proposal,
+        member_id,
+        assignment_date,
+        agenda_id,
+        exclude_assignment_ids={item.id for item in rows},
+    )
+    assignment = rows[0] if rows else Assignment(
+        id=uid(),
+        proposal_id=proposal.id,
+        date=assignment_date,
+        member_id=member_id,
+    )
+    for duplicate in rows[1:]:
+        session.delete(duplicate)
+    if not rows:
+        session.add(assignment)
+    assignment.agenda_id = agenda.id
+    assignment.kind = "assigned"
+    assignment.locked = True
+    assignment.fixed = False
+    assignment.extra = True
+    assignment.management = False
+    bump_revision(session)
+    return {
+        "id": assignment.id,
+        "date": assignment.date.isoformat(),
+        "memberId": assignment.member_id,
+        "type": assignment.agenda_id,
+        "locked": True,
+        "extra": True,
+    }
+
+
+def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> dict[str, Any]:
+    assignment = session.get(Assignment, assignment_id)
+    current = session.get(Proposal, assignment.proposal_id) if assignment else None
+    if not assignment or not current or current.status != "current":
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    siblings = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.proposal_id == assignment.proposal_id,
+                Assignment.date == assignment.date,
+                Assignment.member_id == assignment.member_id,
+                Assignment.id != assignment.id,
+            )
+        )
+    )
+    if agenda_id == "no_assignment":
+        for sibling in siblings:
+            session.delete(sibling)
+        assignment.agenda_id = None
+        assignment.kind = "no_assignment"
+        assignment.locked = True
+        assignment.fixed = False
+        assignment.extra = False
+        assignment.management = False
+        bump_revision(session)
+        return {
+            "id": assignment.id,
+            "date": assignment.date.isoformat(),
+            "memberId": assignment.member_id,
+            "type": "no_assignment",
+            "locked": True,
+        }
+    if agenda_id == "management":
+        member = session.get(Member, assignment.member_id)
+        if not member or member.management_quota <= 0:
+            raise DomainError(
+                "ASSIGNMENT_NOT_ALLOWED",
+                "La persona no té la gestió habilitada",
+                field="type",
+            )
+        if siblings:
+            raise DomainError(
+                "INVALID_DAILY_LOAD",
+                "La gestió necessita una jornada completament lliure",
+                field="type",
+            )
+        month_start = assignment.date.replace(day=1)
+        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        existing = session.scalar(
+            select(func.count())
+            .select_from(Assignment)
+            .where(
+                Assignment.proposal_id == assignment.proposal_id,
+                Assignment.member_id == assignment.member_id,
+                Assignment.kind == "management",
+                Assignment.date >= month_start,
+                Assignment.date < next_month,
+                Assignment.id != assignment.id,
+            )
+        )
+        if int(existing or 0) >= member.management_quota:
+            raise DomainError(
+                "MANAGEMENT_QUOTA_EXCEEDED",
+                "La persona ja té assignats tots els dies de gestió del mes",
+                field="type",
+            )
+        assignment.agenda_id = None
+        assignment.kind = "management"
+        assignment.locked = True
+        assignment.fixed = False
+        assignment.extra = False
+        assignment.management = True
+        bump_revision(session)
+        return {
+            "id": assignment.id,
+            "date": assignment.date.isoformat(),
+            "memberId": assignment.member_id,
+            "type": "management",
+            "management": True,
+            "telematic": True,
+            "locked": True,
+        }
+    agenda = session.get(Agenda, agenda_id)
+    capability = session.scalar(
+        select(MemberCapability).where(
+            MemberCapability.member_id == assignment.member_id, MemberCapability.agenda_id == agenda_id
+        )
+    )
+    if not agenda or agenda.archived_at or not capability:
+        raise DomainError("ASSIGNMENT_NOT_ALLOWED", "La persona no pot fer aquesta agenda", field="type")
+    member = session.get(Member, assignment.member_id)
+    week_count = member.work_pattern_weeks if member else 1
+    week_index = (assignment.date.isocalendar().week - 1) % week_count
+    is_telework_day = session.scalar(
+        select(MemberTeleDay.id).where(
+            MemberTeleDay.member_id == assignment.member_id,
+            MemberTeleDay.week_index == week_index,
+            MemberTeleDay.weekday == assignment.date.isoweekday(),
+        )
+    )
+    if is_telework_day and not agenda.telematic:
+        raise DomainError(
+            "TELEWORK_AGENDA_REQUIRED",
+            "En un dia telemàtic només es pot assignar una agenda telemàtica",
+            field="type",
+        )
+    sibling_agendas = [session.get(Agenda, item.agenda_id) for item in siblings if item.agenda_id]
+    if any(item and item.id == agenda_id for item in sibling_agendas):
+        raise DomainError("DUPLICATE_DAILY_AGENDA", "No es pot repetir la mateixa agenda el mateix dia", field="type")
+    daily_load = agenda.load_percentage + sum(item.load_percentage for item in sibling_agendas if item)
+    if daily_load not in {50, 100}:
+        raise DomainError(
+            "INVALID_DAILY_LOAD",
+            "La càrrega diària de la persona ha de sumar el 50% o el 100%",
+            field="type",
+            details={"loadPercentage": daily_load},
+        )
+    assignment.agenda_id = agenda_id
+    assignment.kind = "assigned"
+    assignment.locked = True
+    assignment.fixed = False
+    assignment.extra = False
+    assignment.management = False
+    bump_revision(session)
+    return {
+        "id": assignment.id,
+        "date": assignment.date.isoformat(),
+        "memberId": assignment.member_id,
+        "type": agenda_id,
+        "locked": True,
+    }
+
+
+def fairness(session: Session) -> dict[str, Any]:
+    members = list(
+        session.scalars(
+            select(Member)
+            .where(Member.archived_at.is_(None), Member.is_active.is_(True))
+            .order_by(Member.name)
+        )
+    )
+    agendas = list(session.scalars(select(Agenda).where(Agenda.archived_at.is_(None)).order_by(Agenda.name)))
+    counts = {member.id: {agenda.id: 0.0 for agenda in agendas} for member in members}
+    agenda_load = {agenda.id: agenda.load_percentage / 100 for agenda in agendas}
+    statement = select(Assignment).join(Proposal).where(Assignment.agenda_id.is_not(None))
+    for item in session.scalars(statement):
+        if item.member_id in counts and item.agenda_id in counts[item.member_id]:
+            counts[item.member_id][item.agenda_id] += agenda_load[item.agenda_id]
+    management_counts = {
+        member.id: int(
+            session.scalar(
+                select(func.count())
+                .select_from(Assignment)
+                .join(Proposal)
+                .where(
+                    Assignment.member_id == member.id,
+                    Assignment.kind == "management",
+                )
+            )
+            or 0
+        )
+        for member in members
+    }
+    tele_ids = {item.id for item in agendas if item.telematic}
+    totals = {member.id: sum(counts[member.id].values()) for member in members}
+    capabilities = {
+        member.id: set(
+            session.scalars(select(MemberCapability.agenda_id).where(MemberCapability.member_id == member.id))
+        )
+        for member in members
+    }
+    means: dict[str, float | None] = {}
+    for agenda in agendas:
+        comparable = [
+            member for member in members if totals[member.id] and agenda.id in capabilities[member.id]
+        ]
+        means[agenda.id] = (
+            sum(counts[member.id][agenda.id] / totals[member.id] for member in comparable) / len(comparable)
+            if comparable
+            else None
+        )
+    people: list[dict[str, Any]] = []
+    for member in members:
+        total = totals[member.id]
+        management = management_counts[member.id]
+        activity_total = total + management
+        tele = (
+            sum(value for agenda_id, value in counts[member.id].items() if agenda_id in tele_ids)
+            + management
+        )
+        percentages: dict[str, float | None] = {
+            agenda.id: counts[member.id][agenda.id] / total if total else None for agenda in agendas
+        }
+        activity_counts = {**counts[member.id], "management": management}
+        activity_percentages = {
+            activity_id: value / activity_total if activity_total else None
+            for activity_id, value in activity_counts.items()
+        }
+        deviations: dict[str, float | None] = {}
+        for agenda in agendas:
+            percentage = percentages[agenda.id]
+            mean = means[agenda.id]
+            deviations[agenda.id] = (
+                percentage - mean
+                if percentage is not None and mean is not None and agenda.id in capabilities[member.id]
+                else None
+            )
+        measured = [abs(value) for value in deviations.values() if value is not None]
+        people.append(
+            {
+                "memberId": member.id,
+                "agendaCounts": counts[member.id],
+                "agendaPercentages": percentages,
+                "deviations": deviations,
+                "averageDistanceBasisPoints": round(sum(measured) / len(measured) * 10_000) if measured else None,
+                "total": total,
+                "activityCounts": activity_counts,
+                "activityPercentages": activity_percentages,
+                "activityTotal": activity_total,
+                "managementDays": management,
+                "managementQuota": member.management_quota,
+                "teleworkPercent": round(tele * 100 / activity_total) if activity_total else 0,
+            }
+        )
+    active: list[int] = [int(item["teleworkPercent"]) for item in people if item["activityTotal"]]
+    return {
+        "agendaMeanBasisPoints": {
+            agenda_id: round(value * 10_000) if value is not None else None for agenda_id, value in means.items()
+        },
+        "people": people,
+        "teamTeleworkPercent": round(sum(active) / len(active)) if active else 0,
+    }

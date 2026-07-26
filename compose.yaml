@@ -1,0 +1,30 @@
+services:
+  pinendar:
+    build:
+      context: .
+      target: runtime
+    init: true
+    ports:
+      - "4173:4173"
+    environment:
+      PINENDAR_SESSION_SECRET: ${PINENDAR_SESSION_SECRET:?Define PINENDAR_SESSION_SECRET en .env}
+      PINENDAR_SECURE_COOKIES: "true"
+      PINENDAR_ACCOUNT_RETENTION_MONTHS: "6"
+      PINENDAR_SCHEDULER_TIME_LIMIT_SECONDS: "120"
+      PINENDAR_SCHEDULER_WORKERS: "1"
+    volumes:
+      - pinendar-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4173/health/ready', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  pinendar-data:

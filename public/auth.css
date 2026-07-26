@@ -1,0 +1,32 @@
+.auth-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.auth-links button {
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.auth-links button:hover {
+  color: var(--ink);
+}
+
+.recovery-code {
+  display: block;
+  margin: 22px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .22);
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
