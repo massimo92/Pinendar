@@ -1,5 +1,5 @@
 import { api, waitForGeneration } from './api.js?v=7';
-import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=2';
+import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, compactActivityMeta, compactHospitalName, historicalActivityCounts, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=4';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate } from './calendar-utils.mjs?v=2';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=5';
@@ -64,6 +64,10 @@ const ES_TEXT = {
   'Afegeix ♥ o 👎 per indicar preferències. Sense reacció significa indiferent.': 'Añade ♥ o 👎 para indicar preferencias. Sin reacción significa indiferente.', 'Agrada': 'Le gusta', 'Desagrada': 'Le disgusta', 'Afegeix reacció': 'Añadir reacción', 'Treu la reacció': 'Quitar la reacción',
   'Perfil general': 'Perfil general', 'Regles fixes': 'Reglas fijas', 'Afegeix regla': 'Añadir regla', 'Encara no hi ha regles fixes.': 'Todavía no hay reglas fijas.',
   'Reserva una agenda recurrente per dia de la setmana.': 'Reserva una agenda recurrente por día de la semana.',
+  'Defineix què ha de fer o no pot fer cada dia de la setmana.': 'Define qué debe hacer o no puede hacer cada día de la semana.',
+  'Ha de fer': 'Debe hacer', 'No pot fer': 'No puede hacer', 'Una de': 'Una de', 'Cap de les seleccionades': 'Ninguna de las seleccionadas',
+  'Cada regla ha de contenir almenys una agenda': 'Cada regla debe contener al menos una agenda', 'Només hi pot haver una regla per dia': 'Sólo puede haber una regla por día', 'Ja hi ha una regla per a cada dia disponible': 'Ya hay una regla para cada día disponible',
+  'Hi ha més garanties personals que places disponibles': 'Hay más garantías personales que plazas disponibles',
   'Desa membre': 'Guardar miembro', 'Cancel·la': 'Cancelar', 'Categoria': 'Categoría', 'Data d’inici': 'Fecha de inicio', 'Data final': 'Fecha final',
   'Explicació': 'Explicación', 'Desa absència': 'Guardar ausencia', 'Nova agenda': 'Nueva agenda', 'Edita agenda': 'Editar agenda', 'Hospital': 'Hospital', 'Torn': 'Turno', 'Matí': 'Mañana', 'Tarda': 'Tarde',
   'Selecciona un hospital': 'Selecciona un hospital', 'Telemàtic': 'Telemático', 'Cobertura ordinària': 'Cobertura ordinaria', 'Places necessàries per dia': 'Plazas necesarias por día',
@@ -248,6 +252,21 @@ function positionEnhancedSelect(wrapper) {
   menu.classList.add('open'); menu.style.visibility = 'hidden'; menu.style.width = `${width}px`; menu.style.maxHeight = '320px';
   const desiredHeight = Math.min(menu.scrollHeight, 320); const below = window.innerHeight - rect.bottom - margin; const above = rect.top - margin;
   const opensAbove = below < desiredHeight && above > below; const available = Math.max(opensAbove ? above - gap : below - gap, 96);
+  menu.style.left = `${left}px`; menu.style.maxHeight = `${Math.min(desiredHeight, available)}px`;
+  if (opensAbove) { menu.style.top = 'auto'; menu.style.bottom = `${window.innerHeight - rect.top + gap}px`; }
+  else { menu.style.top = `${rect.bottom + gap}px`; menu.style.bottom = 'auto'; }
+  menu.style.visibility = '';
+}
+
+function positionFixedRuleAgendaPicker(picker) {
+  const summary = $('summary', picker); const menu = $('.fixed-rule-agenda-menu', picker);
+  if (!summary || !menu || !picker.open) return;
+  const rect = summary.getBoundingClientRect(); const margin = 8; const gap = 6;
+  const width = Math.min(Math.max(rect.width, 320), window.innerWidth - margin * 2);
+  const left = Math.min(Math.max(rect.left, margin), window.innerWidth - width - margin);
+  menu.style.visibility = 'hidden'; menu.style.width = `${width}px`; menu.style.maxHeight = '420px';
+  const desiredHeight = Math.min(menu.scrollHeight, 420); const below = window.innerHeight - rect.bottom - margin; const above = rect.top - margin;
+  const opensAbove = below < desiredHeight && above > below; const available = Math.max(opensAbove ? above - gap : below - gap, 120);
   menu.style.left = `${left}px`; menu.style.maxHeight = `${Math.min(desiredHeight, available)}px`;
   if (opensAbove) { menu.style.top = 'auto'; menu.style.bottom = `${window.innerHeight - rect.top + gap}px`; }
   else { menu.style.top = `${rect.bottom + gap}px`; menu.style.bottom = 'auto'; }
@@ -713,7 +732,7 @@ function typeChecks(name, selected, preferences = {}) {
 function memberCard(member) {
   const weeks = member.workPattern?.weeks?.length ? member.workPattern.weeks : [member.availableDays];
   const availability = Math.round(weeks.reduce((total, week) => total + new Set(Array.isArray(week) ? week : week.workingDays).size, 0) / (weeks.length * DAYS.length) * 100);
-  return `<article class="member-card ${member.active ? '' : 'inactive'}" style="--member-color:${member.color}"><div class="member-avatar">${esc(member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join(''))}</div><div class="member-main"><div class="member-identity"><span class="member-name">${esc(member.name)}</span><span class="member-email">${esc(member.email)}</span>${member.active ? '' : '<span class="member-status">Inactiu</span>'}</div><div class="member-detail">${availability}% disponible</div><div class="rules">${member.managementQuota ? `<span class="rule">gestió ${member.managementQuota}/mes</span>` : ''}${member.fixedRules.map((rule) => `<span class="rule">${DAYS_SHORT[rule.weekday - 1]} · ${esc(agenda(rule.type).name)}</span>`).join('')}</div></div><div class="row-actions"><button class="button ghost small" data-edit-member="${member.id}">Edita</button><button class="button danger small" data-delete-member="${member.id}">Elimina</button></div></article>`;
+  return `<article class="member-card ${member.active ? '' : 'inactive'}" style="--member-color:${member.color}"><div class="member-avatar">${esc(member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join(''))}</div><div class="member-main"><div class="member-identity"><span class="member-name">${esc(member.name)}</span><span class="member-email">${esc(member.email)}</span>${member.active ? '' : '<span class="member-status">Inactiu</span>'}</div><div class="member-detail">${availability}% disponible</div><div class="rules">${member.managementQuota ? `<span class="rule">gestió ${member.managementQuota}/mes</span>` : ''}${member.fixedRules.map((rule) => `<span class="rule">${DAYS_SHORT[rule.weekday - 1]} · ${esc(fixedRuleSummary(rule))}</span>`).join('')}</div></div><div class="row-actions"><button class="button ghost small" data-edit-member="${member.id}">Edita</button><button class="button danger small" data-delete-member="${member.id}">Elimina</button></div></article>`;
 }
 function teamPage() {
   return `${header('Equip', `${activeTeam().length} membres actius`, `<button class="button" data-action="open-member">Afegeix membre</button>`)}
@@ -941,7 +960,7 @@ function guidePage() {
     g('La persona ha d’estar activa, treballar aquell dia i no estar de vacances ni de postguàrdia.', 'La persona debe estar activa, trabajar ese día y no estar de vacaciones ni de postguardia.'),
     g('Només pot cobrir agendes habilitades al seu perfil.', 'Sólo puede cubrir agendas habilitadas en su perfil.'),
     g('En un dia telemàtic només pot rebre activitat telemàtica.', 'En un día telemático sólo puede recibir actividad telemática.'),
-    g('Les regles fixes es respecten mentre la persona estigui disponible.', 'Las reglas fijas se respetan mientras la persona esté disponible.'),
+    g('Les regles fixes poden exigir totes les agendes, una alternativa o prohibir agendes mentre la persona estigui disponible.', 'Las reglas fijas pueden exigir todas las agendas, una alternativa o prohibir agendas mientras la persona esté disponible.'),
     g('No se supera la càrrega diària: una agenda completa o dues agendes parcials diferents.', 'No se supera la carga diaria: una agenda completa o dos agendas parciales diferentes.'),
   ];
   const preparation = [
@@ -1144,12 +1163,112 @@ function fixedRuleAgendaIds(allowed, weekdayValue) {
       || item?.recurrences?.some((rule) => Number(rule.weekday) === Number(weekdayValue));
   });
 }
-function defaultFixedRule(allowed, available) { for (const weekdayValue of available) { const agendas = fixedRuleAgendaIds(allowed, weekdayValue); if (agendas.length) return { weekday: weekdayValue, type: agendas[0] }; } return { weekday: available[0] || 1, type: '' }; }
-function sharedRulePeers(memberId, agendaId, weekdayValue) { return state.team.filter((member) => member.id !== memberId && member.fixedRules.some((rule) => rule.type === agendaId && Number(rule.weekday) === Number(weekdayValue))); }
-function fixedRuleSharedIndicator(memberId, agendaId, weekdayValue) { const peers = sharedRulePeers(memberId, agendaId, weekdayValue); if (!peers.length) return ''; const prefix = state.language === 'es' ? 'También se aplica a' : 'També s’aplica a'; const label = `${prefix} ${peers.map((peer) => peer.name).join(', ')}`; return `<span class="fixed-rule-shared-indicator" role="img" tabindex="0" aria-label="${esc(label)}"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7" cy="7" r="2.5"/><circle cx="14" cy="8" r="2"/><path d="M2.8 16c.3-3 1.8-4.6 4.3-4.6s4 1.6 4.3 4.6M11.4 12.2c.7-.7 1.6-1 2.7-1 2 0 3.1 1.3 3.3 3.7"/></svg><span class="fixed-rule-shared-tooltip" aria-hidden="true">${esc(label)}</span></span>`; }
-function fixedRuleRow(rule, allowed, available) { const value = rule || defaultFixedRule(allowed, available); const agendaIds = fixedRuleAgendaIds(allowed, value.weekday); return `<div class="fixed-rule-row"><select name="rule-weekday">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${value.weekday === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-type" ${agendaIds.length ? '' : 'disabled'}>${typeOptions(value.type, agendaIds)}</select><span class="fixed-rule-shared-slot">${fixedRuleSharedIndicator(modal?.id, value.type, value.weekday)}</span><button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div>`; }
-function refreshFixedRulePeers(row) { const agendaId = $('[name="rule-type"]', row).value; const weekdayValue = Number($('[name="rule-weekday"]', row).value); $('.fixed-rule-shared-slot', row).innerHTML = fixedRuleSharedIndicator(modal?.id, agendaId, weekdayValue); }
-function refreshFixedRuleType(row, formElement) { const selected = $('[name="rule-type"]', row); const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value); const agendaIds = fixedRuleAgendaIds(allowed, Number($('[name="rule-weekday"]', row).value)); const previous = selected.value; selected.innerHTML = typeOptions(previous, agendaIds); selected.disabled = !agendaIds.length; rebuildEnhancedSelect(selected); refreshFixedRulePeers(row); }
+function defaultFixedRule(allowed, available) {
+  return { weekday: available[0] || 1, requiredMode: 'all', requiredAgendaIds: [], forbiddenAgendaIds: [] };
+}
+function fixedRuleAgendaChecks(ids, selected) {
+  const selectedIds = new Set(selected);
+  return agendaGroups(ids.map((id) => agenda(id))).map((group) => `<section class="fixed-rule-agenda-group"><b>${esc(group.hospital.name)}</b><div>${group.items.map((item) => `<label class="fixed-rule-agenda"><input type="checkbox" name="rule-agenda" value="${esc(item.id)}" ${selectedIds.has(item.id) ? 'checked' : ''}><span>${esc(item.name)}</span><small>${esc(shiftLabel(item.shift))} · ${loadLabel(item.loadPercentage)}</small></label>`).join('')}</div></section>`).join('');
+}
+function fixedRuleAction(rule) {
+  if (rule?.forbiddenAgendaIds?.length && !rule?.requiredAgendaIds?.length) return 'none';
+  return rule?.requiredMode === 'one' ? 'one' : 'all';
+}
+function fixedRuleSelectedIds(rule, action) {
+  return action === 'none' ? (rule?.forbiddenAgendaIds || []) : (rule?.requiredAgendaIds || []);
+}
+function fixedRulePickerSummary(row) {
+  const count = $$('[name="rule-agenda"]:checked', row).length;
+  const summary = $('[data-rule-selection]', row);
+  if (summary) summary.textContent = count ? `${count} agenda${count === 1 ? '' : 's'}` : 'Selecciona agendas';
+}
+function refreshFixedRulePicker(row, formElement) {
+  const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value);
+  const action = $('[name="rule-action"]', row)?.value || 'all';
+  const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
+  $('[data-rule-agendas]', row).innerHTML = fixedRuleAgendaChecks(allowed, selected);
+  fixedRulePickerSummary(row);
+}
+function fixedRulePotentialPeers(weekday, selected, action) {
+  if (action === 'none' || !selected.length) return [];
+  const selectedIds = new Set(selected);
+  return state.team
+    .filter((member) => member.active && member.id !== modal?.id)
+    .flatMap((member) => member.fixedRules
+      .filter((rule) => Number(rule.weekday) === Number(weekday))
+      .map((rule) => ({
+        member,
+        rule,
+        agendaIds: (rule.requiredAgendaIds || []).filter((id) => selectedIds.has(id)),
+      })))
+    .filter((item) => item.agendaIds.length);
+}
+function fixedRuleWarningMarkup(weekday, selected, action) {
+  const peers = fixedRulePotentialPeers(weekday, selected, action);
+  if (!peers.length) return '';
+  const spanish = state.language === 'es';
+  const day = localize(DAYS[Number(weekday) - 1]);
+  const title = spanish ? 'Otras reglas pueden competir por las mismas plazas' : 'Altres regles poden competir per les mateixes places';
+  const rows = peers.map(({ member, rule, agendaIds }) => {
+    const mode = rule.requiredMode === 'one'
+      ? (spanish ? 'Debe hacer una de' : 'Ha de fer una de')
+      : (spanish ? 'Debe hacer todas' : 'Ha de fer totes');
+    const ruleAgendas = (rule.requiredAgendaIds || []).map((id) => agenda(id)?.name || id).join(', ');
+    const overlap = agendaIds.map((id) => agenda(id)?.name || id).join(', ');
+    const detail = `${day} · ${mode}: ${ruleAgendas}`;
+    const coincidence = spanish ? `Coincide en: ${overlap}` : `Coincideix en: ${overlap}`;
+    return `<li><strong>${esc(member.name)}</strong><span>${esc(detail)}</span><small>${esc(coincidence)}</small></li>`;
+  }).join('');
+  const footer = spanish
+    ? 'Puedes guardar igualmente. Es sólo un aviso; el planificador decidirá según las plazas disponibles.'
+    : 'Pots desar igualment. És només un avís; el planificador decidirà segons les places disponibles.';
+  const label = spanish ? `Posible conflicto con ${peers.map((item) => item.member.name).join(', ')}` : `Possible conflicte amb ${peers.map((item) => item.member.name).join(', ')}`;
+  return `<div class="fixed-rule-warning" data-rule-warning><button type="button" class="fixed-rule-warning-trigger" data-action="toggle-fixed-rule-warning" aria-label="${esc(label)}" aria-expanded="false">!</button><div class="fixed-rule-warning-popover" role="tooltip"><b>${esc(title)}</b><ul>${rows}</ul><p>${esc(footer)}</p></div></div>`;
+}
+
+function positionFixedRuleWarning(warning) {
+  const trigger = $('.fixed-rule-warning-trigger', warning); const popover = $('.fixed-rule-warning-popover', warning);
+  if (!trigger || !popover || !warning.classList.contains('open')) return;
+  const rect = trigger.getBoundingClientRect(); const margin = 8; const gap = 7;
+  const width = Math.min(440, window.innerWidth - margin * 2);
+  const left = Math.min(Math.max(rect.right - width, margin), window.innerWidth - width - margin);
+  popover.style.visibility = 'hidden'; popover.style.width = `${width}px`; popover.style.maxHeight = '360px';
+  const desiredHeight = Math.min(popover.scrollHeight, 360); const below = window.innerHeight - rect.bottom - margin; const above = rect.top - margin;
+  const opensAbove = below < desiredHeight && above > below; const available = Math.max(opensAbove ? above - gap : below - gap, 100);
+  popover.style.left = `${left}px`; popover.style.maxHeight = `${Math.min(desiredHeight, available)}px`;
+  if (opensAbove) { popover.style.top = 'auto'; popover.style.bottom = `${window.innerHeight - rect.top + gap}px`; }
+  else { popover.style.top = `${rect.bottom + gap}px`; popover.style.bottom = 'auto'; }
+  popover.style.visibility = '';
+}
+function refreshFixedRuleWarning(row) {
+  const weekday = Number($('[name="rule-weekday"]', row).value);
+  const action = $('[name="rule-action"]', row).value;
+  const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
+  const existing = $('[data-rule-warning]', row);
+  const markup = fixedRuleWarningMarkup(weekday, selected, action);
+  if (existing) existing.remove();
+  if (markup) $('[data-action="remove-fixed-rule"]', row).insertAdjacentHTML('beforebegin', markup);
+  const picker = $('.fixed-rule-agenda-picker', row);
+  if (picker?.open) requestAnimationFrame(() => positionFixedRuleAgendaPicker(picker));
+}
+
+function fixedRuleRow(rule, allowed, available) {
+  const value = rule || defaultFixedRule(allowed, available);
+  const action = fixedRuleAction(value);
+  const selected = fixedRuleSelectedIds(value, action);
+  return `<article class="fixed-rule-row"><div class="fixed-rule-fields"><select name="rule-weekday" aria-label="Dia de la setmana">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${Number(value.weekday) === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-action" aria-label="Tipus de regla"><option value="all" ${action === 'all' ? 'selected' : ''}>Ha de fer totes</option><option value="one" ${action === 'one' ? 'selected' : ''}>Ha de fer una</option><option value="none" ${action === 'none' ? 'selected' : ''}>No pot fer</option></select><details class="fixed-rule-agenda-picker"><summary><span data-rule-selection>${selected.length ? `${selected.length} agenda${selected.length === 1 ? '' : 's'}` : 'Selecciona agendas'}</span><b>⌄</b></summary><div class="fixed-rule-agenda-menu" data-rule-agendas>${fixedRuleAgendaChecks(allowed, selected)}</div></details>${fixedRuleWarningMarkup(value.weekday, selected, action)}<button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div></article>`;
+}
+function refreshFixedRuleType(row, formElement) {
+  refreshFixedRulePicker(row, formElement);
+  refreshFixedRuleWarning(row);
+}
+function fixedRuleSummary(rule) {
+  const required = (rule.requiredAgendaIds || []).map((id) => agenda(id)?.name || id);
+  const forbidden = (rule.forbiddenAgendaIds || []).map((id) => agenda(id)?.name || id);
+  const requiredLabel = required.length ? `${rule.requiredMode === 'one' && required.length > 1 ? 'una de ' : ''}${required.join(rule.requiredMode === 'one' ? ' / ' : ' + ')}` : '';
+  const forbiddenLabel = forbidden.length ? `no ${forbidden.join(' / ')}` : '';
+  return [requiredLabel, forbiddenLabel].filter(Boolean).join(' · ');
+}
 function generationCondition(item, kind) {
   const member = person(item.memberId); const label = kind === 'guard' ? `Guàrdia · ${item.date}` : `Vacances · ${item.start}${item.end !== item.start ? ` — ${item.end}` : ''}`;
   return `<div class="generation-condition"><span><b>${esc(member?.name || '—')}</b><small>${esc(label)}</small></span><button type="button" class="icon-button danger-icon" data-remove-generation-condition="${kind}:${item.id}" aria-label="Elimina condicionant">×</button></div>`;
@@ -1287,20 +1406,16 @@ function memberModal(member = null) {
   const tab = modal.tab || 'general';
   const pattern = memberWorkPattern(member);
   const available = [...new Set(pattern.weeks.flatMap((week) => week.workingDays))].sort((a, b) => a - b);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large" role="dialog" aria-modal="true" aria-labelledby="member-modal-title"><div class="modal-head"><div><div class="card-kicker">EQUIP</div><h2 id="member-modal-title">${member?.id ? 'Edita membre' : 'Nou membre'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="member-form"><input type="hidden" name="id" value="${member?.id || ''}" /><div class="modal-tabs"><button type="button" class="${tab === 'general' ? 'active' : ''}" data-modal-tab="general">Perfil general</button><button type="button" class="${tab === 'vacations' ? 'active' : ''}" data-modal-tab="vacations">Vacances <span class="tab-count">${modal.vacationDates?.length || 0}</span></button><button type="button" class="${tab === 'rules' ? 'active' : ''}" data-modal-tab="rules">Regles fixes <span class="tab-count">${member?.fixedRules.length || 0}</span></button></div><div class="modal-body"><div class="tab-panel ${tab === 'general' ? 'active' : ''}" data-tab-panel="general">${colorControl('member', memberColor)}<label class="member-active-toggle"><input type="checkbox" name="active" ${member?.active === false ? '' : 'checked'} /><span></span><div><b>Perfil actiu</b><small>Les persones inactives no entren en la generació del calendari.</small></div></label><div class="form-grid"><div class="field"><label>Nom i cognoms</label><input name="name" required value="${esc(member?.name || '')}" placeholder="Ex. Núria Prat" /></div><div class="field"><label>Correu</label><input name="email" type="email" required value="${esc(member?.email || '')}" placeholder="nom@hospital.cat" /></div></div>${workPatternFields(member)}<div class="field agenda-capabilities"><span class="label">Agendes habilitades</span><small class="agenda-preference-help">Afegeix ♥ o 👎 per indicar preferències. Sense reacció significa indiferent.</small>${typeChecks('allowed', allowed, member?.agendaPreferences || {})}</div><div class="field management-settings"><label class="check management-check"><input type="checkbox" name="managementEnabled" ${managementEnabled ? 'checked' : ''}>Fa gestió</label><div class="management-quota ${managementEnabled ? '' : 'is-hidden'}" data-management-quota><label>Dies de gestió al mes</label><input name="quota" type="number" min="1" max="5" value="${managementEnabled ? member?.managementQuota || 1 : 1}" ${managementEnabled ? 'required' : 'disabled'} /></div></div></div><div class="tab-panel ${tab === 'vacations' ? 'active' : ''}" data-tab-panel="vacations">${memberVacationCalendar()}</div><div class="tab-panel ${tab === 'rules' ? 'active' : ''}" data-tab-panel="rules"><div class="panel-intro"><div><h3>Regles fixes</h3><p class="muted">Reserva una agenda recurrente per dia de la setmana.</p></div><button type="button" class="button secondary small" data-action="add-fixed-rule">Afegeix regla</button></div><div id="fixed-rules">${(member?.fixedRules || []).map((rule) => fixedRuleRow(rule, allowed, available)).join('') || '<div class="empty-rules muted">Encara no hi ha regles fixes.</div>'}</div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal">Desa membre</button></div></form></section>${modal.saved ? '<div class="save-confirmation" role="status"><span>✓</span><div><b>Perfil desat</b><small>Els canvis s’han guardat correctament.</small></div></div>' : ''}</div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large" role="dialog" aria-modal="true" aria-labelledby="member-modal-title"><div class="modal-head"><div><div class="card-kicker">EQUIP</div><h2 id="member-modal-title">${member?.id ? 'Edita membre' : 'Nou membre'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="member-form"><input type="hidden" name="id" value="${member?.id || ''}" /><div class="modal-tabs"><button type="button" class="${tab === 'general' ? 'active' : ''}" data-modal-tab="general">Perfil general</button><button type="button" class="${tab === 'vacations' ? 'active' : ''}" data-modal-tab="vacations">Vacances <span class="tab-count">${modal.vacationDates?.length || 0}</span></button><button type="button" class="${tab === 'rules' ? 'active' : ''}" data-modal-tab="rules">Regles fixes <span class="tab-count">${member?.fixedRules.length || 0}</span></button></div><div class="modal-body"><div class="tab-panel ${tab === 'general' ? 'active' : ''}" data-tab-panel="general">${colorControl('member', memberColor)}<label class="member-active-toggle"><input type="checkbox" name="active" ${member?.active === false ? '' : 'checked'} /><span></span><div><b>Perfil actiu</b><small>Les persones inactives no entren en la generació del calendari.</small></div></label><div class="form-grid"><div class="field"><label>Nom i cognoms</label><input name="name" required value="${esc(member?.name || '')}" placeholder="Ex. Núria Prat" /></div><div class="field"><label>Correu</label><input name="email" type="email" required value="${esc(member?.email || '')}" placeholder="nom@hospital.cat" /></div></div>${workPatternFields(member)}<div class="field agenda-capabilities"><span class="label">Agendes habilitades</span><small class="agenda-preference-help">Afegeix ♥ o 👎 per indicar preferències. Sense reacció significa indiferent.</small>${typeChecks('allowed', allowed, member?.agendaPreferences || {})}</div><div class="field management-settings"><label class="check management-check"><input type="checkbox" name="managementEnabled" ${managementEnabled ? 'checked' : ''}>Fa gestió</label><div class="management-quota ${managementEnabled ? '' : 'is-hidden'}" data-management-quota><label>Dies de gestió al mes</label><input name="quota" type="number" min="1" max="5" value="${managementEnabled ? member?.managementQuota || 1 : 1}" ${managementEnabled ? 'required' : 'disabled'} /></div></div></div><div class="tab-panel ${tab === 'vacations' ? 'active' : ''}" data-tab-panel="vacations">${memberVacationCalendar()}</div><div class="tab-panel ${tab === 'rules' ? 'active' : ''}" data-tab-panel="rules"><div class="panel-intro"><div><h3>Regles fixes</h3><p class="muted">Defineix què ha de fer o no pot fer cada dia de la setmana.</p></div><button type="button" class="button secondary small" data-action="add-fixed-rule">Afegeix regla</button></div><div id="fixed-rules">${(member?.fixedRules || []).map((rule) => fixedRuleRow(rule, allowed, available)).join('') || '<div class="empty-rules muted">Encara no hi ha regles fixes.</div>'}</div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal">Desa membre</button></div></form></section>${modal.saved ? '<div class="save-confirmation" role="status"><span>✓</span><div><b>Perfil desat</b><small>Els canvis s’han guardat correctament.</small></div></div>' : ''}</div>`;
 }
 function deleteMemberModal(member) { return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker danger-text">ACCIÓ DEFINITIVA</div><h2>Elimina ${esc(member.name)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="delete-member-form"><input type="hidden" name="id" value="${member.id}" /><div class="modal-body"><div class="deletion-warning"><b>Es conservarà l’històric</b><span>S’eliminaran les assignacions i els condicionants des d’avui, juntament amb les regles, guàrdies i absències futures associades.</span></div><p>Aquesta persona deixarà d’aparèixer a l’equip. Escriu <b>ELIMINAR</b> per confirmar.</p><div class="field"><label>Paraula de confirmació</label><input name="confirmation" autocomplete="off" required placeholder="ELIMINAR" /></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button danger" data-action="submit-modal">Elimina definitivament</button></div></form></section></div>`; }
-function agendaRelatedRules(agendaId) { return state.team.flatMap((member) => member.fixedRules.filter((rule) => rule.type === agendaId).map((rule) => ({ ...rule, member }))).sort((left, right) => Number(left.weekday) - Number(right.weekday) || left.member.name.localeCompare(right.member.name)); }
+function agendaRelatedRules(agendaId) { return state.team.flatMap((member) => member.fixedRules.filter((rule) => [...(rule.requiredAgendaIds || []), ...(rule.forbiddenAgendaIds || [])].includes(agendaId)).map((rule) => ({ ...rule, member }))).sort((left, right) => Number(left.weekday) - Number(right.weekday) || left.member.name.localeCompare(right.member.name)); }
 function agendaRulesInfoButton(item) { if (!item?.id) return ''; const count = agendaRelatedRules(item.id).length; return `<div class="agenda-related-rules"><button type="button" class="button ghost small" data-action="open-agenda-rules-info" data-agenda-id="${item.id}">ⓘ Regles relacionades · ${count}</button><small>Consulta les persones i dies vinculats a aquesta agenda.</small></div>`; }
 function agendaModal(item = null) { const agendaColor = modal?.color || item?.color || ''; const shift = item?.shift || 'morning'; const load = item?.loadPercentage || 100; return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-agenda" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">AGENDES</div><h2>${item ? 'Edita agenda' : 'Nova agenda'}</h2></div><button class="icon-button" data-action="close-modal">×</button></div><form id="agenda-form"><input type="hidden" name="id" value="${item?.id || ''}" /><div class="modal-body">${colorControl('agenda', agendaColor)}<div class="form-grid agenda-main-fields"><div class="field"><label>Nom</label><input name="name" required value="${esc(item?.name || '')}" placeholder="Ex. Ecografia avançada" /></div><div class="field"><label>Prioritat</label><select name="priority" required>${priorityOptions(item?.priority ?? 3)}</select></div></div><div class="form-grid agenda-location-fields"><div class="field"><label>Hospital</label><select name="hospitalId" required><option value="" disabled ${item?.hospitalId ? '' : 'selected'}>Selecciona un hospital</option>${hospitalOptions(item?.hospitalId)}</select>${state.hospitals.length ? '' : '<small class="form-error">Afegeix primer un hospital des de Configuració.</small>'}</div><div class="field"><span class="label">Torn</span><div class="shift-switch"><label><input type="radio" name="shift" value="morning" required ${shift === 'morning' ? 'checked' : ''}><span>Matí</span></label><label><input type="radio" name="shift" value="afternoon" required ${shift === 'afternoon' ? 'checked' : ''}><span>Tarda</span></label></div></div></div><div class="form-grid agenda-mode-fields"><div class="field"><span class="label">Càrrega</span><div class="shift-switch"><label><input type="radio" name="loadPercentage" value="100" required ${load === 100 ? 'checked' : ''}><span>Completa</span></label><label><input type="radio" name="loadPercentage" value="50" required ${load === 50 ? 'checked' : ''}><span>Parcial</span></label></div></div><div class="field check-field"><label class="check"><input name="telematic" type="checkbox" ${item?.telematic ? 'checked' : ''}>Telemàtic</label></div></div>${coverageFields(item)}${agendaRecurrencesFields(item)}${agendaRulesInfoButton(item)}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal">Desa agenda</button></div></form></section></div>`; }
 function deleteAgendaModal(item) { return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker danger-text">ELIMINA AGENDA</div><h2>${esc(item.name)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="deletion-warning"><b>Es conservaran els esdeveniments passats</b><span>S’eliminaran les assignacions d’aquesta agenda des d’avui. També desapareixerà dels perfils, la cobertura i les regles fixes.</span></div></div><div class="modal-actions"><button class="button ghost" data-action="close-modal">Cancel·la</button><button class="button danger" data-action="confirm-delete-agenda" data-agenda-id="${item.id}">Elimina agenda</button></div></section></div>`; }
 function agendaRuleConflictModal() {
   const item = agenda(modal.id); const rules = modal.rules || [];
   return `<div class="modal-backdrop"><section class="modal-card modal-small" role="alertdialog" aria-modal="true" aria-labelledby="agenda-conflict-title"><div class="modal-head"><div><div class="card-kicker danger-text">REGLES AFECTADES</div><h2 id="agenda-conflict-title">No es pot aplicar directament</h2></div></div><div class="modal-body"><div class="deletion-warning"><b>La nova cobertura de ${esc(item?.name || modal.payload.name)} elimina aquestes regles fixes</b><span>Revisa-les abans de continuar. Si confirmes, l’agenda i les regles s’actualitzaran alhora.</span></div><div class="conflicting-rule-list">${rules.map((rule) => `<div><span><b>${esc(rule.memberName)}</b><small>${DAYS[Number(rule.weekday) - 1]} · ${esc(rule.agendaName)}</small></span><strong>${DAYS_SHORT[Number(rule.weekday) - 1]}</strong></div>`).join('')}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="return-agenda-edit">Torna a editar</button><button type="button" class="button danger" data-action="confirm-agenda-rule-deletion">Esborra regles i desa</button></div></section></div>`;
-}
-function sharedFixedRuleConfirmModal() {
-  const rules = modal.rules || [];
-  return `<div class="modal-backdrop"><section class="modal-card modal-small" role="alertdialog" aria-modal="true" aria-labelledby="shared-rule-title"><div class="modal-head"><div><div class="card-kicker danger-text">REGLA COMPARTIDA</div><h2 id="shared-rule-title">Aquesta regla ja existeix</h2></div></div><div class="modal-body"><div class="deletion-warning neutral"><b>La nova regla es compartirà</b><span>Quan hi hagi menys places que persones disponibles, el planificador escollirà entre elles.</span></div><div class="conflicting-rule-list">${rules.map((rule) => `<div><span><b>${esc(rule.agendaName)} · ${DAYS[Number(rule.weekday) - 1]}</b><small>També s’aplica a ${rule.people.map((person) => esc(person.name)).join(', ')}</small></span><strong>${DAYS_SHORT[Number(rule.weekday) - 1]}</strong></div>`).join('')}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="return-member-edit">Torna a editar</button><button type="button" class="button" data-action="confirm-shared-fixed-rules">Confirma i desa</button></div></section></div>`;
 }
 function agendaRulesInfoModal() {
   const item = agenda(modal.id); const rules = agendaRelatedRules(modal.id);
@@ -1377,7 +1492,6 @@ function modalView() {
   if (modal.type === 'agenda') { const item = modal.id ? agenda(modal.id) : null; return agendaModal(modal.pending ? { ...item, ...modal.pending, id: modal.id } : item); }
   if (modal.type === 'delete-agenda') return deleteAgendaModal(agenda(modal.id));
   if (modal.type === 'agenda-rule-conflict') return agendaRuleConflictModal();
-  if (modal.type === 'shared-fixed-rule-confirm') return sharedFixedRuleConfirmModal();
   if (modal.type === 'agenda-rules-info') return agendaRulesInfoModal();
   if (modal.type === 'manual-hospital') return manualHospitalModal();
   if (modal.type === 'clear-calendar') return clearCalendarModal();
@@ -1636,9 +1750,10 @@ document.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   closeEnhancedSelects();
+  $$('.fixed-rule-warning.open').forEach((warning) => { warning.classList.remove('open'); $('.fixed-rule-warning-trigger', warning)?.setAttribute('aria-expanded', 'false'); });
 });
-window.addEventListener('resize', () => $$('.enhanced-select.open').forEach(positionEnhancedSelect));
-document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.enhanced-select-menu')) $$('.enhanced-select.open').forEach(positionEnhancedSelect); }, true);
+window.addEventListener('resize', () => { $$('.enhanced-select.open').forEach(positionEnhancedSelect); $$('.fixed-rule-agenda-picker[open]').forEach(positionFixedRuleAgendaPicker); $$('.fixed-rule-warning.open').forEach(positionFixedRuleWarning); });
+document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.enhanced-select-menu')) $$('.enhanced-select.open').forEach(positionEnhancedSelect); if (!event.target.closest?.('.fixed-rule-agenda-menu')) $$('.fixed-rule-agenda-picker[open]').forEach(positionFixedRuleAgendaPicker); if (!event.target.closest?.('.fixed-rule-warning-popover')) $$('.fixed-rule-warning.open').forEach(positionFixedRuleWarning); }, true);
 
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
@@ -1748,7 +1863,8 @@ document.addEventListener('click', async (event) => {
   if (action === 'set-agenda-preference') { const reaction = button.closest('[data-agenda-reaction]'); const value = Number(button.dataset.preference); const trigger = $('[data-action="toggle-agenda-reaction"]', reaction); $('[data-agenda-preference]', reaction).value = String(value); reaction.classList.toggle('liked', value === 1); reaction.classList.toggle('disliked', value === -1); reaction.classList.remove('open'); $('span', trigger).textContent = value === 1 ? '♥' : value === -1 ? '👎' : '+'; trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-label', `${value === 1 ? 'Agrada' : value === -1 ? 'Desagrada' : 'Afegeix reacció'}: ${reaction.dataset.agendaName}`); return; }
   if (action === 'add-work-pattern-week') { const formElement = button.closest('form'); const container = $('[data-work-pattern-weeks]', formElement); const rows = $$('[data-work-pattern-week]', container); if (rows.length >= 5) return toast('El patró pot tenir un màxim de 5 setmanes'); const previous = rows.at(-1); const week = { workingDays: $$('[data-pattern-working]:checked', previous).map((item) => Number(item.value)), teleDays: $$('[data-pattern-tele]:checked', previous).map((item) => Number(item.value)) }; container.insertAdjacentHTML('beforeend', workPatternWeekRow(week, rows.length, true)); renumberWorkPatternWeeks(formElement); refreshPatternDependentFields(formElement); return; }
   if (action === 'remove-work-pattern-week') { const formElement = button.closest('form'); button.closest('[data-work-pattern-week]').remove(); renumberWorkPatternWeeks(formElement); if ($$('[data-work-pattern-week]', formElement).length === 1) { $('[name="work-pattern-mode"][value="same"]', formElement).checked = true; syncWorkPatternMode(formElement); } else refreshPatternDependentFields(formElement); return; }
-  if (action === 'add-fixed-rule') { const formElement = button.closest('form'); const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value); const available = workPatternAvailableDays(formElement); const rule = defaultFixedRule(allowed, available); if (!rule.type) return toast('Habilita una agenda amb cobertura en un dia disponible'); const container = $('#fixed-rules'); $('.empty-rules', container)?.remove(); container.insertAdjacentHTML('beforeend', fixedRuleRow(rule, allowed, available)); enhanceSelects(container); $$('.tab-count').at(-1).textContent = $$('.fixed-rule-row').length; return; }
+  if (action === 'toggle-fixed-rule-warning') { const warning = button.closest('.fixed-rule-warning'); const opening = !warning.classList.contains('open'); $$('.fixed-rule-warning.open').forEach((item) => { item.classList.remove('open'); $('.fixed-rule-warning-trigger', item)?.setAttribute('aria-expanded', 'false'); }); if (opening) $$('.fixed-rule-agenda-picker[open]').forEach((picker) => { picker.open = false; }); warning.classList.toggle('open', opening); button.setAttribute('aria-expanded', String(opening)); if (opening) requestAnimationFrame(() => positionFixedRuleWarning(warning)); return; }
+  if (action === 'add-fixed-rule') { const formElement = button.closest('form'); const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value); const available = workPatternAvailableDays(formElement); const used = new Set($$('[name="rule-weekday"]', formElement).map((item) => Number(item.value))); const remaining = available.filter((day) => !used.has(day)); if (!remaining.length) return toast('Ja hi ha una regla per a cada dia disponible'); if (!allowed.length) return toast('Habilita almenys una agenda'); const rule = defaultFixedRule(allowed, remaining); const container = $('#fixed-rules'); $('.empty-rules', container)?.remove(); container.insertAdjacentHTML('beforeend', fixedRuleRow(rule, allowed, available)); enhanceSelects(container); $$('.tab-count').at(-1).textContent = $$('.fixed-rule-row').length; return; }
   if (action === 'remove-fixed-rule') { button.closest('.fixed-rule-row').remove(); if (!$$('.fixed-rule-row').length) $('#fixed-rules').innerHTML = '<div class="empty-rules muted">Encara no hi ha regles fixes.</div>'; $$('.tab-count').at(-1).textContent = $$('.fixed-rule-row').length; return; }
   if (action === 'add-agenda-recurrence') { const container = $('#agenda-recurrences'); $('.empty-agenda-recurrences', container)?.remove(); container.insertAdjacentHTML('beforeend', agendaRecurrenceRow()); enhanceSelects(container); return; }
   if (action === 'remove-agenda-recurrence') { button.closest('.agenda-recurrence-row').remove(); if (!$$('.agenda-recurrence-row').length) $('#agenda-recurrences').innerHTML = '<div class="empty-agenda-recurrences muted">Encara no hi ha regles especials.</div>'; return; }
@@ -1756,8 +1872,6 @@ document.addEventListener('click', async (event) => {
   if (action === 'return-agenda-edit') { const { id, payload } = modal; modal = { type: 'agenda', id, color: agenda(id)?.color, pending: payload }; render(); return; }
   if (action === 'confirm-agenda-rule-deletion') { const { id, payload } = modal; try { await api.saveAgenda(id, { ...payload, deleteConflictingFixedRules: true }); modal = null; await reloadState('Agenda desada i regles eliminades'); render(); } catch (error) { showError(error); } return; }
   if (action === 'open-agenda-rules-info') { const { id, payload } = agendaFormPayload(button.closest('form')); modal = { type: 'agenda-rules-info', id, payload }; render(); return; }
-  if (action === 'return-member-edit') { const { id, payload, tab, vacationMonth } = modal; modal = { type: 'member', id, color: id ? person(id)?.color : '', pending: payload, tab, vacationMonth, vacationDates: [...payload.vacationDates] }; render(); return; }
-  if (action === 'confirm-shared-fixed-rules') { const { id, payload, tab, vacationMonth } = modal; try { const saved = await api.saveMember(id, { ...payload, confirmSharedFixedRules: true }); await finishMemberSave(saved, tab, vacationMonth); } catch (error) { showError(error); } return; }
   if (action === 'calendar-today') calendarDate = dateKey(new Date());
   if (action === 'calendar-prev') calendarDate = calendarView === 'day' ? addDays(calendarDate, -1) : calendarView === 'week' ? addDays(calendarDate, -7) : addMonths(calendarDate, -1);
   if (action === 'calendar-next') calendarDate = calendarView === 'day' ? addDays(calendarDate, 1) : calendarView === 'week' ? addDays(calendarDate, 7) : addMonths(calendarDate, 1);
@@ -1784,8 +1898,8 @@ document.addEventListener('change', async (event) => {
   if (modal?.type === 'member' && event.target.name === 'allowed') { const formElement = event.target.closest('form'); $$('.fixed-rule-row', formElement).forEach((row) => refreshFixedRuleType(row, formElement)); return; }
   if (modal?.type === 'member' && event.target.name === 'work-pattern-mode') { syncWorkPatternMode(event.target.closest('form')); return; }
   if (modal?.type === 'member' && (event.target.dataset.patternWorking !== undefined || event.target.dataset.patternTele !== undefined)) { refreshPatternDependentFields(event.target.closest('form')); return; }
-  if (modal?.type === 'member' && event.target.name === 'rule-weekday') { const row = event.target.closest('.fixed-rule-row'); refreshFixedRuleType(row, event.target.closest('form')); return; }
-  if (modal?.type === 'member' && event.target.name === 'rule-type') { refreshFixedRulePeers(event.target.closest('.fixed-rule-row')); return; }
+  if (modal?.type === 'member' && ['rule-weekday', 'rule-action'].includes(event.target.name)) { const row = event.target.closest('.fixed-rule-row'); refreshFixedRuleType(row, event.target.closest('form')); return; }
+  if (modal?.type === 'member' && event.target.name === 'rule-agenda') { const row = event.target.closest('.fixed-rule-row'); fixedRulePickerSummary(row); refreshFixedRuleWarning(row); return; }
   if (modal?.type === 'generation' && event.target.name === 'periodMode') { modal.periodMode = event.target.value; modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
   if (modal?.type === 'generation' && event.target.dataset.monthPart) { const picker = event.target.closest('[data-month-picker]'); const month = $('[data-month-part="month"]', picker).value; const year = $('[data-month-part="year"]', picker).value; const next = `${year}-${month}`; modal.startMonth = next; modal.endMonth = next; modal.startDate = `${next}-01`; modal.endDate = endOfMonth(modal.startDate); modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
   if (modal?.type === 'generation' && ['generationStartDate', 'generationEndDate'].includes(event.target.name)) { const formElement = event.target.closest('form'); const startInput = $('[name="generationStartDate"]', formElement); const endInput = $('[name="generationEndDate"]', formElement); if (event.target.name === 'generationStartDate') { modal.startDate = event.target.value; if (modal.startDate && (!modal.endDate || modal.endDate < modal.startDate || monthKey(modal.endDate) !== monthKey(modal.startDate))) modal.endDate = endOfMonth(modal.startDate); } else modal.endDate = event.target.value; if (modal.startDate) modal.startMonth = monthKey(modal.startDate); if (modal.endDate) modal.endMonth = monthKey(modal.endDate); modal.replaceExisting = false; modal.overlap = null; if (endInput) { endInput.value = modal.endDate || ''; endInput.min = modal.startDate || ''; endInput.max = modal.startDate ? endOfMonth(modal.startDate) : ''; } modal.conflict = generationPeriodError(); startInput?.setCustomValidity(modal.conflict); endInput?.setCustomValidity(modal.conflict); const warning = $('.generation-warning', formElement); if (warning) { warning.hidden = !modal.conflict; const message = $('span', warning); if (message) message.textContent = modal.conflict; } return; }
@@ -1796,8 +1910,9 @@ document.addEventListener('change', async (event) => {
 document.addEventListener('click', (event) => {
   $$('.language-picker[open]').forEach((picker) => { if (!picker.contains(event.target)) picker.removeAttribute('open'); });
   if (!event.target.closest('[data-agenda-reaction]')) $$('[data-agenda-reaction].open').forEach((item) => { item.classList.remove('open'); $('[data-action="toggle-agenda-reaction"]', item)?.setAttribute('aria-expanded', 'false'); });
+  if (!event.target.closest('.fixed-rule-warning')) $$('.fixed-rule-warning.open').forEach((warning) => { warning.classList.remove('open'); $('.fixed-rule-warning-trigger', warning)?.setAttribute('aria-expanded', 'false'); });
 });
-document.addEventListener('toggle', (event) => { const kind = event.target.dataset?.filterKind; if (kind) openCalendarFilter = event.target.open ? kind : ''; }, true);
+document.addEventListener('toggle', (event) => { const kind = event.target.dataset?.filterKind; if (kind) openCalendarFilter = event.target.open ? kind : ''; if (event.target.classList?.contains('fixed-rule-agenda-picker') && event.target.open) { $$('.fixed-rule-agenda-picker[open]').filter((picker) => picker !== event.target).forEach((picker) => { picker.open = false; }); positionFixedRuleAgendaPicker(event.target); } }, true);
 async function handleForm(formElement) {
   const form = new FormData(formElement); const formId = formElement.getAttribute('id');
   try {
@@ -1844,14 +1959,19 @@ async function handleForm(formElement) {
     }
     if (formId === 'member-form') {
       const allowedTypes = form.getAll('allowed'); const managementEnabled = form.get('managementEnabled') === 'on'; const managementQuota = managementEnabled ? Number(form.get('quota')) : 0;
-      const fixedRules = $$('.fixed-rule-row', formElement).map((row) => ({ weekday: Number($('[name="rule-weekday"]', row).value), type: $('[name="rule-type"]', row).value }));
+      const fixedRules = $$('.fixed-rule-row', formElement).map((row) => {
+        const action = $('[name="rule-action"]', row).value;
+        const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
+        return { weekday: Number($('[name="rule-weekday"]', row).value), requiredMode: action === 'one' ? 'one' : 'all', requiredAgendaIds: action === 'none' ? [] : selected, forbiddenAgendaIds: action === 'none' ? selected : [] };
+      });
+      if (fixedRules.some((rule) => !rule.requiredAgendaIds.length && !rule.forbiddenAgendaIds.length)) return toast('Cada regla ha de contenir almenys una agenda');
+      if (new Set(fixedRules.map((rule) => rule.weekday)).size !== fixedRules.length) return toast('Només hi pot haver una regla per dia');
       const workPattern = collectWorkPattern(formElement); const availableDays = [...new Set(workPattern.weeks.flatMap((week) => week.workingDays))].sort((a, b) => a - b); if (!availableDays.length) return toast('Selecciona almenys un dia de treball');
       const teleDays = [...new Set(workPattern.weeks.flatMap((week) => week.teleDays))].sort((a, b) => a - b);
       const agendaPreferences = Object.fromEntries($$('[data-agenda-preference]', formElement).map((input) => [input.closest('.agenda-capability').querySelector('[name="allowed"]').value, Number(input.value)]).filter(([, value]) => value));
       const id = form.get('id'); const payload = { name: form.get('name').trim(), email: form.get('email').trim(), active: form.get('active') === 'on', vacationDates: modal.vacationDates, workPattern, availableDays, teleDays, allowedTypes, agendaPreferences, ...(managementEnabled ? { managementQuota } : {}), fixedRules };
       const tab = modal.tab; const vacationMonth = modal.vacationMonth;
-      try { const saved = await api.saveMember(id, payload); await finishMemberSave(saved, tab, vacationMonth); }
-      catch (error) { if (error.code === 'SHARED_FIXED_RULE_CONFIRMATION_REQUIRED' && error.details?.rules?.length) { modal = { type: 'shared-fixed-rule-confirm', id, payload, rules: error.details.rules, tab, vacationMonth }; render(); return; } throw error; }
+      const saved = await api.saveMember(id, payload); await finishMemberSave(saved, tab, vacationMonth);
       return;
     }
     if (formId === 'delete-member-form') {

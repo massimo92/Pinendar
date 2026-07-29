@@ -66,9 +66,10 @@ def problem(
     conditions: dict[str, list[dict[str, Any]]] | None = None,
     historical: dict[str, dict[str, int]] | None = None,
     optimization_mode: str = "fairness",
+    schema_version: int = 2,
 ) -> ScheduleProblem:
     return ScheduleProblem(
-        schema_version=2,
+        schema_version=schema_version,
         planning_revision=1,
         start_month="2027-01",
         end_month="2027-01",
@@ -411,6 +412,164 @@ def test_absent_shared_rule_holder_is_replaced_normally() -> None:
     assert {item["memberId"] for item in monday} == {"jorge", "substitute"}
     assert next(item for item in monday if item["memberId"] == "jorge")["fixed"] is True
     assert not next(item for item in monday if item["memberId"] == "substitute").get("fixed")
+
+
+def test_personal_fixed_all_requires_every_partial_agenda() -> None:
+    agendas = [
+        agenda("partial-a", priority=1, load_percentage=50),
+        agenda("partial-b", priority=1, load_percentage=50),
+        agenda("other", priority=1),
+    ]
+    team = [
+        member(
+            "member-1",
+            ["partial-a", "partial-b", "other"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": ["partial-a", "partial-b"],
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        )
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"partial-a": 1, "partial-b": 1, "other": 1}},
+            schema_version=7,
+        )
+    )
+
+    monday = [item for item in result.assignments if item["date"] == "2027-01-04"]
+    assert result.outcome == "solution"
+    assert {item["type"] for item in monday} == {"partial-a", "partial-b"}
+    assert all(item["fixed"] for item in monday)
+
+
+def test_personal_fixed_one_requires_exactly_one_alternative() -> None:
+    agendas = [agenda("a", priority=1), agenda("b", priority=1)]
+    team = [
+        member(
+            "member-1",
+            ["a", "b"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "one",
+                    "requiredAgendaIds": ["a", "b"],
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        )
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"a": 1, "b": 1}},
+            schema_version=7,
+        )
+    )
+
+    monday = [item for item in result.assignments if item["date"] == "2027-01-04"]
+    assert result.outcome == "solution"
+    assert len(monday) == 1
+    assert monday[0]["type"] in {"a", "b"}
+    assert monday[0]["fixed"] is True
+
+
+def test_personal_fixed_one_distributes_shared_alternatives_between_members() -> None:
+    agendas = [agenda("a", priority=1), agenda("b", priority=1)]
+    fixed = [
+        {
+            "weekday": 1,
+            "requiredMode": "one",
+            "requiredAgendaIds": ["a", "b"],
+            "forbiddenAgendaIds": [],
+        }
+    ]
+    team = [
+        member("member-1", ["a", "b"], fixed=fixed),
+        member("member-2", ["a", "b"], fixed=fixed),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"a": 1, "b": 1}},
+            schema_version=7,
+        )
+    )
+
+    monday = [item for item in result.assignments if item["date"] == "2027-01-04"]
+    assert result.outcome == "solution"
+    assert {item["type"] for item in monday} == {"a", "b"}
+    assert {item["memberId"] for item in monday} == {"member-1", "member-2"}
+    assert all(item["fixed"] for item in monday)
+
+
+def test_personal_fixed_forbidden_prevents_assignment() -> None:
+    agendas = [agenda("allowed", priority=2), agenda("forbidden", priority=1)]
+    team = [
+        member(
+            "member-1",
+            ["allowed", "forbidden"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": [],
+                    "forbiddenAgendaIds": ["forbidden"],
+                }
+            ],
+        )
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"allowed": 1, "forbidden": 1}},
+            schema_version=7,
+        )
+    )
+
+    monday = [item for item in result.assignments if item["date"] == "2027-01-04"]
+    assert result.outcome == "solution"
+    assert [item["type"] for item in monday] == ["allowed"]
+
+
+def test_personal_fixed_rules_conflict_when_two_members_claim_one_slot() -> None:
+    agendas = [agenda("fixed", priority=1)]
+    fixed = [
+        {
+            "weekday": 1,
+            "requiredMode": "all",
+            "requiredAgendaIds": ["fixed"],
+            "forbiddenAgendaIds": [],
+        }
+    ]
+    team = [
+        member("member-1", ["fixed"], fixed=fixed),
+        member("member-2", ["fixed"], fixed=fixed),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"fixed": 1}},
+            schema_version=7,
+        )
+    )
+
+    assert result.outcome == "infeasible"
 
 
 def test_absent_fixed_member_leaves_demand_for_another_capable_member() -> None:
@@ -809,6 +968,46 @@ def test_result_validation_rejects_broken_fixed_rule() -> None:
     }
 
     assert any("fixed rule mismatch" in error for error in validate_solution(schedule_problem, invalid))
+
+
+def test_result_validation_rejects_broken_personal_fixed_conditions() -> None:
+    agendas = [agenda("required", priority=1), agenda("forbidden", priority=1)]
+    team = [
+        member(
+            "member-1",
+            ["required", "forbidden"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": ["required"],
+                    "forbiddenAgendaIds": ["forbidden"],
+                }
+            ],
+        )
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"required": 1, "forbidden": 1}},
+        schema_version=7,
+    )
+    invalid = {
+        "outcome": "solution",
+        "assignments": [
+            {"date": value, "memberId": "member-1", "type": "forbidden"}
+            for value in ["2027-01-04", "2027-01-11", "2027-01-18", "2027-01-25"]
+        ],
+        "vacancies": [
+            {"date": value, "type": "required"}
+            for value in ["2027-01-04", "2027-01-11", "2027-01-18", "2027-01-25"]
+        ],
+    }
+
+    errors = validate_solution(schedule_problem, invalid)
+
+    assert any("personal fixed all mismatch" in error for error in errors)
+    assert any("personal fixed forbidden mismatch" in error for error in errors)
 
 
 def test_result_validation_accepts_an_exceptional_partial_person_day() -> None:

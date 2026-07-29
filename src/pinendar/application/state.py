@@ -21,6 +21,7 @@ from pinendar.infrastructure.models import (
     Assignment,
     Coverage,
     FixedRule,
+    FixedRuleAgenda,
     GenerationJob,
     Guard,
     GuardTransfer,
@@ -229,7 +230,22 @@ def seed_initial_state(session: Session, catalog: HospitalCatalog) -> None:
         for agenda_id in agenda_ids:
             session.add(MemberCapability(member_id=member_id, agenda_id=agenda_id))
         if index == 0:
-            session.add(FixedRule(id=uid(), member_id=member_id, weekday=5, agenda_id="reso"))
+            rule_id = uid()
+            session.add(
+                FixedRule(
+                    id=rule_id,
+                    member_id=member_id,
+                    weekday=5,
+                    required_mode="all",
+                )
+            )
+            session.add(
+                FixedRuleAgenda(
+                    rule_id=rule_id,
+                    agenda_id="reso",
+                    effect="required",
+                )
+            )
 
 
 def import_legacy_state(session: Session, state: dict[str, Any], catalog: HospitalCatalog) -> None:
@@ -360,12 +376,20 @@ def import_legacy_state(session: Session, state: dict[str, Any], catalog: Hospit
                 )
         for rule in item.get("fixedRules", []):
             if rule.get("type") in seen_agendas:
+                rule_id = rule.get("id") or uid()
                 session.add(
                     FixedRule(
-                        id=rule.get("id") or uid(),
+                        id=rule_id,
                         member_id=item["id"],
-                        agenda_id=rule["type"],
                         weekday=int(rule["weekday"]),
+                        required_mode="all",
+                    )
+                )
+                session.add(
+                    FixedRuleAgenda(
+                        rule_id=rule_id,
+                        agenda_id=rule["type"],
+                        effect="required",
                     )
                 )
         for absence in item.get("absences", []):
@@ -528,6 +552,16 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
         )
     }
     rules = list(session.scalars(select(FixedRule).where(FixedRule.member_id == member.id).order_by(FixedRule.weekday)))
+    rule_agendas: dict[str, dict[str, list[str]]] = {
+        rule.id: {"required": [], "forbidden": []} for rule in rules
+    }
+    if rule_agendas:
+        for item in session.scalars(
+            select(FixedRuleAgenda)
+            .where(FixedRuleAgenda.rule_id.in_(rule_agendas))
+            .order_by(FixedRuleAgenda.id)
+        ):
+            rule_agendas[item.rule_id][item.effect].append(item.agenda_id)
     absences = list(session.scalars(select(Absence).where(Absence.member_id == member.id).order_by(Absence.start)))
     vacation_dates: list[str] = []
     for absence in absences:
@@ -556,7 +590,16 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
         "allowedTypes": capabilities,
         "agendaPreferences": preferences,
         "managementQuota": member.management_quota,
-        "fixedRules": [{"id": item.id, "weekday": item.weekday, "type": item.agenda_id} for item in rules],
+        "fixedRules": [
+            {
+                "id": item.id,
+                "weekday": item.weekday,
+                "requiredMode": item.required_mode,
+                "requiredAgendaIds": rule_agendas[item.id]["required"],
+                "forbiddenAgendaIds": rule_agendas[item.id]["forbidden"],
+            }
+            for item in rules
+        ],
         "vacations": [
             {
                 "id": item.id,

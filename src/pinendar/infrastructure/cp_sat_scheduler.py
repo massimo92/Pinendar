@@ -18,7 +18,7 @@ from pinendar.domain.scheduler import (
     period_dates,
 )
 
-MODEL_VERSION = "15"
+MODEL_VERSION = "16"
 PERCENT_SCALE = 10_000
 ORTOOLS_VERSION = version("ortools")
 
@@ -139,7 +139,7 @@ def _daily_demand(
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5, 6}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -322,12 +322,12 @@ class CpSatScheduler:
                 ]
                 model.add(sum(covered) + variable == amount)
 
-        rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
+        legacy_rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
+        personal_rules: list[tuple[str, dict[str, Any]]] = []
         for member_id, member in members.items():
             weekdays: set[int] = set()
             for rule in member.get("fixedRules", []):
                 weekday = int(rule["weekday"])
-                agenda_id = rule["type"]
                 if weekday in weekdays:
                     return _failure(
                         "FIXED_RULE_CONFLICT",
@@ -335,18 +335,25 @@ class CpSatScheduler:
                         details={"memberId": member_id, "weekday": weekday},
                     )
                 weekdays.add(weekday)
-                if agenda_id not in agendas or agenda_id not in member.get("allowedTypes", []):
+                if "requiredAgendaIds" in rule or "forbiddenAgendaIds" in rule:
+                    personal_rules.append((member_id, rule))
+                    continue
+                agenda_id = rule["type"]
+                if (
+                    agenda_id not in agendas
+                    or agenda_id not in member.get("allowedTypes", [])
+                ):
                     return _failure(
                         "FIXED_RULE_CONFLICT",
                         "Una regla fixa utilitza una agenda no habilitada",
                         details={"memberId": member_id, "agendaId": agenda_id},
                     )
-                rule_groups[(weekday, agenda_id)].append(member_id)
+                legacy_rule_groups[(weekday, agenda_id)].append(member_id)
 
         shared_rule_tiebreak: list[Any] = []
         for value, member_ids in planifiable.items():
             planifiable_ids = set(member_ids)
-            for (weekday, agenda_id), configured_members in rule_groups.items():
+            for (weekday, agenda_id), configured_members in legacy_rule_groups.items():
                 if weekday != value.isoweekday():
                     continue
                 candidates = [member_id for member_id in configured_members if member_id in planifiable_ids]
@@ -368,7 +375,83 @@ class CpSatScheduler:
                         shared_rule_tiebreak.append(fixed_variable * randomizer.randint(1, 1_000_000))
                 model.add(sum(fixed_variables) == required)
 
-        for (weekday, agenda_id), configured_members in rule_groups.items():
+        for member_id, rule in personal_rules:
+            weekday = int(rule["weekday"])
+            required_mode = rule.get("requiredMode", "all")
+            required_ids = list(dict.fromkeys(rule.get("requiredAgendaIds", [])))
+            forbidden_ids = list(dict.fromkeys(rule.get("forbiddenAgendaIds", [])))
+            referenced_ids = set(required_ids) | set(forbidden_ids)
+            if (
+                required_mode not in {"all", "one"}
+                or not referenced_ids
+                or set(required_ids) & set(forbidden_ids)
+                or not referenced_ids.issubset(agendas)
+                or not referenced_ids.issubset(
+                    set(members[member_id].get("allowedTypes", []))
+                )
+            ):
+                return _failure(
+                    "FIXED_RULE_CONFLICT",
+                    "Una regla fixa conté condicions no vàlides",
+                    details={"memberId": member_id, "weekday": weekday},
+                )
+            for value in planning_dates:
+                if (
+                    value.isoweekday() != weekday
+                    or member_id not in planifiable.get(value, [])
+                ):
+                    continue
+                active_required = [
+                    agenda_id
+                    for agenda_id in required_ids
+                    if demand.get((value, agenda_id), 0) > 0
+                ]
+                required_variables = [
+                    assignments[(member_id, value, agenda_id)]
+                    for agenda_id in active_required
+                    if (member_id, value, agenda_id) in assignments
+                ]
+                if required_mode == "all" and len(required_variables) != len(
+                    active_required
+                ):
+                    return _failure(
+                        "FIXED_RULE_CONFLICT",
+                        "Una agenda obligatòria no és compatible amb la persona",
+                        details={
+                            "memberId": member_id,
+                            "date": value.isoformat(),
+                        },
+                    )
+                if required_mode == "all":
+                    for agenda_id, variable in zip(
+                        active_required, required_variables, strict=True
+                    ):
+                        model.add(variable == 1)
+                        fixed_assignments.add((member_id, value, agenda_id))
+                elif required_variables:
+                    model.add(sum(required_variables) == 1)
+                    fixed_assignments.update(
+                        (member_id, value, agenda_id)
+                        for agenda_id in active_required
+                        if (member_id, value, agenda_id) in assignments
+                    )
+                elif active_required:
+                    return _failure(
+                        "FIXED_RULE_CONFLICT",
+                        "Cap alternativa obligatòria és compatible amb la persona",
+                        details={
+                            "memberId": member_id,
+                            "date": value.isoformat(),
+                        },
+                    )
+                for agenda_id in forbidden_ids:
+                    forbidden_variable = assignments.get(
+                        (member_id, value, agenda_id)
+                    )
+                    if forbidden_variable is not None:
+                        model.add(forbidden_variable == 0)
+
+        for (weekday, agenda_id), configured_members in legacy_rule_groups.items():
             recurring_weekdays = {
                 int(recurrence["weekday"])
                 for recurrence in agendas[agenda_id].get("recurrences", [])
@@ -964,7 +1047,8 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
     for (member_id, month), count in management_counts.items():
         if count > int(members.get(member_id, {}).get("managementQuota", 0)):
             errors.append(f"management quota exceeded {member_id}:{month}")
-    rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
+    legacy_rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
+    personal_rules: list[tuple[str, dict[str, Any]]] = []
     for member_id, member in members.items():
         weekdays: set[int] = set()
         for rule in member.get("fixedRules", []):
@@ -972,10 +1056,13 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
             if weekday in weekdays:
                 errors.append(f"multiple fixed rules {member_id}:{weekday}")
             weekdays.add(weekday)
-            rule_groups[(weekday, rule["type"])].append(member_id)
+            if "requiredAgendaIds" in rule or "forbiddenAgendaIds" in rule:
+                personal_rules.append((member_id, rule))
+            else:
+                legacy_rule_groups[(weekday, rule["type"])].append(member_id)
     for value in planning_dates:
         key = value.isoformat()
-        for (weekday, agenda_id), configured_members in rule_groups.items():
+        for (weekday, agenda_id), configured_members in legacy_rule_groups.items():
             if weekday != value.isoweekday():
                 continue
             candidates = [
@@ -987,6 +1074,44 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
             actual = sum(agenda_id in assigned_types.get((member_id, key), set()) for member_id in candidates)
             if actual != required:
                 errors.append(f"shared fixed rule mismatch {agenda_id}:{key}:{actual}/{required}")
+        for member_id, rule in personal_rules:
+            if (
+                int(rule["weekday"]) != value.isoweekday()
+                or not _is_planifiable(members[member_id], value, problem)
+            ):
+                continue
+            required_ids = list(dict.fromkeys(rule.get("requiredAgendaIds", [])))
+            forbidden_ids = list(
+                dict.fromkeys(rule.get("forbiddenAgendaIds", []))
+            )
+            active_required = [
+                agenda_id
+                for agenda_id in required_ids
+                if demand.get((value, agenda_id), 0) > 0
+            ]
+            assigned = assigned_types.get((member_id, key), set())
+            actual_required = sum(
+                agenda_id in assigned for agenda_id in active_required
+            )
+            if (
+                rule.get("requiredMode", "all") == "all"
+                and actual_required != len(active_required)
+            ):
+                errors.append(
+                    f"personal fixed all mismatch {member_id}:{key}"
+                )
+            if (
+                rule.get("requiredMode", "all") == "one"
+                and active_required
+                and actual_required != 1
+            ):
+                errors.append(
+                    f"personal fixed one mismatch {member_id}:{key}"
+                )
+            if any(agenda_id in assigned for agenda_id in forbidden_ids):
+                errors.append(
+                    f"personal fixed forbidden mismatch {member_id}:{key}"
+                )
     vacancy_counts = Counter((item.get("date"), item.get("type")) for item in result.get("vacancies", []))
     valid_demand_keys = {(value.isoformat(), agenda_id) for value, agenda_id in demand}
     for demand_key in set(covered) | set(vacancy_counts):

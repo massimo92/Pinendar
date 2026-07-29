@@ -181,12 +181,28 @@ class MemberAgendaPreference(Base):
 
 class FixedRule(Base):
     __tablename__ = "fixed_rules"
-    __table_args__ = (UniqueConstraint("member_id", "weekday"),)
+    __table_args__ = (
+        UniqueConstraint("member_id", "weekday"),
+        CheckConstraint("required_mode IN ('all', 'one')", name="ck_fixed_rules_required_mode"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     member_id: Mapped[str] = mapped_column(ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
-    agenda_id: Mapped[str] = mapped_column(ForeignKey("agendas.id", ondelete="CASCADE"), nullable=False)
     weekday: Mapped[int] = mapped_column(Integer, nullable=False)
+    required_mode: Mapped[str] = mapped_column(String(3), default="all", nullable=False)
+
+
+class FixedRuleAgenda(Base):
+    __tablename__ = "fixed_rule_agendas"
+    __table_args__ = (
+        UniqueConstraint("rule_id", "agenda_id"),
+        CheckConstraint("effect IN ('required', 'forbidden')", name="ck_fixed_rule_agendas_effect"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[str] = mapped_column(ForeignKey("fixed_rules.id", ondelete="CASCADE"), nullable=False)
+    agenda_id: Mapped[str] = mapped_column(ForeignKey("agendas.id", ondelete="CASCADE"), nullable=False)
+    effect: Mapped[str] = mapped_column(String(9), nullable=False)
 
 
 class Absence(Base):

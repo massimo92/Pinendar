@@ -6,7 +6,7 @@ Generar automáticamente un mes de calendario, revisarlo manualmente y conservar
 
 ## Entidades
 
-- **Persona**: nombre, correo, estado activo/inactivo auditado, archivo, patrón de trabajo de una a cinco semanas numeradas y repetibles, días telemáticos por semana, agendas habilitadas, preferencias opcionales por agenda, habilitación de gestión con uno a cinco días mensuales, reglas fijas y vacaciones. La semana aplicable se obtiene del número ISO de la semana natural.
+- **Persona**: nombre, correo, estado activo/inactivo auditado, archivo, patrón de trabajo de una a cinco semanas numeradas y repetibles, días telemáticos por semana, agendas habilitadas, preferencias opcionales por agenda, habilitación de gestión con uno a cinco días mensuales, reglas fijas personales y vacaciones. La semana aplicable se obtiene del número ISO de la semana natural.
 - **Agenda**: nombre, hospital, modalidad, prioridad, cobertura semanal y reglas especiales de demanda recurrente. Son telemáticas TAC ambulatorio, resonancia y telemando.
 - **Jornada de gestión**: actividad telemática especial de jornada completa. No es una agenda, no pertenece a ningún hospital y no crea demanda ni vacantes.
 - **Guardia**: fecha y médico. Deriva automáticamente una ausencia `post-guardia` el día natural siguiente; en domingo bloquea el lunes.
@@ -35,14 +35,15 @@ La tabla es el valor inicial y puede editarse en cada agenda. Una regla especial
 5. Una persona solo puede cubrir agendas incluidas en sus capacidades.
 6. Una guardia crea una ausencia `post-guardia` el día natural siguiente. La demanda de las agendas de ese día no desaparece, aunque una regla fija apuntara a la persona ausente.
 7. Las vacaciones o una ausencia `post-guardia` impiden toda asignación durante el periodo afectado.
-8. Una regla fija persona–día–agenda es obligatoria cuando la persona está planificable. Si está ausente, la plaza sigue existiendo y debe cubrirla excepcionalmente otra persona apta.
-9. Las reglas fijas no pueden superar la demanda configurada para esa agenda y día.
-10. La demanda de una fecha es la suma de la cobertura semanal de cada agenda y sus reglas especiales recurrentes coincidentes.
-11. Cada agenda tiene una prioridad de cobertura: muy alta, alta, moderada o baja. El generador protege lexicográficamente cada nivel.
-12. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
-13. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
-14. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
-15. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas.
+8. Una regla fija personal puede exigir todas o exactamente una de varias agendas con demanda para un día semanal y puede prohibir otras. Todas sus condiciones se aplican cuando la persona está planificable; si está ausente, la demanda permanece abierta para otra persona apta.
+9. Las reglas fijas no crean demanda. Las agendas obligatorias deben disponer de cobertura ordinaria o recurrente, y las combinaciones simultáneas no pueden superar el 100% de carga.
+10. Varias garantías personales sobre la misma agenda deben satisfacerse todas; no forman un grupo compartido. La configuración rechaza los conflictos directos conocidos y el planificador detecta los que dependen del periodo.
+11. La demanda de una fecha es la suma de la cobertura semanal de cada agenda y sus reglas especiales recurrentes coincidentes.
+12. Cada agenda tiene una prioridad de cobertura: muy alta, alta, moderada o baja. El generador protege lexicográficamente cada nivel.
+13. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
+14. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
+15. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
+16. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas.
 
 Una asignación manual bloqueada se conserva como regla dura al regenerar su periodo. Si vuelve imposible el cálculo, la regeneración falla sin cambiar el calendario.
 

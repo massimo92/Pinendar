@@ -138,7 +138,8 @@ Plaza demandada que no puede cubrir ninguna persona planificable.
 _Avoid_: No asignación, ausencia
 
 **Regla fija**:
-Vínculo recurrente entre una persona, una agenda y un día semanal. Las personas planificables con el mismo vínculo ocupan tantas plazas de esa agenda como permita su demanda; las plazas restantes quedan abiertas.
+Restricción recurrente personal para un día semanal. Puede exigir todas o una de varias agendas con demanda y prohibir otras; solo se aplica cuando la persona es planificable y nunca crea demanda.
+Si varias garantías personales reclaman la misma agenda, todas deben poder cumplirse: el sistema no elige una persona silenciosamente.
 Puede sobreescribirse manualmente en un evento tras una confirmación explícita. La asignación fija nunca aparece como destino de un intercambio iniciado desde otra persona y la regla recurrente permanece intacta.
 _Avoid_: Asignación individual obligatoria, preferencia
 

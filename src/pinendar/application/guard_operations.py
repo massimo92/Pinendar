@@ -19,6 +19,7 @@ from pinendar.infrastructure.models import (
     Assignment,
     Coverage,
     FixedRule,
+    FixedRuleAgenda,
     Guard,
     GuardTransfer,
     Holiday,
@@ -453,25 +454,44 @@ def _repair_date(
             uncovered[agenda_id].Not()
         )
 
-    fixed_rules: dict[str, list[str]] = {}
+    fixed_keys: set[tuple[str, str]] = set()
     for rule in session.scalars(
         select(FixedRule).where(FixedRule.weekday == value.isoweekday())
     ):
-        fixed_rules.setdefault(rule.agenda_id, []).append(rule.member_id)
-    fixed_keys: set[tuple[str, str]] = set()
-    for agenda_id, configured in fixed_rules.items():
-        candidates = [
-            member_id
-            for member_id in configured
-            if member_id in planifiable and (member_id, agenda_id) in ordinary
-        ]
-        required = min(demand.get(agenda_id, 0), len(candidates))
-        if required:
-            model.add(
-                sum(ordinary[(member_id, agenda_id)] for member_id in candidates)
-                == required
+        if rule.member_id not in planifiable:
+            continue
+        links = list(
+            session.scalars(
+                select(FixedRuleAgenda).where(
+                    FixedRuleAgenda.rule_id == rule.id
+                )
             )
-            fixed_keys.update((member_id, agenda_id) for member_id in candidates)
+        )
+        required_variables = [
+            ordinary[(rule.member_id, link.agenda_id)]
+            for link in links
+            if link.effect == "required"
+            and demand.get(link.agenda_id, 0) > 0
+            and (rule.member_id, link.agenda_id) in ordinary
+        ]
+        if rule.required_mode == "all":
+            for variable in required_variables:
+                model.add(variable == 1)
+        elif required_variables:
+            model.add(sum(required_variables) == 1)
+        fixed_keys.update(
+            (rule.member_id, link.agenda_id)
+            for link in links
+            if link.effect == "required"
+            and demand.get(link.agenda_id, 0) > 0
+            and (rule.member_id, link.agenda_id) in ordinary
+        )
+        for link in links:
+            if (
+                link.effect == "forbidden"
+                and (rule.member_id, link.agenda_id) in ordinary
+            ):
+                model.add(ordinary[(rule.member_id, link.agenda_id)] == 0)
 
     phases: list[Any] = []
     for priority in (1,):

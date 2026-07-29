@@ -29,6 +29,7 @@ from pinendar.infrastructure.models import (
     Assignment,
     Coverage,
     FixedRule,
+    FixedRuleAgenda,
     Guard,
     Holiday,
     Hospital,
@@ -178,19 +179,9 @@ def validate_member_payload(session: Session, payload: dict[str, Any], member_id
     payload["managementQuota"] = management_quota
     if not allowed.issubset(active_agendas):
         raise DomainError("INVALID_CAPABILITY", "Hi ha una agenda no habilitada", field="allowedTypes")
-    current_rule_keys = (
-        {
-            (rule.weekday, rule.agenda_id)
-            for rule in session.scalars(select(FixedRule).where(FixedRule.member_id == member_id))
-        }
-        if member_id
-        else set()
-    )
     weekdays: set[int] = set()
-    shared_rules: list[dict[str, Any]] = []
     for rule in payload.get("fixedRules", []):
         weekday = int(rule["weekday"])
-        agenda_id = rule["type"]
         if weekday in weekdays:
             raise DomainError(
                 "DUPLICATE_FIXED_RULE_DAY",
@@ -198,65 +189,88 @@ def validate_member_payload(session: Session, payload: dict[str, Any], member_id
                 field="fixedRules",
             )
         weekdays.add(weekday)
-        if weekday not in available or agenda_id not in allowed:
+        required_mode = rule.get("requiredMode", "all")
+        required_ids = list(dict.fromkeys(rule.get("requiredAgendaIds", [])))
+        forbidden_ids = list(dict.fromkeys(rule.get("forbiddenAgendaIds", [])))
+        referenced_ids = set(required_ids) | set(forbidden_ids)
+        if (
+            required_mode not in {"all", "one"}
+            or not referenced_ids
+            or set(required_ids) & set(forbidden_ids)
+        ):
+            raise DomainError(
+                "INVALID_FIXED_RULE",
+                "La regla fixa conté condicions buides o contradictòries",
+                field="fixedRules",
+            )
+        if weekday not in available or not referenced_ids.issubset(allowed):
             raise DomainError(
                 "INVALID_FIXED_RULE", "La regla fixa utilitza una agenda o dia no habilitat", field="fixedRules"
             )
-        if not active_agendas[agenda_id].telematic and any(
-            weekday in week["teleDays"] for week in weeks
+        if not referenced_ids.issubset(active_agendas):
+            raise DomainError(
+                "INVALID_FIXED_RULE", "La regla fixa utilitza una agenda inexistent", field="fixedRules"
+            )
+        telework_day = any(weekday in week["teleDays"] for week in weeks)
+        required_telematic = [
+            active_agendas[agenda_id].telematic for agenda_id in required_ids
+        ]
+        if telework_day and required_telematic and (
+            (required_mode == "all" and not all(required_telematic))
+            or (required_mode == "one" and not any(required_telematic))
         ):
             raise DomainError(
                 "TELEWORK_AGENDA_REQUIRED",
                 "En un dia telemàtic només es pot assignar una agenda telemàtica",
                 field="fixedRules",
             )
-        coverage = (
-            session.scalar(select(Coverage.slots).where(Coverage.weekday == weekday, Coverage.agenda_id == agenda_id))
-            or 0
-        )
-        recurring_demand = session.scalar(
-            select(AgendaRecurrence.id).where(
-                AgendaRecurrence.weekday == weekday,
-                AgendaRecurrence.agenda_id == agenda_id,
+        required_occurrences: dict[str, set[int]] = {}
+        for agenda_id in required_ids:
+            coverage = (
+                session.scalar(
+                    select(Coverage.slots).where(
+                        Coverage.weekday == weekday,
+                        Coverage.agenda_id == agenda_id,
+                    )
+                )
+                or 0
             )
-        )
-        if coverage <= 0 and recurring_demand is None:
+            recurrence_ordinals = set(
+                session.scalars(
+                    select(AgendaRecurrence.ordinal).where(
+                        AgendaRecurrence.weekday == weekday,
+                        AgendaRecurrence.agenda_id == agenda_id,
+                    )
+                )
+            )
+            if coverage <= 0 and not recurrence_ordinals:
+                raise DomainError(
+                    "FIXED_RULE_CAPACITY",
+                    "Cada agenda obligatòria necessita almenys una plaça de cobertura",
+                    field="fixedRules",
+                )
+            required_occurrences[agenda_id] = (
+                set(range(1, 6)) if coverage > 0 else recurrence_ordinals
+            )
+        if required_mode == "all" and max(
+            (
+                sum(
+                    active_agendas[agenda_id].load_percentage
+                    for agenda_id in required_ids
+                    if ordinal in required_occurrences[agenda_id]
+                )
+                for ordinal in range(1, 6)
+            ),
+            default=0,
+        ) > 100:
             raise DomainError(
-                "FIXED_RULE_CAPACITY", "La regla fixa necessita almenys una plaça de cobertura", field="fixedRules"
+                "FIXED_RULE_LOAD",
+                "Les agendes obligatòries superen el 100% de càrrega diària",
+                field="fixedRules",
             )
-        if (weekday, agenda_id) in current_rule_keys:
-            continue
-        peers_query = (
-            select(Member)
-            .join(FixedRule, FixedRule.member_id == Member.id)
-            .where(
-                FixedRule.weekday == weekday,
-                FixedRule.agenda_id == agenda_id,
-                Member.archived_at.is_(None),
-            )
-            .order_by(Member.name)
-        )
-        if member_id:
-            peers_query = peers_query.where(Member.id != member_id)
-        peers = list(session.scalars(peers_query))
-        if peers:
-            shared_rules.append(
-                {
-                    "weekday": weekday,
-                    "agendaId": agenda_id,
-                    "agendaName": active_agendas[agenda_id].name,
-                    "people": [{"id": peer.id, "name": peer.name} for peer in peers],
-                }
-            )
-    if shared_rules and not payload.get("confirmSharedFixedRules", False):
-        raise DomainError(
-            "SHARED_FIXED_RULE_CONFIRMATION_REQUIRED",
-            "La regla fixa ja s’aplica a altres persones",
-            field="fixedRules",
-            details={"rules": shared_rules},
-        )
-
-
+        rule["requiredMode"] = required_mode
+        rule["requiredAgendaIds"] = required_ids
+        rule["forbiddenAgendaIds"] = forbidden_ids
 def save_member(session: Session, payload: dict[str, Any], member_id: str | None = None) -> dict[str, Any]:
     validate_member_payload(session, payload, member_id)
     pattern_weeks = payload["workPattern"]["weeks"]
@@ -311,11 +325,30 @@ def save_member(session: Session, payload: dict[str, Any], member_id: str | None
                 )
             )
     for rule in payload.get("fixedRules", []):
-        session.add(
-            FixedRule(
-                id=rule.get("id") or uid(), member_id=member.id, weekday=int(rule["weekday"]), agenda_id=rule["type"]
-            )
+        fixed_rule = FixedRule(
+            id=rule.get("id") or uid(),
+            member_id=member.id,
+            weekday=int(rule["weekday"]),
+            required_mode=rule["requiredMode"],
         )
+        session.add(fixed_rule)
+        session.flush()
+        for agenda_id in rule["requiredAgendaIds"]:
+            session.add(
+                FixedRuleAgenda(
+                    rule_id=fixed_rule.id,
+                    agenda_id=agenda_id,
+                    effect="required",
+                )
+            )
+        for agenda_id in rule["forbiddenAgendaIds"]:
+            session.add(
+                FixedRuleAgenda(
+                    rule_id=fixed_rule.id,
+                    agenda_id=agenda_id,
+                    effect="forbidden",
+                )
+            )
     replace_member_vacations(session, member, payload.get("vacationDates", []))
     bump_revision(session)
     session.flush()
@@ -406,31 +439,106 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
     for weekday, slots in coverage_values.items():
         if slots < 0:
             raise DomainError("INVALID_COVERAGE", "La cobertura no pot ser negativa", field=f"coverage.{weekday}")
-    conflicting_rules: list[tuple[FixedRule, Member]] = []
-    telework_rule_conflicts: list[tuple[FixedRule, Member]] = []
-    recurrence_weekdays = {int(recurrence["weekday"]) for recurrence in recurrences}
+    conflicting_rules: dict[str, tuple[FixedRule, Member]] = {}
+    telework_rule_conflicts: dict[str, tuple[FixedRule, Member]] = {}
     if agenda:
         fixed_rules = session.execute(
             select(FixedRule, Member)
+            .join(FixedRuleAgenda, FixedRuleAgenda.rule_id == FixedRule.id)
             .join(Member, Member.id == FixedRule.member_id)
-            .where(FixedRule.agenda_id == agenda.id)
+            .where(
+                FixedRuleAgenda.agenda_id == agenda.id,
+                FixedRuleAgenda.effect == "required",
+            )
         ).all()
-        for weekday in range(1, 6):
-            weekday_rules = [(rule, member) for rule, member in fixed_rules if rule.weekday == weekday]
-            if weekday_rules and coverage_values[weekday] == 0 and weekday not in recurrence_weekdays:
-                conflicting_rules.extend(weekday_rules)
-        if not bool(payload.get("telematic", False)):
-            for rule, member in fixed_rules:
-                tele_day = session.scalar(
-                    select(MemberTeleDay.id)
-                    .where(
-                        MemberTeleDay.member_id == member.id,
-                        MemberTeleDay.weekday == rule.weekday,
+        for rule, member in fixed_rules:
+            required_ids = list(
+                session.scalars(
+                    select(FixedRuleAgenda.agenda_id).where(
+                        FixedRuleAgenda.rule_id == rule.id,
+                        FixedRuleAgenda.effect == "required",
                     )
-                    .limit(1)
                 )
-                if tele_day:
-                    telework_rule_conflicts.append((rule, member))
+            )
+            demand_occurrences: list[set[int]] = []
+            telematic_available: list[bool] = []
+            required_loads: list[int] = []
+            for required_id in required_ids:
+                if required_id == agenda.id:
+                    demand_occurrences.append(
+                        set(range(1, 6))
+                        if coverage_values[rule.weekday] > 0
+                        else {
+                            int(recurrence["ordinal"])
+                            for recurrence in recurrences
+                            if int(recurrence["weekday"]) == rule.weekday
+                        }
+                    )
+                    telematic_available.append(bool(payload.get("telematic", False)))
+                    required_loads.append(load_percentage)
+                    continue
+                weekly_demand = bool(
+                    session.scalar(
+                        select(Coverage.slots).where(
+                            Coverage.weekday == rule.weekday,
+                            Coverage.agenda_id == required_id,
+                        )
+                    )
+                )
+                demand_occurrences.append(
+                    set(range(1, 6))
+                    if weekly_demand
+                    else set(
+                        session.scalars(
+                            select(AgendaRecurrence.ordinal).where(
+                                AgendaRecurrence.weekday == rule.weekday,
+                                AgendaRecurrence.agenda_id == required_id,
+                            )
+                        )
+                    )
+                )
+                required_agenda = session.get(Agenda, required_id)
+                telematic_available.append(bool(required_agenda and required_agenda.telematic))
+                required_loads.append(
+                    required_agenda.load_percentage if required_agenda else 100
+                )
+            demand_valid = (
+                all(demand_occurrences)
+                if rule.required_mode == "all"
+                else any(demand_occurrences)
+            )
+            max_required_load = max(
+                (
+                    sum(
+                        load
+                        for occurrences, load in zip(
+                            demand_occurrences, required_loads, strict=True
+                        )
+                        if ordinal in occurrences
+                    )
+                    for ordinal in range(1, 6)
+                ),
+                default=0,
+            )
+            if not demand_valid or (
+                rule.required_mode == "all" and max_required_load > 100
+            ):
+                conflicting_rules[rule.id] = (rule, member)
+            tele_day = session.scalar(
+                select(MemberTeleDay.id)
+                .where(
+                    MemberTeleDay.member_id == member.id,
+                    MemberTeleDay.weekday == rule.weekday,
+                )
+                .limit(1)
+            )
+            telematic_valid = (
+                all(telematic_available)
+                if rule.required_mode == "all"
+                else any(telematic_available)
+            )
+            if tele_day and not telematic_valid:
+                telework_rule_conflicts[rule.id] = (rule, member)
     if telework_rule_conflicts:
         raise DomainError(
             "TELEWORK_AGENDA_REQUIRED",
@@ -446,7 +554,7 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                         "agendaId": agenda_id,
                         "agendaName": payload["name"],
                     }
-                    for rule, member in telework_rule_conflicts
+                    for rule, member in telework_rule_conflicts.values()
                 ]
             },
         )
@@ -465,11 +573,11 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                         "agendaId": agenda_id,
                         "agendaName": payload["name"],
                     }
-                    for rule, member in conflicting_rules
+                    for rule, member in conflicting_rules.values()
                 ]
             },
         )
-    for rule, _member in conflicting_rules:
+    for rule, _member in conflicting_rules.values():
         session.delete(rule)
     recurrence_keys: set[tuple[int, int]] = set()
     for index, recurrence in enumerate(recurrences):
@@ -558,8 +666,27 @@ def archive_agenda(session: Session, agenda_id: str) -> None:
         raise DomainError("AGENDA_NOT_FOUND", "Agenda no trobada")
     today = madrid_today()
     agenda.archived_at = today
+    related_rule_ids = list(
+        session.scalars(
+            select(FixedRuleAgenda.rule_id).where(
+                FixedRuleAgenda.agenda_id == agenda_id
+            )
+        )
+    )
     session.execute(delete(MemberCapability).where(MemberCapability.agenda_id == agenda_id))
-    session.execute(delete(FixedRule).where(FixedRule.agenda_id == agenda_id))
+    if related_rule_ids:
+        session.execute(
+            delete(FixedRuleAgenda).where(FixedRuleAgenda.agenda_id == agenda_id)
+        )
+        session.flush()
+        for rule_id in related_rule_ids:
+            has_conditions = session.scalar(
+                select(FixedRuleAgenda.id)
+                .where(FixedRuleAgenda.rule_id == rule_id)
+                .limit(1)
+            )
+            if has_conditions is None:
+                session.execute(delete(FixedRule).where(FixedRule.id == rule_id))
     session.execute(delete(Coverage).where(Coverage.agenda_id == agenda_id))
     session.execute(delete(AgendaRecurrence).where(AgendaRecurrence.agenda_id == agenda_id))
     session.execute(delete(Assignment).where(Assignment.agenda_id == agenda_id, Assignment.date >= today))

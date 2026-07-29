@@ -40,7 +40,16 @@ export function normalizeBootstrapState(payload) {
       if (!Array.isArray(week)) return { workingDays: [...(week.workingDays || [])], teleDays: [...(week.teleDays || [])] };
       return { workingDays: [...week], teleDays: week.filter((day) => legacyTeleDays.includes(day)) };
     }) };
-    member.fixedRules = Array.isArray(member.fixedRules) ? member.fixedRules : [];
+    member.fixedRules = (Array.isArray(member.fixedRules) ? member.fixedRules : []).map((rule) => ({
+      ...rule,
+      requiredMode: rule.requiredMode === 'one' ? 'one' : 'all',
+      requiredAgendaIds: Array.isArray(rule.requiredAgendaIds)
+        ? [...rule.requiredAgendaIds]
+        : rule.type ? [rule.type] : [],
+      forbiddenAgendaIds: Array.isArray(rule.forbiddenAgendaIds)
+        ? [...rule.forbiddenAgendaIds]
+        : [],
+    }));
     member.agendaPreferences = member.agendaPreferences && typeof member.agendaPreferences === 'object' ? member.agendaPreferences : {};
     member.managementQuota = Math.min(5, Math.max(0, Number(member.managementQuota || 0)));
     member.vacations = Array.isArray(member.vacations) ? member.vacations : [];

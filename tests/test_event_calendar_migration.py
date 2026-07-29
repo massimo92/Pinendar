@@ -41,6 +41,12 @@ def test_event_migration_keeps_disjoint_months_and_latest_overlapping_date(tmp_p
             ) VALUES ('agenda', 'Agenda', 'hospital', 0, '#000000', 1, 'morning', 100)
             """
         )
+        connection.execute(
+            """
+            INSERT INTO fixed_rules (id, member_id, agenda_id, weekday)
+            VALUES ('legacy-rule', 'member', 'agenda', 1)
+            """
+        )
         proposals = [
             ("august", "historical", "2026-08", "2026-08", "2026-08-01 10:00:00"),
             ("september-old", "historical", "2026-09", "2026-09", "2026-09-01 10:00:00"),
@@ -124,7 +130,7 @@ def test_event_migration_keeps_disjoint_months_and_latest_overlapping_date(tmp_p
     assert backup is not None and backup.exists()
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "l2a76c9e4f10",
+            "m3b87c1d2e90",
         )
         assert connection.execute(
             "SELECT id FROM planning_events ORDER BY date"
@@ -144,6 +150,12 @@ def test_event_migration_keeps_disjoint_months_and_latest_overlapping_date(tmp_p
         assert connection.execute(
             "SELECT id, start, end FROM absences"
         ).fetchall() == [("absence-a", "2026-08-10", "2026-08-12")]
+        assert connection.execute(
+            "SELECT id, member_id, weekday, required_mode FROM fixed_rules"
+        ).fetchall() == [("legacy-rule", "member", 1, "all")]
+        assert connection.execute(
+            "SELECT rule_id, agenda_id, effect FROM fixed_rule_agendas"
+        ).fetchall() == [("legacy-rule", "agenda", "required")]
         remaining_tables = {
             row[0]
             for row in connection.execute(

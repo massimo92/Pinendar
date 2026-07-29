@@ -379,11 +379,17 @@ def test_updating_a_profile_persists_a_valid_fixed_rule(authenticated_client: Te
 
     assert response.status_code == 200
     assert response.json()["fixedRules"] == [
-        {"id": response.json()["fixedRules"][0]["id"], "weekday": 1, "type": agenda_id}
+        {
+            "id": response.json()["fixedRules"][0]["id"],
+            "weekday": 1,
+            "requiredMode": "all",
+            "requiredAgendaIds": [agenda_id],
+            "forbiddenAgendaIds": [],
+        }
     ]
     reloaded = authenticated_client.get("/api/v1/bootstrap").json()
     saved = next(item for item in reloaded["team"] if item["id"] == member["id"])
-    assert saved["fixedRules"][0]["type"] == agenda_id
+    assert saved["fixedRules"][0]["requiredAgendaIds"] == [agenda_id]
 
 
 def test_fixed_rule_accepts_an_agenda_with_monthly_demand_on_that_weekday(
@@ -421,42 +427,94 @@ def test_fixed_rule_accepts_an_agenda_with_monthly_demand_on_that_weekday(
     assert response.json()["fixedRules"][0] | {"id": "ignored"} == {
         "id": "ignored",
         "weekday": 3,
-        "type": agenda["id"],
+        "requiredMode": "all",
+        "requiredAgendaIds": [agenda["id"]],
+        "forbiddenAgendaIds": [],
     }
 
 
-def test_adding_an_existing_fixed_rule_requires_confirmation(authenticated_client: TestClient) -> None:
+def test_fixed_all_accepts_full_monthly_agendas_that_never_coincide(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    hospital_id = state["hospitals"][0]["catalogId"]
+    agenda_ids: list[str] = []
+    for ordinal in (1, 2):
+        agenda = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": f"Comitè mensual {ordinal}",
+                "hospitalId": hospital_id,
+                "telematic": False,
+                "shift": "morning",
+                "priority": 3,
+                "coverage": {str(day): 0 for day in range(1, 6)},
+                "recurrences": [{"ordinal": ordinal, "weekday": 3, "slots": 1}],
+            },
+        )
+        assert agenda.status_code == 201
+        agenda_ids.append(agenda.json()["id"])
+
+    response = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Garanties mensuals",
+            "email": "garanties-mensuals@hospital.test",
+            "availableDays": [3],
+            "teleDays": [],
+            "allowedTypes": agenda_ids,
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 3,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": agenda_ids,
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+
+
+def test_same_fixed_rule_is_a_personal_guarantee_for_each_member(
+    authenticated_client: TestClient,
+) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
     owner = next(member for member in state["team"] if member["fixedRules"])
     existing_rule = owner["fixedRules"][0]
+    agenda_id = existing_rule["requiredAgendaIds"][0]
     member = next(
         item
         for item in state["team"]
         if item["id"] != owner["id"]
         and existing_rule["weekday"] in item["availableDays"]
-        and existing_rule["type"] in item["allowedTypes"]
+        and agenda_id in item["allowedTypes"]
         and not item["fixedRules"]
     )
-    payload = member_payload(member, fixedRules=[{"weekday": existing_rule["weekday"], "type": existing_rule["type"]}])
-
-    rejected = authenticated_client.put(f"/api/v1/members/{member['id']}", json=payload)
-
-    assert rejected.status_code == 409
-    error = rejected.json()["error"]
-    assert error["code"] == "SHARED_FIXED_RULE_CONFIRMATION_REQUIRED"
-    assert error["details"]["rules"][0]["people"] == [{"id": owner["id"], "name": owner["name"]}]
-
-    confirmed = authenticated_client.put(
+    saved = authenticated_client.put(
         f"/api/v1/members/{member['id']}",
-        json={**payload, "confirmSharedFixedRules": True},
+        json=member_payload(
+            member,
+            fixedRules=[
+                {
+                    "weekday": existing_rule["weekday"],
+                    "requiredMode": "all",
+                    "requiredAgendaIds": [agenda_id],
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        ),
     )
 
-    assert confirmed.status_code == 200
+    assert saved.status_code == 200
     shared = [
         item
         for item in authenticated_client.get("/api/v1/bootstrap").json()["team"]
         if any(
-            rule["weekday"] == existing_rule["weekday"] and rule["type"] == existing_rule["type"]
+            rule["weekday"] == existing_rule["weekday"]
+            and agenda_id in rule["requiredAgendaIds"]
             for rule in item["fixedRules"]
         )
     ]
@@ -464,9 +522,130 @@ def test_adding_an_existing_fixed_rule_requires_confirmation(authenticated_clien
 
     unchanged = authenticated_client.put(
         f"/api/v1/members/{member['id']}",
-        json=member_payload(confirmed.json()),
+        json=member_payload(saved.json()),
     )
     assert unchanged.status_code == 200
+
+
+def test_fixed_personal_guarantees_can_be_saved_despite_shared_capacity(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    agenda = authenticated_client.post(
+        "/api/v1/agendas",
+        json={
+            "name": "Agenda personal única",
+            "hospitalId": state["hospitals"][0]["catalogId"],
+            "telematic": False,
+            "shift": "morning",
+            "priority": 1,
+            "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+            "recurrences": [],
+        },
+    ).json()
+    rule = {
+        "weekday": 1,
+        "requiredMode": "all",
+        "requiredAgendaIds": [agenda["id"]],
+        "forbiddenAgendaIds": [],
+    }
+    first = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Primera garantia",
+            "email": "primera-garantia@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": [agenda["id"]],
+            "managementQuota": 0,
+            "fixedRules": [rule],
+        },
+    )
+    second = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Segona garantia",
+            "email": "segona-garantia@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": [agenda["id"]],
+            "managementQuota": 0,
+            "fixedRules": [rule],
+        },
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+
+def test_member_persists_all_one_and_forbidden_fixed_conditions(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    half_a, half_b = same_load_agendas(state)
+    member = next(
+        item
+        for item in state["team"]
+        if not item["fixedRules"]
+        and half_a["id"] in item["allowedTypes"]
+        and half_b["id"] in item["allowedTypes"]
+    )
+    weekday = next(
+        day
+        for day in member["availableDays"]
+        if state["coverage"][str(day)].get(half_a["id"], 0) > 0
+        and state["coverage"][str(day)].get(half_b["id"], 0) > 0
+    )
+
+    response = authenticated_client.put(
+        f"/api/v1/members/{member['id']}",
+        json=member_payload(
+            member,
+            fixedRules=[
+                {
+                    "weekday": weekday,
+                    "requiredMode": "one",
+                    "requiredAgendaIds": [half_a["id"], half_b["id"]],
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["fixedRules"][0] | {"id": "ignored"} == {
+        "id": "ignored",
+        "weekday": weekday,
+        "requiredMode": "one",
+        "requiredAgendaIds": [half_a["id"], half_b["id"]],
+        "forbiddenAgendaIds": [],
+    }
+
+
+def test_fixed_rule_rejects_the_same_agenda_as_required_and_forbidden(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    member = next(item for item in state["team"] if not item["fixedRules"])
+    agenda_id = member["allowedTypes"][0]
+
+    response = authenticated_client.put(
+        f"/api/v1/members/{member['id']}",
+        json=member_payload(
+            member,
+            fixedRules=[
+                {
+                    "weekday": member["availableDays"][0],
+                    "requiredMode": "all",
+                    "requiredAgendaIds": [agenda_id],
+                    "forbiddenAgendaIds": [agenda_id],
+                }
+            ],
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "INVALID_FIXED_RULE"
 
 
 def test_telework_fixed_rule_blocks_changing_agenda_to_onsite(
@@ -990,7 +1169,11 @@ def test_agenda_shift_is_required_and_limited_to_supported_shifts(
 def test_agenda_coverage_cannot_invalidate_existing_fixed_rules(authenticated_client: TestClient) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
     rule = next(member["fixedRules"][0] for member in state["team"] if member["fixedRules"])
-    agenda = next(item for item in state["agendas"] if item["id"] == rule["type"])
+    agenda = next(
+        item
+        for item in state["agendas"]
+        if item["id"] == rule["requiredAgendaIds"][0]
+    )
     coverage = {str(day): state["coverage"][str(day)][agenda["id"]] for day in range(1, 6)}
     coverage[str(rule["weekday"])] = 0
 
@@ -1281,3 +1464,56 @@ def test_archiving_agenda_preserves_past_and_removes_future_events(authenticated
         assert session.get(Assignment, "past-agenda-assignment") is not None
         assert session.get(Assignment, "future-agenda-assignment") is None
         assert session.scalar(select(Vacancy).where(Vacancy.agenda_id == agenda_id)) is None
+
+
+def test_archiving_agenda_preserves_other_conditions_in_the_same_fixed_rule(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    hospital_id = state["hospitals"][0]["catalogId"]
+
+    def create_agenda(name: str) -> dict:
+        response = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": name,
+                "hospitalId": hospital_id,
+                "telematic": False,
+                "shift": "morning",
+                "priority": 2,
+                "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+                "recurrences": [],
+            },
+        )
+        assert response.status_code == 201
+        return response.json()
+
+    removed = create_agenda("Condició eliminada")
+    preserved = create_agenda("Condició conservada")
+    member = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Regla composta",
+            "email": "regla-composta@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": [removed["id"], preserved["id"]],
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 1,
+                    "requiredMode": "one",
+                    "requiredAgendaIds": [removed["id"], preserved["id"]],
+                    "forbiddenAgendaIds": [],
+                }
+            ],
+        },
+    )
+    assert member.status_code == 201
+
+    response = authenticated_client.delete(f"/api/v1/agendas/{removed['id']}")
+
+    assert response.status_code == 204
+    reloaded = authenticated_client.get("/api/v1/bootstrap").json()
+    saved = next(item for item in reloaded["team"] if item["id"] == member.json()["id"])
+    assert saved["fixedRules"][0]["requiredAgendaIds"] == [preserved["id"]]

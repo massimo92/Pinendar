@@ -3,7 +3,7 @@ from datetime import date
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pinendar.api.auth import COOKIE_NAME, SESSION_SECONDS, create_session, require_auth
 from pinendar.application.commands import (
@@ -70,8 +70,19 @@ class RecoveryRequest(BaseModel):
 
 class FixedRuleRequest(BaseModel):
     id: str | None = None
-    weekday: int
-    type: str
+    weekday: int = Field(ge=1, le=5)
+    required_mode: Literal["all", "one"] = Field(default="all", alias="requiredMode")
+    required_agenda_ids: list[str] = Field(default_factory=list, alias="requiredAgendaIds")
+    forbidden_agenda_ids: list[str] = Field(default_factory=list, alias="forbiddenAgendaIds")
+    legacy_type: str | None = Field(default=None, alias="type", exclude=True)
+
+    @model_validator(mode="after")
+    def normalize_legacy_rule(self) -> "FixedRuleRequest":
+        if self.legacy_type and not self.required_agenda_ids:
+            self.required_agenda_ids = [self.legacy_type]
+        if not self.required_agenda_ids and not self.forbidden_agenda_ids:
+            raise ValueError("La regla ha de contenir almenys una agenda")
+        return self
 
 
 class WorkPatternWeekRequest(BaseModel):
