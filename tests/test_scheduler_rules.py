@@ -880,6 +880,33 @@ def test_management_prefers_a_slack_day_before_the_preferred_weekday() -> None:
     assert not result.vacancies
 
 
+def test_management_prefers_the_day_with_less_existing_vacancy_pressure() -> None:
+    agendas = [
+        agenda("manager-work", priority=4),
+        agenda("unfillable", priority=4),
+    ]
+    team = [
+        member("manager", ["manager-work"], available=[2, 5], quota=1),
+    ]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {
+                "2": {"manager-work": 1},
+                "5": {"manager-work": 1, "unfillable": 3},
+            },
+        )
+    )
+
+    management = [
+        item for item in result.assignments if item["type"] == "management"
+    ]
+    assert result.outcome == "solution"
+    assert len(management) == 1
+    assert date.fromisoformat(management[0]["date"]).isoweekday() == 2
+
+
 def test_coverage_spreads_assignments_before_leaving_an_agenda_empty() -> None:
     agendas = [agenda("double"), agenda("single")]
     team = [

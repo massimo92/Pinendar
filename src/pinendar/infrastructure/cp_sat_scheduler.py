@@ -736,6 +736,54 @@ class CpSatScheduler:
             )
 
         if management_assignments:
+            management_vacancy_pressure: list[cp_model.IntVar] = []
+            for value in planning_dates:
+                day_vacancies = [
+                    variable
+                    for (vacancy_date, agenda_id), variable in vacancies.items()
+                    if vacancy_date == value
+                    and demand[(vacancy_date, agenda_id)] > 0
+                ]
+                maximum_daily_vacancies = sum(
+                    demand[(value, agenda_id)]
+                    for agenda_id in agendas
+                    if demand[(value, agenda_id)] > 0
+                )
+                if not day_vacancies or maximum_daily_vacancies <= 0:
+                    continue
+                daily_vacancies = model.new_int_var(
+                    0,
+                    maximum_daily_vacancies,
+                    f"daily_vacancies_d{date_order[value]}",
+                )
+                model.add(daily_vacancies == sum(day_vacancies))
+                for (
+                    member_id,
+                    management_date,
+                ), management in management_assignments.items():
+                    if management_date != value:
+                        continue
+                    exposed_vacancies = model.new_int_var(
+                        0,
+                        maximum_daily_vacancies,
+                        "management_vacancy_pressure_"
+                        f"p{member_order[member_id]}_d{date_order[value]}",
+                    )
+                    model.add(exposed_vacancies == daily_vacancies).only_enforce_if(
+                        management
+                    )
+                    model.add(exposed_vacancies == 0).only_enforce_if(
+                        management.Not()
+                    )
+                    management_vacancy_pressure.append(exposed_vacancies)
+            if management_vacancy_pressure:
+                phases.append(
+                    _Phase(
+                        "management-low-vacancy-days",
+                        sum(management_vacancy_pressure),
+                        False,
+                    )
+                )
             non_friday = [
                 variable
                 for (_member_id, value), variable in management_assignments.items()
