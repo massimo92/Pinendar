@@ -21,6 +21,7 @@ from pinendar.application.commands import (
     save_agenda,
     save_member,
     update_assignment,
+    update_hospital_short_name,
 )
 from pinendar.application.guard_imports import (
     add_guards,
@@ -137,6 +138,10 @@ class AgendaRequest(BaseModel):
 class HospitalSelectionRequest(BaseModel):
     catalog_id: str | None = Field(default=None, alias="catalogId")
     name: str | None = Field(default=None, min_length=2)
+
+
+class HospitalAliasRequest(BaseModel):
+    short_name: str | None = Field(default=None, alias="shortName", max_length=20)
 
 
 class HolidayRequest(BaseModel):
@@ -418,6 +423,16 @@ def select_hospital(payload: HospitalSelectionRequest, request: Request) -> dict
             payload.catalog_id,
             payload.name,
         )
+
+
+@router.patch("/api/v1/selected-hospitals/{hospital_id}", dependencies=[Depends(require_auth)])
+def update_selected_hospital(
+    hospital_id: str,
+    payload: HospitalAliasRequest,
+    request: Request,
+) -> dict[str, str | None]:
+    with request.state.database.session_factory.begin() as database_session:
+        return update_hospital_short_name(database_session, hospital_id, payload.short_name)
 
 
 @router.delete(

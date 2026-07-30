@@ -162,16 +162,28 @@ Objetivo protegido, entre uno y cinco días, declarado únicamente para una pers
 _Avoid_: Agenda de gestión
 
 **Perfil estadístico**:
-Vector de porcentajes de las asignaciones de una persona entre las agendas activas, calculado sobre todo su histórico conservado.
+Vector de porcentajes de las asignaciones de una persona entre las agendas activas, calculado dentro de su propia ventana histórica.
 _Avoid_: Conteos por agenda, carga total
+
+**Ventana histórica personal**:
+Periodo acumulado comprendido entre el primer evento clínico conservado de una persona y el final del histórico disponible. Permite comparar perfiles normalizados con distinta antigüedad sin atribuir a una persona periodos anteriores a su incorporación.
+_Avoid_: Histórico global, antigüedad del sistema
+
+**Peso histórico de agenda**:
+Proporción de la carga clínica realizada por el equipo que pertenece a una agenda dentro de la ventana histórica de la persona evaluada. Refleja su presencia real durante ese periodo, incluida su creación posterior, y no su cobertura semanal actual.
+_Avoid_: Peso configurado, frecuencia semanal
 
 **Perfil medio**:
 Media aritmética no ponderada de los perfiles estadísticos comparables; cada persona aporta el mismo peso con independencia de su antigüedad.
 _Avoid_: Perfil agregado, media ponderada por asignaciones
 
 **Equidad histórica**:
-Proximidad del perfil estadístico de cada persona al perfil medio, limitada a diferencias que las capacidades permiten corregir.
-_Avoid_: Igualdad de conteos, equidad anual
+Proximidad del perfil estadístico de cada persona al perfil medio del equipo durante su ventana histórica. Mide el resultado recibido: las capacidades y reglas fijas no excusan la concentración en una agenda.
+_Avoid_: Igualdad de conteos, equidad anual, equidad corregible
+
+**Señal de capacidad de plantilla**:
+Clasificación prudente de las últimas ocho semanas planificadas que combina porcentaje de vacantes, persistencia semanal, concentración de la sobrecarga y días-persona sin asignar. Requiere al menos cuatro semanas. Solo indica déficit estructural probable cuando las vacantes superan el 5% de la demanda, aparecen en al menos tres semanas y en la mitad del periodo, sin concentrar el 60% en una única semana. Solo indica holgura estructural probable cuando no hay vacantes y la carga sin asignar supera el 10% de los días-persona en al menos la mitad de las semanas. Holgura no significa que sobren personas: también puede revelar un desajuste de capacidades.
+_Avoid_: Exceso de plantilla, contar vacantes sin contexto, diagnóstico con una sola semana
 
 **Evento de planificación**:
 Actividad vigente de una persona en una fecha. Puede ser una agenda clínica, Gestión o una jornada sin asignación. Conserva su carga y si fue fija, extraordinaria o modificada manualmente.

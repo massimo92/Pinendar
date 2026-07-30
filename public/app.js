@@ -1,8 +1,9 @@
-import { api, waitForGeneration } from './api.js?v=7';
+import { api, waitForGeneration } from './api.js?v=8';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
-import { MANAGEMENT_ACTIVITY, compactActivityMeta, compactHospitalName, historicalActivityCounts, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=4';
-import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate } from './calendar-utils.mjs?v=2';
+import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
+import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=5';
+import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
 const WEEK_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv', 'Ds', 'Dg'];
@@ -21,6 +22,8 @@ let calendarView = 'month';
 let calendarDate = dateKey(new Date());
 let modal = null;
 let historyMemberFilter = '';
+let historyMetric = 'equity';
+let historyResolution = 'day';
 let hospitalMap = null;
 let pendingHospitalLocation = null;
 let hospitalSearchResults = [];
@@ -57,7 +60,7 @@ const ES_TEXT = {
   'Nou color aleatori': 'Nuevo color aleatorio', 'Nom i cognoms': 'Nombre y apellidos', 'Correu': 'Correo', 'Dies disponibles': 'Días disponibles',
   'Patró de treball': 'Patrón de trabajo', 'Quins dies s’ha de planificar aquesta persona?': '¿Qué días debe planificarse esta persona?', 'Sempre igual': 'Siempre igual', 'Alterna setmanes': 'Alterna semanas', 'Treball': 'Trabajo',
   'Les setmanes segueixen el número ISO i tornen a començar després de l’última.': 'Las semanas siguen el número ISO y vuelven a empezar después de la última.', 'Afegeix setmana': 'Añadir semana', 'Elimina setmana': 'Eliminar semana',
-  'Càrrega': 'Carga', 'Completa': 'Completa', 'Parcial': 'Parcial', 'Perfil desat': 'Perfil guardado', 'Els canvis s’han guardat correctament.': 'Los cambios se han guardado correctamente.',
+  'Càrrega': 'Carga', 'Completa': 'Completa', 'Parcial': 'Parcial', 'Desa': 'Guardar', 'Automàtic si es deixa buit:': 'Automático si se deja vacío:', 'Alias desat': 'Alias guardado', 'Perfil desat': 'Perfil guardado', 'Els canvis s’han guardat correctament.': 'Los cambios se han guardado correctamente.',
   'EQUIP': 'EQUIPO', 'Nou membre': 'Nuevo miembro', 'Edita membre': 'Editar miembro', 'AGENDES': 'AGENDAS',
   'Les persones inactives no entren en la generació del calendari.': 'Las personas inactivas no entran en la generación del calendario.', 'Gestió': 'Gestión', 'Sense hospital': 'Sin hospital', 'Altres activitats': 'Otras actividades', 'Fa gestió': 'Hace Gestión', 'Dies de gestió al mes': 'Días de Gestión al mes', 'Gestió al calendari': 'Gestión en el calendario', 'persones habilitades': 'personas habilitadas', 'Cap persona habilitada': 'Ninguna persona habilitada',
   'Dies obligatoris de treball telemàtic': 'Días obligatorios de trabajo telemático', 'Agendes habilitades': 'Agendas habilitadas', 'Quota mensual de gestió': 'Cuota mensual de gestión',
@@ -467,9 +470,13 @@ function eventsForDate(key) {
   const assignments = calendarEvents().filter((item) => item.date === key && matchesMember(item.memberId) && matchesAgenda(item.type));
   const showUncategorised = !selectedAgendaFilters.size;
   const guards = calendarGuards().filter((item) => item.date === key && matchesMember(item.memberId));
-  const savedAbsences = showUncategorised ? [...state.team, ...(state.archivedTeam || [])].flatMap((member) => member.vacations.filter((item) => key >= item.start && key <= item.end && matchesMember(member.id)).map((item) => ({ ...item, memberId: member.id }))) : [];
-  const calendarDateAbsences = showUncategorised ? calendarAbsences().filter((item) => key >= item.start && key <= item.end && matchesMember(item.memberId)) : [];
-  const absences = [...savedAbsences, ...calendarDateAbsences];
+  const savedAbsences = showUncategorised ? [...state.team, ...(state.archivedTeam || [])].flatMap((member) => member.vacations.map((item) => ({ ...item, memberId: member.id }))) : [];
+  const absences = showUncategorised ? visibleAbsencesForDate({
+    savedAbsences,
+    calendarAbsences: calendarAbsences(),
+    date: key,
+    selectedMemberIds: selectedMemberFilters,
+  }) : [];
   const vacancies = vacanciesForDate({
     unfilled: calendarVacancies(),
     date: key,
@@ -623,7 +630,7 @@ function calendarCell(key) {
     : '';
   const absenceEvents = events.absences.map((item) => {
     const member = person(item.memberId);
-    return eventEntry(`<div class="calendar-event absence" style="--member-color:${member?.color || '#f077b5'}"><b>Vacances</b><span>${esc(member?.name || '—')}</span></div>`, null);
+    return eventEntry(`<div class="calendar-event absence" style="--member-color:${member?.color || '#f077b5'}"><b>${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>Vacances</em></span></div>`, null);
   });
   const badge = (kind, count, shortLabel, longLabel) => count
     ? `<button type="button" class="calendar-incident-badge ${kind} ${selectedCalendarIssueFilters.has(kind) ? 'active' : ''}" data-calendar-issue-filter="${kind}" title="${count} ${longLabel}" aria-label="${count} ${longLabel}" aria-pressed="${selectedCalendarIssueFilters.has(kind)}"><span>${shortLabel}</span><b>${count}</b></button>`
@@ -762,9 +769,14 @@ function hospitalSelectionView() {
   return `<b>${esc(pendingHospitalLocation.name)}</b><span>${esc(pendingHospitalLocation.address)}</span><small>${pendingHospitalLocation.areaAvailable ? hospitalAreaLabel(pendingHospitalLocation) : 'No es pot afegir perquè no té una àrea disponible'}</small>`;
 }
 
+function hospitalAliasEditor(item) {
+  const automaticAlias = compactHospitalName({ ...item, shortName: '' });
+  return `<form class="hospital-alias-form" data-hospital-alias-form><input type="hidden" name="id" value="${esc(item.id)}" /><label><span>Alias</span><input name="shortName" maxlength="20" value="${esc(item.shortName || '')}" placeholder="${esc(automaticAlias)}" aria-label="Alias de ${esc(item.name)}" /></label><button type="submit" class="button ghost small">Desa</button><small>Automàtic si es deixa buit: <b>${esc(automaticAlias)}</b></small></form>`;
+}
+
 function setupPage() {
   return `${header('Configuració', 'Hospitals coberts i festius')}
-    <section class="hospital-layout"><div class="card hospital-panel"><div><div class="card-kicker">COBERTURA TERRITORIAL</div><h2>Cerca hospitals</h2><p class="muted">Catàleg oficial local d’institucions públiques i mixtes. Cerca per hospital, municipi o província.</p></div><div class="hospital-search-form"><div class="field"><label>Hospital o municipi</label><div class="hospital-search-row"><input data-hospital-search value="${esc(hospitalSearchQuery)}" placeholder="Ex. Bellvitge o Barcelona" autocomplete="off" aria-label="Cerca hospital" /></div></div></div><div class="hospital-search-results">${hospitalSearchResultsView()}</div><form id="hospital-form"><input type="hidden" name="catalogId" value="${esc(pendingHospitalLocation?.id || '')}" /><input type="hidden" name="name" value="${esc(pendingHospitalLocation?.name || '')}" /><input type="hidden" name="address" value="${esc(pendingHospitalLocation?.address || '')}" /><input type="hidden" name="latitude" value="${pendingHospitalLocation?.latitude ?? ''}" /><input type="hidden" name="longitude" value="${pendingHospitalLocation?.longitude ?? ''}" /><input type="hidden" name="areaM2" value="${pendingHospitalLocation?.areaM2 ?? ''}" /><input type="hidden" name="cadastralReference" value="${esc(pendingHospitalLocation?.cadastralReference || '')}" /><div class="map-selection ${pendingHospitalLocation ? 'selected' : ''}" data-map-selection>${hospitalSelectionView()}</div><button class="button" data-hospital-submit ${pendingHospitalLocation?.areaAvailable ? '' : 'disabled'}>Afegeix hospital</button></form></div><div class="card hospital-map-card"><div id="hospital-map" aria-label="Mapa d’hospitals coberts"></div><div class="map-help">OpenFreeMap · Ministerio de Sanidad · IGN-CNIG · Catastro</div></div><div class="card selected-hospitals"><div><div class="card-kicker">HOSPITALS AFEGITS</div><h2>Hospitals coberts</h2><p class="muted">Els centres localitzats es poden clicar per centrar-ne l’àrea.</p></div><div class="hospital-list">${state.hospitals.map((item) => `<div class="hospital-item">${item.locationKnown ? `<button type="button" class="hospital-item-focus" data-focus-hospital="${esc(item.catalogId)}" aria-label="Mostra ${esc(item.name)} al mapa"><i></i><span><b>${esc(item.name)}</b><small>${esc(item.address || 'Adreça no disponible')}</small></span></button>` : `<div class="hospital-item-focus hospital-item-static"><i></i><span><b>${esc(item.name)}</b><small>Localització desconeguda</small></span></div>`}<button class="icon-button danger-icon" data-remove-hospital="${item.id}" aria-label="Elimina ${esc(item.name)}">×</button></div>`).join('') || '<div class="muted">Encara no hi ha hospitals afegits.</div>'}</div></div></section>
+    <section class="hospital-layout"><div class="card hospital-panel"><div><div class="card-kicker">COBERTURA TERRITORIAL</div><h2>Cerca hospitals</h2><p class="muted">Catàleg oficial local d’institucions públiques i mixtes. Cerca per hospital, municipi o província.</p></div><div class="hospital-search-form"><div class="field"><label>Hospital o municipi</label><div class="hospital-search-row"><input data-hospital-search value="${esc(hospitalSearchQuery)}" placeholder="Ex. Bellvitge o Barcelona" autocomplete="off" aria-label="Cerca hospital" /></div></div></div><div class="hospital-search-results">${hospitalSearchResultsView()}</div><form id="hospital-form"><input type="hidden" name="catalogId" value="${esc(pendingHospitalLocation?.id || '')}" /><input type="hidden" name="name" value="${esc(pendingHospitalLocation?.name || '')}" /><input type="hidden" name="address" value="${esc(pendingHospitalLocation?.address || '')}" /><input type="hidden" name="latitude" value="${pendingHospitalLocation?.latitude ?? ''}" /><input type="hidden" name="longitude" value="${pendingHospitalLocation?.longitude ?? ''}" /><input type="hidden" name="areaM2" value="${pendingHospitalLocation?.areaM2 ?? ''}" /><input type="hidden" name="cadastralReference" value="${esc(pendingHospitalLocation?.cadastralReference || '')}" /><div class="map-selection ${pendingHospitalLocation ? 'selected' : ''}" data-map-selection>${hospitalSelectionView()}</div><button class="button" data-hospital-submit ${pendingHospitalLocation?.areaAvailable ? '' : 'disabled'}>Afegeix hospital</button></form></div><div class="card hospital-map-card"><div id="hospital-map" aria-label="Mapa d’hospitals coberts"></div><div class="map-help">OpenFreeMap · Ministerio de Sanidad · IGN-CNIG · Catastro</div></div><div class="card selected-hospitals"><div><div class="card-kicker">HOSPITALS AFEGITS</div><h2>Hospitals coberts</h2><p class="muted">Els centres localitzats es poden clicar per centrar-ne l’àrea.</p></div><div class="hospital-list">${state.hospitals.map((item) => `<div class="hospital-item"><div class="hospital-item-main">${item.locationKnown ? `<button type="button" class="hospital-item-focus" data-focus-hospital="${esc(item.catalogId)}" aria-label="Mostra ${esc(item.name)} al mapa"><i></i><span><b>${esc(item.name)}</b><small>${esc(item.address || 'Adreça no disponible')}</small></span></button>` : `<div class="hospital-item-focus hospital-item-static"><i></i><span><b>${esc(item.name)}</b><small>Localització desconeguda</small></span></div>`}<button class="icon-button danger-icon" data-remove-hospital="${item.id}" aria-label="Elimina ${esc(item.name)}">×</button></div>${hospitalAliasEditor(item)}</div>`).join('') || '<div class="muted">Encara no hi ha hospitals afegits.</div>'}</div></div></section>
     <section class="section"><div class="card panel holidays-panel"><div><div class="card-kicker">CALENDARI</div><h2>Festius</h2><p class="muted">Es mostraran directament al calendari principal.</p></div><form id="holiday-form"><div class="field"><label>Data festiva</label><input type="date" name="date" required /></div><button class="button secondary">Afegeix festiu</button></form><div class="holiday-list">${state.holidays.sort().map((date) => `<div class="holiday-chip"><span>Festiu · ${fmtDate(date, { day: 'numeric', month: 'long', year: 'numeric' })}</span><button class="icon-button danger-icon" data-remove-time="h:${date}" aria-label="Elimina festiu">×</button></div>`).join('') || '<div class="muted">Sense festius afegits.</div>'}</div></div></section>`;
 }
 
@@ -773,47 +785,53 @@ function hospitalAreaLabel(item) {
   return `Parcel·la cadastral · ${new Intl.NumberFormat('ca-ES').format(item.areaM2)} m²${item.cadastralReference ? ` · ${esc(item.cadastralReference)}` : ''}`;
 }
 
-function fairnessAnalysis() {
-  const counts = fairnessCounts(); const members = activeTeam(); const cells = []; const agendas = [];
-  const totals = Object.fromEntries(members.map((member) => [member.id, state.agendas.reduce((sum, item) => sum + (counts[member.id]?.[item.id] || 0), 0)]));
-  for (const item of state.agendas) {
-    const eligible = members.filter((member) => member.allowedTypes.includes(item.id) && totals[member.id]);
-    const meanShare = eligible.length ? eligible.reduce((sum, member) => sum + (counts[member.id]?.[item.id] || 0) / totals[member.id], 0) / eligible.length : null;
-    const agendaCells = eligible.map((member) => {
-      const expectedShare = meanShare; const actualShare = (counts[member.id]?.[item.id] || 0) / totals[member.id];
-      const deviation = meanShare === null ? null : actualShare - meanShare;
-      const cell = { member, agenda: item, expectedShare, actualShare, deviation, value: counts[member.id]?.[item.id] || 0 }; cells.push(cell); return cell;
-    });
-    const measured = agendaCells.filter((cell) => cell.deviation !== null);
-    agendas.push({ agenda: item, averageDeviation: measured.length ? measured.reduce((sum, cell) => sum + Math.abs(cell.deviation), 0) / measured.length : null });
-  }
-  const measured = cells.filter((cell) => cell.deviation !== null);
-  const globalScore = measured.length ? Math.round(measured.reduce((sum, cell) => sum + Math.max(0, 1 - Math.min(Math.abs(cell.deviation), 1)), 0) / measured.length * 100) : null;
-  const memberScores = Object.fromEntries(members.map((member) => { const own = measured.filter((cell) => cell.member.id === member.id); return [member.id, own.length ? Math.round(own.reduce((sum, cell) => sum + Math.max(0, 1 - Math.min(Math.abs(cell.deviation), 1)), 0) / own.length * 100) : null]; }));
-  return { counts, cells, agendas, globalScore, memberScores, measured };
+function historicalClinicalActivities() {
+  return planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]).filter((item) => !['management', 'gestio'].includes(item.id));
+}
+
+function fairnessAnalysis(cutoff = null, scoredMembers = activeTeam()) {
+  const members = [...state.team, ...(state.archivedTeam || [])];
+  return historicalEquityAnalysis({
+    members,
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+    scoredMemberIds: scoredMembers.map((member) => member.id),
+    cutoff,
+  });
+}
+
+function operationalFairnessAnalysis(scoredMembers = activeTeam()) {
+  const members = [...state.team, ...(state.archivedTeam || [])];
+  return operationalEquityAnalysis({
+    members,
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+    scoredMemberIds: scoredMembers.map((member) => member.id),
+  });
 }
 function deviationLabel(value) { if (value === null) return '—'; const rounded = Math.round(value * 100); return `${rounded > 0 ? '+' : ''}${rounded}%`; }
 function shortAgendaName(name) { return name.replace('ambulatori', 'amb.').replace('ambulatòria', 'amb.').replace('urgent', 'urg.').replace('tècnics', 'tèc.').replace('Intervencionisme', 'Interv.').replace('Telecomandament', 'Telecom.').replace('Ressonància', 'Resson.'); }
-function deviationRow(cell) { const magnitude = cell.deviation === null ? 0 : Math.min(Math.abs(cell.deviation), 1) * 50; const side = cell.deviation === null ? 'none' : cell.deviation >= 0 ? 'over' : 'under'; return `<div class="deviation-row"><span><i style="--agenda-color:${cell.agenda.color}"></i>${esc(cell.agenda.name)}</span><div class="deviation-track"><b></b><i class="${side}" style="--deviation-width:${magnitude}%"></i></div><strong>${deviationLabel(cell.deviation)}</strong></div>`; }
 function heatCell(cell) {
-  if (!cell || cell.deviation === null) return '<div class="heat-cell empty" title="Sense dades">—</div>';
-  const roundedDeviation = Math.round(cell.deviation * 100);
-  const magnitude = Math.abs(cell.deviation);
-  const direction = Math.abs(roundedDeviation) <= 5 ? 'balanced' : roundedDeviation < 0 ? 'below' : 'above';
-  const strength = magnitude >= 0.25 ? 'strong' : magnitude >= 0.1 ? 'medium' : 'soft';
+  if (!cell || cell.relativeDeviation === null) return '<div class="heat-cell empty" title="Sense dades">—</div>';
+  const signedRelative = Math.sign(cell.deviation || 0) * cell.relativeDeviation;
+  const roundedDeviation = Math.round(Math.abs(cell.deviation || 0) * 100);
+  const magnitude = Math.abs(signedRelative);
+  const direction = magnitude <= 0.1 ? 'balanced' : signedRelative < 0 ? 'below' : 'above';
+  const strength = magnitude >= 0.5 ? 'strong' : magnitude >= 0.25 ? 'medium' : 'soft';
   const actual = Math.round(cell.actualShare * 100);
   const expected = Math.round(cell.expectedShare * 100);
+  const weight = Math.round(cell.historicalWeight * 100);
   const detail = state.language === 'es'
-    ? `Real ${actual}% · esperado ${expected}%`
-    : `Real ${actual}% · esperat ${expected}%`;
-  return `<div class="heat-cell ${direction} ${strength}" title="${detail}" aria-label="${detail}">${direction === 'balanced' ? '≈' : deviationLabel(cell.deviation)}</div>`;
+    ? `Real ${actual}% · media ${expected}% · diferencia ${roundedDeviation}% · peso histórico ${weight}%`
+    : `Real ${actual}% · mitjana ${expected}% · diferència ${roundedDeviation}% · pes històric ${weight}%`;
+  return `<div class="heat-cell ${direction} ${strength}" title="${detail}" aria-label="${detail}">${roundedDeviation}%</div>`;
 }
 
 function orderedFairnessAgendas(analysis, members) {
-  return state.agendas
+  return analysis.activities
     .map((agenda) => ({
       agenda,
-      valueCount: members.reduce((total, member) => total + Number(analysis.cells.some((cell) => cell.member.id === member.id && cell.agenda.id === agenda.id && cell.deviation !== null)), 0),
+      valueCount: members.reduce((total, member) => total + Number(analysis.cells.some((cell) => cell.member.id === member.id && cell.agenda.id === agenda.id && cell.relativeDeviation !== null)), 0),
     }))
     .sort((left, right) => right.valueCount - left.valueCount || left.agenda.name.localeCompare(right.agenda.name, state.language === 'es' ? 'es' : 'ca', { sensitivity: 'base' }))
     .map((entry) => entry.agenda);
@@ -850,70 +868,192 @@ function teleworkBar(balance) {
   const personValue = balance.person === null ? null : Math.round(balance.person * 100); const teamValue = balance.team === null ? null : Math.round(balance.team * 100);
   return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Equip = mitjana real de les persones.</small></section>`;
 }
-function happinessTimeline() {
-  const people = [...state.team, ...(state.archivedTeam || [])]; const byId = Object.fromEntries(people.map((member) => [member.id, member])); const records = hasCalendarContent() ? [calendarProjection()] : [];
-  const assignments = records.flatMap((record) => record.assignments || []).filter((item) => !['no_assignment', 'management'].includes(item.type) && byId[item.memberId]).sort((left, right) => left.date.localeCompare(right.date)); const dates = [...new Set(assignments.map((item) => item.date))]; const cumulative = Object.fromEntries(people.map((member) => [member.id, { points: 0, load: 0, started: false }])); const series = Object.fromEntries(people.map((member) => [member.id, []]));
-  for (const date of dates) { for (const item of assignments.filter((assignment) => assignment.date === date)) { const summary = cumulative[item.memberId]; const load = Number(item.loadPercentage ?? agenda(item.type).loadPercentage ?? 100) / 100; summary.points += Number(byId[item.memberId].agendaPreferences?.[item.type] || 0) * load; summary.load += load; summary.started = true; } for (const member of people) { const summary = cumulative[member.id]; if (summary.started && summary.load) series[member.id].push({ date, value: summary.points / summary.load }); } }
-  const average = dates.map((date) => { const values = people.map((member) => series[member.id].find((point) => point.date === date)?.value).filter((value) => value !== undefined); return values.length ? { date, value: values.reduce((sum, value) => sum + value, 0) / values.length } : null; }).filter(Boolean);
-  return { people: people.filter((member) => series[member.id].length), dates, series, average };
+function happinessTimeline(resolution = historyResolution) {
+  const people = [...state.team, ...(state.archivedTeam || [])];
+  const byId = Object.fromEntries(people.map((member) => [member.id, member]));
+  const assignments = calendarEvents()
+    .filter((item) => !['no_assignment', 'management'].includes(item.type) && byId[item.memberId])
+    .sort((left, right) => left.date.localeCompare(right.date));
+  const allDates = [...new Set(assignments.map((item) => item.date))];
+  const cumulative = Object.fromEntries(people.map((member) => [member.id, { points: 0, load: 0, started: false }]));
+  const fullSeries = Object.fromEntries(people.map((member) => [member.id, []]));
+  for (const date of allDates) {
+    for (const item of assignments.filter((assignment) => assignment.date === date)) {
+      const summary = cumulative[item.memberId];
+      const load = Number(item.loadPercentage ?? agenda(item.type).loadPercentage ?? 100) / 100;
+      summary.points += Number(byId[item.memberId].agendaPreferences?.[item.type] || 0) * load;
+      summary.load += load;
+      summary.started = true;
+    }
+    for (const member of people) {
+      const summary = cumulative[member.id];
+      if (summary.started && summary.load) fullSeries[member.id].push({ date, value: summary.points / summary.load });
+    }
+  }
+  const dates = resolution === 'month'
+    ? [...new Map(allDates.map((date) => [monthKey(date), date])).values()]
+    : allDates;
+  const selectedDates = new Set(dates);
+  const series = Object.fromEntries(people.map((member) => [member.id, fullSeries[member.id].filter((point) => selectedDates.has(point.date))]));
+  const average = dates.map((date) => {
+    const values = people.map((member) => series[member.id].find((point) => point.date === date)?.value).filter((value) => value !== undefined);
+    return values.length ? { date, value: values.reduce((sum, value) => sum + value, 0) / values.length } : null;
+  }).filter(Boolean);
+  return { people: people.filter((member) => series[member.id].length), dates, series, average, min: -1, max: 1 };
+}
+
+
+function equityTimeline(resolution = historyResolution) {
+  return historicalEquityTimeline({
+    members: [...state.team, ...(state.archivedTeam || [])],
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+    resolution,
+  });
+}
+
+function historyTimeline() {
+  return historyMetric === 'equity' ? equityTimeline() : happinessTimeline();
 }
 function happinessChart() {
-  const timeline = happinessTimeline();
-  if (!timeline.dates.length) return '<div class="empty-state">Sense assignacions per calcular la felicitat.</div>';
+  const timeline = historyTimeline();
+  const metricLabel = historyMetric === 'equity'
+    ? (state.language === 'es' ? 'equidad' : 'equitat')
+    : (state.language === 'es' ? 'felicidad' : 'felicitat');
+  if (!timeline.dates.length) return `<div class="empty-state">${state.language === 'es' ? `Sin asignaciones para calcular la ${metricLabel}.` : `Sense assignacions per calcular la ${metricLabel}.`}</div>`;
   const width = 1000; const height = 340; const left = 58; const right = 20; const top = 22; const bottom = 42;
   const plotWidth = width - left - right; const plotHeight = height - top - bottom;
   const start = fromKey(timeline.dates[0]).getTime(); const end = fromKey(timeline.dates.at(-1)).getTime();
   const x = (date) => end === start ? left + plotWidth / 2 : left + (fromKey(date).getTime() - start) / (end - start) * plotWidth;
-  const y = (value) => top + (1 - (value + 1) / 2) * plotHeight;
+  const y = (value) => top + (timeline.max - value) / (timeline.max - timeline.min) * plotHeight;
   const line = (points) => points.map((point) => `${x(point.date).toFixed(1)},${y(point.value).toFixed(1)}`).join(' ');
-  const yTicks = [-1, -.5, 0, .5, 1];
+  const yTicks = historyMetric === 'equity' ? [0, .25, .5, .75, 1] : [-1, -.5, 0, .5, 1];
   const xStep = Math.max(1, Math.ceil(timeline.dates.length / 6));
   const xTicks = timeline.dates.filter((_, index) => index % xStep === 0 || index === timeline.dates.length - 1);
   const shortRange = end - start < 366 * 86400000;
-  const axisDateOptions = shortRange ? { day: 'numeric', month: 'short' } : { month: 'short', year: '2-digit' };
+  const axisDateOptions = historyResolution === 'month' || !shortRange ? { month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' };
   const seriesMarkup = (name, points, color, average = false) => {
     const seriesClass = average ? 'happiness-average-series' : 'happiness-person-series';
     const circles = points.map((point) => {
       const valueLabel = `${Math.round(point.value * 100)}%`;
       return `<circle data-happiness-point data-date="${point.date}" data-value="${valueLabel}" cx="${x(point.date).toFixed(1)}" cy="${y(point.value).toFixed(1)}" r="${average ? '3.2' : '2.4'}"><title>${esc(name)} · ${fmtDate(point.date, { day: 'numeric', month: 'short', year: 'numeric' })} · ${valueLabel}</title></circle>`;
     }).join('');
-    return `<g class="happiness-series ${seriesClass}" data-happiness-series data-series-name="${esc(name)}" style="--series-color:${color}"><polyline class="happiness-series-line" points="${line(points)}"></polyline><polyline class="happiness-series-hit" points="${line(points)}"></polyline>${circles}</g>`;
+    const selectionLabel = state.language === 'es' ? `Seleccionar ${name}` : `Selecciona ${name}`;
+    return `<g class="happiness-series ${seriesClass}" data-happiness-series data-series-name="${esc(name)}" role="button" tabindex="0" aria-pressed="false" aria-label="${esc(selectionLabel)}" style="--series-color:${color}"><polyline class="happiness-series-line" points="${line(points)}"></polyline><polyline class="happiness-series-hit" points="${line(points)}"></polyline>${circles}</g>`;
   };
   const peopleLines = timeline.people.map((member) => seriesMarkup(member.name, timeline.series[member.id], member.color)).join('');
   const averageName = state.language === 'es' ? 'Media del equipo' : 'Mitjana de l’equip';
   const averageLine = seriesMarkup(averageName, timeline.average, 'var(--brand)', true);
-  const legendButton = (name, color, average = false) => `<button type="button" class="${average ? 'is-average' : ''}" data-happiness-legend-name="${esc(name)}" aria-pressed="true" style="--member-color:${color}" title="${state.language === 'es' ? 'Mostrar u ocultar' : 'Mostra o amaga'} ${esc(name)}"><i></i>${esc(name)}</button>`;
-  return `<div class="happiness-chart-shell"><div class="happiness-chart-wrap"><svg class="happiness-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolució de l’índex acumulat de felicitat">${yTicks.map((value) => `<g class="happiness-grid"><line x1="${left}" y1="${y(value)}" x2="${width - right}" y2="${y(value)}"></line><text x="${left - 10}" y="${y(value) + 4}">${Math.round(value * 100)}%</text></g>`).join('')}${xTicks.map((date) => `<g class="happiness-axis"><line x1="${x(date)}" y1="${top}" x2="${x(date)}" y2="${height - bottom}"></line><text x="${x(date)}" y="${height - 15}">${fmtDate(date, axisDateOptions)}</text></g>`).join('')}${peopleLines}${averageLine}</svg></div><div class="happiness-chart-tooltip" hidden><b data-happiness-tooltip-name></b><span data-happiness-tooltip-date></span><strong data-happiness-tooltip-value></strong></div></div><div class="happiness-legend">${legendButton(averageName, 'var(--brand)', true)}${timeline.people.map((member) => legendButton(member.name, member.color)).join('')}</div>`;
+  const legendButton = (name, color, average = false) => `<button type="button" class="${average ? 'is-average' : ''}" data-happiness-legend-name="${esc(name)}" aria-pressed="false" style="--member-color:${color}" title="${state.language === 'es' ? 'Seleccionar' : 'Selecciona'} ${esc(name)}"><i></i>${esc(name)}</button>`;
+  return `<div class="happiness-chart-shell"><div class="happiness-chart-wrap"><svg class="happiness-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${state.language === 'es' ? 'Evolución' : 'Evolució'} ${metricLabel}">${yTicks.map((value) => `<g class="happiness-grid"><line x1="${left}" y1="${y(value)}" x2="${width - right}" y2="${y(value)}"></line><text x="${left - 10}" y="${y(value) + 4}">${Math.round(value * 100)}%</text></g>`).join('')}${xTicks.map((date) => `<g class="happiness-axis"><line x1="${x(date)}" y1="${top}" x2="${x(date)}" y2="${height - bottom}"></line><text x="${x(date)}" y="${height - 15}">${fmtDate(date, axisDateOptions)}</text></g>`).join('')}${peopleLines}${averageLine}</svg></div><div class="happiness-chart-tooltip" hidden><b data-happiness-tooltip-name></b><span data-happiness-tooltip-date></span><strong data-happiness-tooltip-value></strong></div></div><div class="happiness-legend">${legendButton(averageName, 'var(--brand)', true)}${timeline.people.map((member) => legendButton(member.name, member.color)).join('')}</div>`;
 }
 
 function clearHappinessChartHover(shell) {
-  shell.querySelector('.happiness-chart')?.classList.remove('has-hover');
+  shell.querySelector('.happiness-chart')?.classList.remove('has-hover', 'is-line-target');
   shell.querySelectorAll('.happiness-series.is-hovered').forEach((series) => series.classList.remove('is-hovered'));
   shell.querySelectorAll('[data-happiness-point].is-active').forEach((point) => point.classList.remove('is-active'));
   const tooltip = shell.querySelector('.happiness-chart-tooltip');
   if (tooltip) tooltip.hidden = true;
 }
 
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-happiness-legend-name]');
-  if (!button) return;
-  const card = button.closest('.happiness-card');
-  const chart = card?.querySelector('.happiness-chart');
-  const shell = card?.querySelector('.happiness-chart-shell');
-  const series = [...(chart?.querySelectorAll('[data-happiness-series]') || [])].find((item) => item.dataset.seriesName === button.dataset.happinessLegendName);
-  if (!series) return;
+function happinessSeriesNearPointer(svg, event, maxDistance = 12) {
+  const rect = svg.getBoundingClientRect(); const viewBox = svg.viewBox.baseVal;
+  const scaleX = rect.width / viewBox.width; const scaleY = rect.height / viewBox.height;
+  let nearest = null; let nearestDistance = Infinity;
+  svg.querySelectorAll('[data-happiness-series]').forEach((series) => {
+    const values = series.querySelector('.happiness-series-line')?.getAttribute('points')?.trim().split(/[ ,]+/).map(Number) || [];
+    if (values.length === 2) {
+      const pointX = rect.left + (values[0] - viewBox.x) * scaleX; const pointY = rect.top + (values[1] - viewBox.y) * scaleY;
+      const distance = Math.hypot(event.clientX - pointX, event.clientY - pointY);
+      if (distance < nearestDistance) { nearest = series; nearestDistance = distance; }
+    }
+    for (let index = 2; index < values.length; index += 2) {
+      const x1 = rect.left + (values[index - 2] - viewBox.x) * scaleX; const y1 = rect.top + (values[index - 1] - viewBox.y) * scaleY;
+      const x2 = rect.left + (values[index] - viewBox.x) * scaleX; const y2 = rect.top + (values[index + 1] - viewBox.y) * scaleY;
+      const dx = x2 - x1; const dy = y2 - y1; const lengthSquared = dx * dx + dy * dy;
+      const ratio = lengthSquared ? Math.max(0, Math.min(1, ((event.clientX - x1) * dx + (event.clientY - y1) * dy) / lengthSquared)) : 0;
+      const distance = Math.hypot(event.clientX - (x1 + ratio * dx), event.clientY - (y1 + ratio * dy));
+      if (distance < nearestDistance) { nearest = series; nearestDistance = distance; }
+    }
+  });
+  return nearestDistance <= maxDistance ? nearest : null;
+}
+
+function setHappinessSeriesSelection(card, name) {
+  const button = [...(card?.querySelectorAll('[data-happiness-legend-name]') || [])].find((item) => item.dataset.happinessLegendName === name);
+  const series = [...(card?.querySelectorAll('[data-happiness-series]') || [])].find((item) => item.dataset.seriesName === name);
+  if (!button || !series) return;
   const selected = button.getAttribute('aria-pressed') !== 'true';
   button.setAttribute('aria-pressed', String(selected));
-  series.classList.toggle('is-filtered-out', !selected);
+  series.setAttribute('aria-pressed', String(selected));
+  series.classList.toggle('is-selected', selected);
+  const chart = card.querySelector('.happiness-chart');
+  const hasSelection = Boolean(chart?.querySelector('.happiness-series.is-selected'));
+  chart?.classList.toggle('has-selection', hasSelection);
+  card.classList.toggle('has-happiness-selection', hasSelection);
+  const shell = card.querySelector('.happiness-chart-shell');
   if (shell) clearHappinessChartHover(shell);
+}
+
+
+function setHappinessSeriesPreview(button, active) {
+  const card = button?.closest('.happiness-card');
+  const chart = card?.querySelector('.happiness-chart');
+  if (!card || !chart) return;
+  if (active) chart.querySelectorAll('.happiness-series.is-previewed').forEach((item) => item.classList.remove('is-previewed'));
+  const series = [...chart.querySelectorAll('[data-happiness-series]')].find((item) => item.dataset.seriesName === button.dataset.happinessLegendName);
+  series?.classList.toggle('is-previewed', active);
+  chart.classList.toggle('has-legend-preview', Boolean(chart.querySelector('.happiness-series.is-previewed')));
+}
+
+document.addEventListener('pointerover', (event) => {
+  const button = event.target.closest('[data-happiness-legend-name]');
+  if (button) setHappinessSeriesPreview(button, true);
+});
+
+document.addEventListener('pointerout', (event) => {
+  const button = event.target.closest('[data-happiness-legend-name]');
+  if (!button || button.contains(event.relatedTarget)) return;
+  setHappinessSeriesPreview(button, false);
+});
+
+document.addEventListener('focusin', (event) => {
+  const button = event.target.closest('[data-happiness-legend-name]');
+  if (button) setHappinessSeriesPreview(button, true);
+});
+
+document.addEventListener('focusout', (event) => {
+  const button = event.target.closest('[data-happiness-legend-name]');
+  if (!button || button.contains(event.relatedTarget)) return;
+  setHappinessSeriesPreview(button, false);
+});
+
+document.addEventListener('click', (event) => {
+  const metricButton = event.target.closest('[data-history-metric]');
+  if (metricButton) { historyMetric = metricButton.dataset.historyMetric; render(); return; }
+  const resolutionButton = event.target.closest('[data-history-resolution]');
+  if (resolutionButton) { historyResolution = resolutionButton.dataset.historyResolution; render(); return; }
+  const button = event.target.closest('[data-happiness-legend-name]');
+  if (button) { setHappinessSeriesSelection(button.closest('.happiness-card'), button.dataset.happinessLegendName); return; }
+  const chart = event.target.closest('.happiness-chart');
+  const series = chart ? happinessSeriesNearPointer(chart, event) : null;
+  if (series) setHappinessSeriesSelection(series.closest('.happiness-card'), series.dataset.seriesName);
+});
+
+document.addEventListener('keydown', (event) => {
+  const series = event.target.closest('[data-happiness-series]');
+  if (!series || !['Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  setHappinessSeriesSelection(series.closest('.happiness-card'), series.dataset.seriesName);
 });
 
 document.addEventListener('pointermove', (event) => {
   const shell = event.target.closest('.happiness-chart-shell');
   if (!shell) return;
-  const series = event.target.closest('[data-happiness-series]');
+  const svg = event.target.closest('.happiness-chart');
+  const series = svg ? happinessSeriesNearPointer(svg, event, 14) : null;
   if (!series) { clearHappinessChartHover(shell); return; }
-  const svg = series.closest('svg');
+  svg.classList.add('is-line-target');
   const points = [...series.querySelectorAll('[data-happiness-point]')];
   if (!svg || !points.length) return;
   const svgRect = svg.getBoundingClientRect();
@@ -940,17 +1080,50 @@ document.addEventListener('pointerout', (event) => {
   if (shell && !shell.contains(event.relatedTarget)) clearHappinessChartHover(shell);
 });
 function historyPage() {
-  const analysis = fairnessAnalysis(); const activities = activeActivities(); const members = activeTeam(); const selected = members.find((member) => member.id === historyMemberFilter) || members[0]; if (selected) historyMemberFilter = selected.id;
-  const selectedCells = selected ? state.agendas.map((item) => analysis.cells.find((cell) => cell.member.id === selected.id && cell.agenda.id === item.id)).filter(Boolean) : [];
-  const memberTotal = selected ? activities.reduce((sum, item) => sum + (analysis.counts[selected.id]?.[item.id] || 0), 0) : 0;
-  const composition = selected && memberTotal ? activities.map((item) => ({ item, share: (analysis.counts[selected.id]?.[item.id] || 0) / memberTotal })).filter((entry) => entry.share > 0).sort((left, right) => right.share - left.share || left.item.name.localeCompare(right.item.name, 'ca')) : [];
+  const analysis = fairnessAnalysis();
+  const operationalAnalysis = operationalFairnessAnalysis();
+  const members = activeTeam();
+  const selected = members.find((member) => member.id === historyMemberFilter) || members[0];
+  if (selected) historyMemberFilter = selected.id;
+  const memberTotal = selected ? analysis.activities.reduce((sum, item) => sum + (analysis.counts[selected.id]?.[item.id] || 0), 0) : 0;
+  const composition = selected && memberTotal
+    ? analysis.activities.map((item) => ({ item, share: (analysis.counts[selected.id]?.[item.id] || 0) / memberTotal })).filter((entry) => entry.share > 0).sort((left, right) => right.share - left.share || left.item.name.localeCompare(right.item.name, 'ca'))
+    : [];
   const telework = teleworkBalance(selected, analysis);
   const heatmapAgendas = orderedFairnessAgendas(analysis, members);
-  return `${header('Equitat i històric', 'Desviació respecte al perfil mitjà de les persones comparables', '<button class="button ghost small" data-action="backup">Còpia JSON</button>')}
-    <section class="fairness-stats fairness-stats-single"><div class="insight-card card"><span>Índex global d’equilibri</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? 'Genera un període per començar' : analysis.globalScore >= 80 ? 'Repartiment molt equilibrat' : analysis.globalScore >= 60 ? 'Equilibri millorable' : 'Cal revisar el repartiment'}</small></div></section>
-    <section class="section"><div class="section-head"><div><h2>Evolució de la felicitat</h2><div class="muted">Índex acumulat ponderat per càrrega: ♥ suma, 👎 resta i sense reacció no modifica el resultat.</div></div></div><div class="card happiness-card">${happinessChart()}<p>La sèrie històrica es recalcula amb les preferències actuals. La mitjana de l’equip està ressaltada.</p></div></section>
-    <section class="section"><div class="section-head"><div><h2>Equilibri d’una persona</h2><div class="muted">La composició mostra què ha fet; les barres indiquen desviació respecte al seu repartiment esperat.</div></div><select data-action="history-member">${memberOptions(selected?.id || '')}</select></div><div class="person-balance-grid"><section class="card balance-profile" style="--member-color:${selected?.color || '#b9c4c0'}"><div class="balance-person"><span class="member-avatar">${selected ? esc(selected.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('')) : '—'}</span><div><h3>${esc(selected?.name || 'Sense membres')}</h3><span>Índex personal ${selected && analysis.memberScores[selected.id] !== null ? `${analysis.memberScores[selected.id]}/100` : '—'}</span></div></div><div class="composition-bar">${composition.map((entry) => `<i style="width:${entry.share * 100}%;--agenda-color:${entry.item.color}" title="${esc(entry.item.name)} · ${Math.round(entry.share * 100)}%"></i>`).join('') || '<span>Sense activitat registrada</span>'}</div><div class="composition-legend" style="--legend-rows:${Math.ceil(composition.length / 2) || 1}">${composition.map((entry) => `<span><i style="--agenda-color:${entry.item.color}"></i>${esc(entry.item.name)} <b>${Math.round(entry.share * 100)}%</b></span>`).join('')}</div>${teleworkBar(telework)}</section><section class="card deviation-card"><div class="deviation-head"><span>Per sota</span><b>Esperat</b><span>Per sobre</span></div>${selectedCells.map(deviationRow).join('') || '<div class="empty-state">Sense dades per comparar.</div>'}</section></div></section>
-    <section class="section"><div class="section-head"><div><h2>Equilibri entre persones</h2><div class="muted">Mapa de calor: blau = menys del repartiment esperat; corall = més. Clica una persona per veure’n el detall.</div></div><div class="heat-legend"><span>Per sota</span><i></i><span>Equilibri</span><i></i><span>Per sobre</span></div></div><div class="card heatmap-wrap"><div class="fairness-heatmap" style="--agenda-columns:${heatmapAgendas.length}"><div class="heat-corner">Persona</div>${heatmapAgendas.map((item) => `<div class="heat-head" title="${esc(item.name)}"><i style="--agenda-color:${item.color}"></i><span>${esc(shortAgendaName(item.name))}</span></div>`).join('')}${members.flatMap((member) => [`<button class="heat-person" data-history-member="${member.id}" style="--member-color:${member.color}"><i></i>${esc(member.name)}</button>`, ...heatmapAgendas.map((item) => heatCell(analysis.cells.find((cell) => cell.member.id === member.id && cell.agenda.id === item.id)))]).join('')}</div></div></section>`;
+  const capacity = workforceCapacitySignal({
+    assignments: calendarEvents(),
+    vacancies: calendarVacancies(),
+    members: activeTeam(),
+    absences: calendarAbsences(),
+    guards: calendarGuards(),
+    agendas: activeAgendas(),
+  });
+  const capacityCopy = {
+    'insufficient-data': { ca: 'Dades insuficients', es: 'Datos insuficientes' },
+    'temporary-pressure': { ca: 'Pressió puntual', es: 'Presión puntual' },
+    'structural-shortage': { ca: 'Dèficit estructural probable', es: 'Déficit estructural probable' },
+    'structural-slack': { ca: 'Marge estructural probable', es: 'Holgura estructural probable' },
+    balanced: { ca: 'Capacitat ajustada', es: 'Capacidad ajustada' },
+  }[capacity.kind][state.language === 'es' ? 'es' : 'ca'];
+  const capacityDetails = state.language === 'es'
+    ? `${Math.round(capacity.vacancyRate * 100)}% de déficit base ajustado`
+    : `${Math.round(capacity.vacancyRate * 100)}% de dèficit base ajustat`;
+  const chartTitle = historyMetric === 'equity'
+    ? (state.language === 'es' ? 'Evolución de la equidad' : 'Evolució de l’equitat')
+    : (state.language === 'es' ? 'Evolución de la felicidad' : 'Evolució de la felicitat');
+  const chartDescription = historyMetric === 'equity'
+    ? (state.language === 'es' ? 'Índice acumulado: compara el reparto recibido con la media del equipo y pondera cada agenda por su peso histórico.' : 'Índex acumulat: compara el repartiment rebut amb la mitjana de l’equip i pondera cada agenda pel seu pes històric.')
+    : (state.language === 'es' ? 'Índice acumulado ponderado por carga: ♥ suma, 👎 resta y sin reacción no modifica el resultado.' : 'Índex acumulat ponderat per càrrega: ♥ suma, 👎 resta i sense reacció no modifica el resultat.');
+  const chartFootnote = historyMetric === 'equity'
+    ? (state.language === 'es' ? 'Cada punto utiliza todo el histórico disponible hasta esa fecha. La media del equipo está resaltada.' : 'Cada punt utilitza tot l’històric disponible fins aquella data. La mitjana de l’equip està ressaltada.')
+    : (state.language === 'es' ? 'La serie histórica se recalcula con las preferencias actuales. La media del equipo está resaltada.' : 'La sèrie històrica es recalcula amb les preferències actuals. La mitjana de l’equip està ressaltada.');
+  const toggle = (kind, value, label) => `<button type="button" class="${(kind === 'metric' ? historyMetric : historyResolution) === value ? 'active' : ''}" data-history-${kind}="${value}" aria-pressed="${(kind === 'metric' ? historyMetric : historyResolution) === value}">${label}</button>`;
+  return `${header('Equitat i històric', 'Desviació respecte al perfil mitjà de l’equip durant l’històric de cada persona', '<button class="button ghost small" data-action="backup">Còpia JSON</button>')}
+    <section class="fairness-stats"><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad estructural' : 'Equitat estructural'}</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? (state.language === 'es' ? 'Genera un período para empezar' : 'Genera un període per començar') : (state.language === 'es' ? 'Similitud histórica ignorando la configuración' : 'Similitud històrica ignorant la configuració')}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad operativa' : 'Equitat operativa'}</span><div class="insight-score-row"><strong>${operationalAnalysis.globalScore === null ? '—' : `${operationalAnalysis.globalScore}/100`}</strong><div class="insight-secondary-score"><span>${state.language === 'es' ? 'Peor persona' : 'Pitjor persona'}</span><b>${operationalAnalysis.worstScore === null ? '—' : `${operationalAnalysis.worstScore}/100`}</b></div></div><small>${state.language === 'es' ? 'Qué tan bien reparte el generador según la configuración actual' : 'Com de bé reparteix el generador segons la configuració actual'}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Capacidad de plantilla' : 'Capacitat de plantilla'}</span><strong>${capacityCopy}</strong><small>${capacityDetails}</small></div></section>
+    <section class="section"><div class="section-head history-chart-head"><div><h2>${chartTitle}</h2><div class="muted">${chartDescription}</div><div class="history-chart-controls"><div>${toggle('metric', 'equity', state.language === 'es' ? 'Equidad' : 'Equitat')}${toggle('metric', 'happiness', state.language === 'es' ? 'Felicidad' : 'Felicitat')}</div><div>${toggle('resolution', 'day', state.language === 'es' ? 'Día' : 'Dia')}${toggle('resolution', 'month', state.language === 'es' ? 'Mes' : 'Mes')}</div></div></div></div><div class="card happiness-card">${happinessChart()}<p>${chartFootnote}</p></div></section>
+    <section class="section"><div class="section-head"><div><h2>Equilibri d’una persona</h2><div class="muted">Resum de la composició històrica de la persona seleccionada.</div></div><select data-action="history-member">${memberOptions(selected?.id || '')}</select></div><section class="card balance-profile" style="--member-color:${selected?.color || '#b9c4c0'}"><div class="balance-person"><span class="member-avatar">${selected ? esc(selected.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('')) : '—'}</span><div><h3>${esc(selected?.name || 'Sense membres')}</h3><span>Índex personal ${selected && analysis.memberScores[selected.id] !== null ? `${analysis.memberScores[selected.id]}/100` : '—'}</span></div></div><div class="composition-bar">${composition.map((entry) => `<i style="width:${entry.share * 100}%;--agenda-color:${entry.item.color}" title="${esc(entry.item.name)} · ${Math.round(entry.share * 100)}%"></i>`).join('') || '<span>Sense activitat registrada</span>'}</div><div class="composition-legend" style="--legend-rows:${Math.ceil(composition.length / 2) || 1}">${composition.map((entry) => `<span><i style="--agenda-color:${entry.item.color}"></i>${esc(entry.item.name)} <b>${Math.round(entry.share * 100)}%</b></span>`).join('')}</div>${teleworkBar(telework)}</section></section>
+    <section class="section"><div class="section-head"><div><h2>Equilibri entre persones</h2><div class="muted">${state.language === 'es' ? 'Mapa de calor de diferencias en puntos porcentuales: azul = por debajo; verde azulado = por encima. La intensidad indica la magnitud, no si es mejor o peor.' : 'Mapa de calor de diferències en punts percentuals: blau = per sota; verd blavós = per sobre. La intensitat indica la magnitud, no si és millor o pitjor.'}</div></div><div class="heat-legend"><span>Per sota</span><i></i><span>Equilibri</span><i></i><span>Per sobre</span></div></div><div class="card heatmap-wrap"><div class="fairness-heatmap" style="--agenda-columns:${heatmapAgendas.length}"><div class="heat-corner">Persona</div>${heatmapAgendas.map((item) => `<div class="heat-head" title="${esc(item.name)}"><i style="--agenda-color:${item.color}"></i><span>${esc(shortAgendaName(item.name))}</span></div>`).join('')}${members.flatMap((member) => [`<button class="heat-person" data-history-member="${member.id}" style="--member-color:${member.color}"><i></i>${esc(member.name)}</button>`, ...heatmapAgendas.map((item) => heatCell(analysis.cells.find((cell) => cell.member.id === member.id && cell.agenda.id === item.id)))]).join('')}</div></div></section>`;
 }
 
 function guidePage() {
@@ -972,6 +1145,10 @@ function guidePage() {
   ];
   return `<section class="guide-page">
     ${header(g('Guia d’ús', 'Guía de uso'), g('Tot Pinendar explicat sense tecnicismes.', 'Todo Pinendar explicado sin tecnicismos.'))}
+    <section class="guide-support card">
+      <div><div class="eyebrow">${g('SUPORT AL PROJECTE', 'APOYO AL PROYECTO')}</div><h2>${g('Si t’ha agradat, pots mostrar el teu suport convidant-me a un cafè.', 'Si te ha gustado, puedes mostrar tu apoyo invitándome a un café.')}</h2><a href="https://revolut.me/angelini?currency=EUR&amp;note=Apoyo%20proyectos%20open%20source" target="_blank" rel="noopener noreferrer">${g('Convida’m a un cafè', 'Invítame a un café')} ↗</a></div>
+      <a class="guide-support-qr" href="https://revolut.me/angelini?currency=EUR&amp;note=Apoyo%20proyectos%20open%20source" target="_blank" rel="noopener noreferrer" aria-label="${g('Obre Revolut per donar suport al projecte', 'Abre Revolut para apoyar el proyecto')}"><img src="/revolut-support-qr.svg" alt="${g('Codi QR per donar suport al projecte amb Revolut', 'Código QR para apoyar el proyecto con Revolut')}" /></a>
+    </section>
     <section class="guide-hero card">
       <div><div class="eyebrow">${g('IDEA PRINCIPAL', 'IDEA PRINCIPAL')}</div><h2>${g('Pinendar proposa. Tu decideixes.', 'Pinendar propone. Tú decides.')}</h2><p>${g('La plataforma prepara el calendari mensual, assenyala els problemes i permet revisar o canviar el resultat. Si una generació falla, el calendari actual no es modifica.', 'La plataforma prepara el calendario mensual, señala los problemas y permite revisar o cambiar el resultado. Si una generación falla, el calendario actual no se modifica.')}</p></div>
       <div class="guide-quick"><b>${g('En 30 segons', 'En 30 segundos')}</b><span>1. ${g('Actualitza equip i guàrdies', 'Actualiza equipo y guardias')}</span><span>2. ${g('Genera el mes', 'Genera el mes')}</span><span>3. ${g('Revisa avisos', 'Revisa los avisos')}</span><span>4. ${g('Ajusta i exporta', 'Ajusta y exporta')}</span></div>
@@ -987,7 +1164,7 @@ function guidePage() {
         <li><b>${g('Reparteix Gestió per rondes.', 'Reparte Gestión por rondas.')}</b><span>${g('Intenta donar un primer dia a tothom abans de donar-ne un segon. Gestió pot desplaçar prioritats alta, moderada o baixa, però no la molt alta.', 'Intenta dar un primer día a todos antes de dar un segundo. Gestión puede desplazar prioridades alta, moderada o baja, pero no la muy alta.')}</span></li>
         <li><b>${g('Cobreix la resta per prioritat.', 'Cubre el resto por prioridad.')}</b><span>${g('Primer alta, després moderada i finalment baixa.', 'Primero alta, después moderada y finalmente baja.')}</span></li>
         <li><b>${g('Redueix jornades parcials i persones sense activitat.', 'Reduce jornadas parciales y personas sin actividad.')}</b><span>${g('Si dues agendes parcials poden completar una persona, evita repartir-les innecessàriament.', 'Si dos agendas parciales pueden completar una persona, evita repartirlas innecesariamente.')}</span></li>
-        <li><b>${g('Millora l’equitat.', 'Mejora la equidad.')}</b><span>${g('Entre repartiments igual de bons en tot l’anterior, distribueix les agendes per acostar cada perfil al repartiment històric de l’equip.', 'Entre repartos igual de buenos en todo lo anterior, distribuye las agendas para acercar cada perfil al reparto histórico del equipo.')}</span></li>
+        <li><b>${g('Millora l’equitat.', 'Mejora la equidad.')}</b><span>${g('Entre repartiments igual de bons en tot l’anterior, acosta cada perfil a la mitjana de la resta de persones habilitades per fer cada agenda. La persona no participa en la seva pròpia referència.', 'Entre repartos igual de buenos en todo lo anterior, acerca cada perfil a la media del resto de personas habilitadas para hacer cada agenda. La persona no participa en su propia referencia.')}</span></li>
         <li><b>${g('Col·loca Gestió preferentment en divendres i després en dilluns.', 'Coloca Gestión preferentemente en viernes y después en lunes.')}</b><span>${g('Només ho fa si no empitjora cap criteri anterior.', 'Sólo lo hace si no empeora ningún criterio anterior.')}</span></li>
       </ol>
       <div class="guide-note"><b>${g('I els cors i polzes?', '¿Y los corazones y pulgares?')}</b> ${g('Les preferències es guarden i apareixen a les mètriques de felicitat, però de moment no influeixen en la generació.', 'Las preferencias se guardan y aparecen en las métricas de felicidad, pero por ahora no influyen en la generación.')}</div>
@@ -1000,14 +1177,16 @@ function guidePage() {
     </div><p class="guide-footnote">${g('En dia i setmana, les targetes s’agrupen per hospital i indiquen matí/tarda i completa/parcial. En mes es mostra només el nom; el color identifica l’agenda.', 'En día y semana, las tarjetas se agrupan por hospital e indican mañana/tarde y completa/parcial. En mes se muestra sólo el nombre; el color identifica la agenda.')}</p></section>
 
     <section class="guide-section card"><div class="guide-section-head"><span>5</span><div><h2>${g('Canvis després de generar', 'Cambios después de generar')}</h2><p>${g('El calendari continua sent editable, però cada acció té un significat diferent.', 'El calendario sigue siendo editable, pero cada acción tiene un significado diferente.')}</p></div></div><div class="guide-action-grid">
-      <article><b>${g('Intercanviar agendes', 'Intercambiar agendas')}</b><p>${g('Clica una persona assignada. Pinendar mostra els intercanvis possibles, ordenats segons l’impacte en equitat, i canvia les dues persones alhora.', 'Haz clic en una persona asignada. Pinendar muestra los intercambios posibles, ordenados según el impacto en equidad, y cambia las dos personas a la vez.')}</p></article>
+      <article><b>${g('Intercanviar agendes', 'Intercambiar agendas')}</b><p>${g('Clica una persona assignada. Pinendar mostra els intercanvis possibles, ordenats segons l’impacte en l’equitat operativa, i canvia les dues persones alhora.', 'Haz clic en una persona asignada. Pinendar muestra los intercambios posibles, ordenados según el impacto en la equidad operativa, y cambia las dos personas a la vez.')}</p></article>
       <article><b>${g('Obrir activitat extra', 'Abrir actividad extra')}</b><p>${g('Clica una persona sense activitat per afegir una agenda compatible fora de la demanda habitual. No elimina una vacant ordinària.', 'Haz clic en una persona sin actividad para añadir una agenda compatible fuera de la demanda habitual. No elimina una vacante ordinaria.')}</p></article>
       <article><b>${g('Canviar una regla fixa', 'Cambiar una regla fija')}</b><p>${g('Només es pot iniciar des de la persona que la té. Apareix un avís i el canvi afecta aquest calendari, no la regla futura del perfil.', 'Sólo puede iniciarse desde la persona que la tiene. Aparece un aviso y el cambio afecta este calendario, no la regla futura del perfil.')}</p></article>
       <article><b>${g('Cedir o intercanviar guàrdies', 'Ceder o intercambiar guardias')}</b><p>${g('Pinendar recalcula les postguàrdies i intenta mantenir cobertes les agendes base amb el mínim de moviments.', 'Pinendar recalcula las postguardias e intenta mantener cubiertas las agendas base con el mínimo de movimientos.')}</p></article>
     </div></section>
 
     <section class="guide-section card"><div class="guide-section-head"><span>6</span><div><h2>${g('Històric, mètriques i exportació', 'Histórico, métricas y exportación')}</h2><p>${g('Cada període generat s’afegeix al calendari. Els mesos anteriors es conserven.', 'Cada período generado se añade al calendario. Los meses anteriores se conservan.')}</p></div></div><div class="guide-action-grid">
-      <article><b>${g('Equitat', 'Equidad')}</b><p>${g('Compara el percentatge d’agendes de cada persona amb el perfil mitjà de persones que poden fer-les.', 'Compara el porcentaje de agendas de cada persona con el perfil medio de personas que pueden hacerlas.')}</p></article>
+      <article><b>${g('Capacitat de plantilla', 'Capacidad de plantilla')}</b><p>${g('Mira les últimes setmanes i descompta les vacants que podrien explicar les vacances o postguàrdies. Si el dèficit restant es repeteix sovint, avisa d’un possible dèficit estructural; si està concentrat, indica pressió puntual. El percentatge és la part de la demanda que continua sense cobrir.', 'Mira las últimas semanas y descuenta las vacantes que podrían explicar las vacaciones o postguardias. Si el déficit restante se repite a menudo, avisa de un posible déficit estructural; si está concentrado, indica presión puntual. El porcentaje es la parte de la demanda que sigue sin cubrir.')}</p></article>
+      <article><b>${g('Equitat estructural', 'Equidad estructural')}</b><p>${g('Pregunta si totes les persones han rebut una combinació semblant d’agendes. Compara cada perfil amb la resta de l’equip, sense descomptar capacitats ni regles fixes. Una especialització continuada redueix aquest índex.', 'Pregunta si todas las personas han recibido una combinación parecida de agendas. Compara cada perfil con el resto del equipo, sin descontar capacidades ni reglas fijas. Una especialización continuada reduce este índice.')}</p></article>
+      <article><b>${g('Equitat operativa', 'Equidad operativa')}</b><p>${g('Pregunta si el generador reparteix bé allò que realment pot repartir. Només compara amb persones habilitades per a cada agenda i exclou la persona de la seva pròpia referència. La puntuació indica quina part de la càrrega ja coincideix amb el perfil operatiu esperat; també es mostra la pitjor persona.', 'Pregunta si el generador reparte bien aquello que realmente puede repartir. Sólo compara con personas habilitadas para cada agenda y excluye a la persona de su propia referencia. La puntuación indica qué parte de la carga ya coincide con el perfil operativo esperado; también se muestra la peor persona.')}</p></article>
       <article><b>${g('Felicitat', 'Felicidad')}</b><p>${g('Mostra l’evolució de cors i polzes. És informativa.', 'Muestra la evolución de corazones y pulgares. Es informativa.')}</p></article>
       <article><b>${g('Exportació', 'Exportación')}</b><p>${g('CSV, Excel i ICS respecten el període i els filtres actius del calendari.', 'CSV, Excel e ICS respetan el período y los filtros activos del calendario.')}</p></article>
       <article><b>${g('Compte i dades', 'Cuenta y datos')}</b><p>${g('Cada compte té un entorn independent. Desa la clau de recuperació; quan s’utilitza, se’n genera una de nova. Qualsevol accés o ús autenticat reinicia el termini d’activitat. Després de més de sis mesos naturals sense activitat, el compte i totes les seves dades s’eliminen automàticament i de manera irreversible.', 'Cada cuenta tiene un entorno independiente. Guarda la clave de recuperación; al utilizarla, se genera una nueva. Cualquier acceso o uso autenticado reinicia el plazo de actividad. Tras más de seis meses naturales sin actividad, la cuenta y todos sus datos se eliminan automática e irreversiblemente.')}</p></article>
@@ -1465,7 +1644,8 @@ function assignmentModal() {
       const targetMember = person(option.targetMemberId || target?.memberId);
       const targetAgenda = agenda(option.targetAgendaId || target?.type);
       const targetHospital = agendaHospital(targetAgenda);
-      return `<label class="assignment-choice"><input type="radio" name="targetAssignmentId" value="${esc(option.targetAssignmentId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(targetMember?.name || option.targetMemberName || '—')}</b>${fairnessBadge(option)}</span><span class="assignment-swap-preview"><i>${esc(sourceMember?.name || '—')}</i><strong>${esc(sourceAgenda?.name || '—')} → ${esc(targetAgenda?.name || '—')}</strong><i>${esc(targetMember?.name || '—')}</i><strong>${esc(targetAgenda?.name || '—')} → ${esc(sourceAgenda?.name || '—')}</strong></span><small>${esc(targetHospital ? compactHospitalName(targetHospital) : 'Sense hospital')} · ${esc(activityMetaTitle(targetAgenda))}</small></span></label>`;
+      const preview = assignmentExchangePreviewLabels({ sourceAgenda, targetAgenda, hospitals: state.hospitals });
+      return `<label class="assignment-choice"><input type="radio" name="targetAssignmentId" value="${esc(option.targetAssignmentId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(targetMember?.name || option.targetMemberName || '—')}</b>${fairnessBadge(option)}</span><span class="assignment-swap-preview"><i>${esc(sourceMember?.name || '—')}</i><strong>${esc(preview.sourceToTarget)}</strong><i>${esc(targetMember?.name || '—')}</i><strong>${esc(preview.targetToSource)}</strong></span><small>${esc(targetHospital ? compactHospitalName(targetHospital) : 'Sense hospital')} · ${esc(activityMetaTitle(targetAgenda))}</small></span></label>`;
     }).join('');
     return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI D’ASSIGNACIONS</div><h2>${esc(sourceMember?.name || '—')}</h2><div class="muted">${fmtDate(source?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(sourceAgenda?.name || '—')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="assignment-exchange-form"><input type="hidden" name="id" value="${esc(source?.id || '')}" /><input type="hidden" name="confirmFixed" value="${modal.confirmFixed ? 'true' : 'false'}" /><div class="modal-body"><p class="assignment-action-help">Tria una assignació compatible. El canvi s’aplicarà simultàniament a les dues persones.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha intercanvis compatibles per a aquesta assignació.</div>'}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Intercanvia</button></div></form></section></div>`;
   }
@@ -2014,6 +2194,17 @@ async function handleForm(formElement) {
   }
 }
 document.addEventListener('submit', async (event) => {
+  if (event.target.matches?.('[data-hospital-alias-form]')) {
+    event.preventDefault();
+    const aliasForm = new FormData(event.target);
+    try {
+      await api.updateHospitalAlias(aliasForm.get('id'), aliasForm.get('shortName'));
+      await reloadState();
+      render();
+      toast('Alias desat');
+    } catch (error) { showError(error); }
+    return;
+  }
   if (!['generation-form', 'member-form', 'delete-member-form', 'agenda-form', 'assignment-exchange-form', 'extra-assignment-form', 'hospital-form', 'holiday-form', 'clear-calendar-form'].includes(event.target.getAttribute('id'))) return;
   event.preventDefault(); await handleForm(event.target);
 }, true);

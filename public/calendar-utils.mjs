@@ -32,6 +32,29 @@ export function vacanciesForDate({ unfilled, date, selectedAgendaIds }) {
   );
 }
 
+export function visibleAbsencesForDate({
+  savedAbsences,
+  calendarAbsences,
+  date,
+  selectedMemberIds,
+}) {
+  const matches = (item) => (
+    date >= item.start
+    && date <= item.end
+    && (!selectedMemberIds?.size || selectedMemberIds.has(item.memberId))
+  );
+  const seen = new Set();
+  return [
+    ...calendarAbsences.filter(matches),
+    ...savedAbsences.filter(matches),
+  ].filter((item) => {
+    const key = `${item.memberId}:${item.category || 'vacances'}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 
 export function calendarIncidentsForDate({
   assignments,

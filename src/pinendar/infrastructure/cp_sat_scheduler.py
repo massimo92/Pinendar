@@ -18,7 +18,7 @@ from pinendar.domain.scheduler import (
     period_dates,
 )
 
-MODEL_VERSION = "16"
+MODEL_VERSION = "17"
 PERCENT_SCALE = 10_000
 ORTOOLS_VERSION = version("ortools")
 
@@ -62,6 +62,14 @@ def _planning_dates(problem: ScheduleProblem) -> list[date]:
         )
         if value.isoweekday() <= 5 and value.isoformat() not in holidays
     ]
+
+
+def _management_weekly_cap(quota: int, month: str) -> int:
+    calendar_weeks = len({
+        value.isocalendar()[:2]
+        for value in period_dates(month, month)
+    })
+    return max(1, (quota + calendar_weeks - 1) // calendar_weeks)
 
 
 def _member_absences(member: dict[str, Any], problem: ScheduleProblem) -> list[dict[str, Any]]:
@@ -531,6 +539,13 @@ class CpSatScheduler:
                     for (person_id, value), variable in management_assignments.items()
                     if person_id == member_id and value.strftime("%Y-%m") == month
                 ]
+                weekly_variables: dict[tuple[int, int], list[cp_model.IntVar]] = defaultdict(list)
+                for (person_id, value), variable in management_assignments.items():
+                    if person_id == member_id and value.strftime("%Y-%m") == month:
+                        weekly_variables[value.isocalendar()[:2]].append(variable)
+                weekly_cap = _management_weekly_cap(quota, month)
+                for variables in weekly_variables.values():
+                    model.add(sum(variables) <= weekly_cap)
                 count = model.new_int_var(
                     0,
                     min(quota, len(month_variables)),
@@ -674,19 +689,30 @@ class CpSatScheduler:
 
         deviations: dict[tuple[str, str], cp_model.IntVar] = {}
         for agenda_id, cohort in comparable_by_agenda.items():
-            mean = model.new_int_var(0, PERCENT_SCALE, f"mean_a{agenda_order[agenda_id]}")
-            model.add_division_equality(
-                mean,
-                sum(share_variables[(member_id, agenda_id)] for member_id in cohort),
-                len(cohort),
-            )
             for member_id in cohort:
+                peer_mean = model.new_int_var(
+                    0,
+                    PERCENT_SCALE,
+                    f"peer_mean_p{member_order[member_id]}_a{agenda_order[agenda_id]}",
+                )
+                model.add_division_equality(
+                    peer_mean,
+                    sum(
+                        share_variables[(peer_id, agenda_id)]
+                        for peer_id in cohort
+                        if peer_id != member_id
+                    ),
+                    len(cohort) - 1,
+                )
                 deviation = model.new_int_var(
                     0,
                     PERCENT_SCALE,
                     f"deviation_p{member_order[member_id]}_a{agenda_order[agenda_id]}",
                 )
-                model.add_abs_equality(deviation, share_variables[(member_id, agenda_id)] - mean)
+                model.add_abs_equality(
+                    deviation,
+                    share_variables[(member_id, agenda_id)] - peer_mean,
+                )
                 deviations[(member_id, agenda_id)] = deviation
 
         person_distances: dict[str, cp_model.IntVar] = {}
@@ -925,6 +951,10 @@ class CpSatScheduler:
                 f"{member_id}:{month}": {
                     "assignments": int(last_solver.value(expression)),
                     "quota": int(members[member_id].get("managementQuota", 0)),
+                    "weeklyCap": _management_weekly_cap(
+                        int(members[member_id].get("managementQuota", 0)),
+                        month,
+                    ),
                     "deficit": (
                         int(members[member_id].get("managementQuota", 0))
                         - int(last_solver.value(expression))
@@ -1004,6 +1034,7 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
     assignment_keys: Counter[tuple[str, str, str]] = Counter()
     covered: Counter[tuple[str, str]] = Counter()
     management_counts: Counter[tuple[str, str]] = Counter()
+    management_week_counts: Counter[tuple[str, str, int, int]] = Counter()
     errors: list[str] = []
     for item in result.get("assignments", []):
         member_id = item.get("memberId")
@@ -1017,6 +1048,8 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
             elif agenda_id == "management":
                 actual_load[(member_id, value)] += 100
                 management_counts[(member_id, value[:7])] += 1
+                iso_year, iso_week, _ = date.fromisoformat(value).isocalendar()
+                management_week_counts[(member_id, value[:7], iso_year, iso_week)] += 1
             elif agenda_id in agendas:
                 actual_load[(member_id, value)] += int(agendas[agenda_id].get("loadPercentage", 100))
         if (member_id, value) not in expected:
@@ -1047,6 +1080,12 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
     for (member_id, month), count in management_counts.items():
         if count > int(members.get(member_id, {}).get("managementQuota", 0)):
             errors.append(f"management quota exceeded {member_id}:{month}")
+    for (member_id, month, iso_year, iso_week), count in management_week_counts.items():
+        quota = int(members.get(member_id, {}).get("managementQuota", 0))
+        if count > _management_weekly_cap(quota, month):
+            errors.append(
+                f"management weekly limit exceeded {member_id}:{month}:{iso_year}-W{iso_week}"
+            )
     legacy_rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
     personal_rules: list[tuple[str, dict[str, Any]]] = []
     for member_id, member in members.items():

@@ -724,6 +724,7 @@ def add_hospital(
             "id": hospital.id,
             "catalogId": hospital.catalog_id,
             "name": hospital.name,
+            "shortName": hospital.short_name,
             "address": "",
             "locationKnown": False,
         }
@@ -741,8 +742,23 @@ def add_hospital(
         **{key: value for key, value in details.items() if key not in {"geometry", "id"}},
         "id": hospital.id,
         "catalogId": catalog_id,
+        "shortName": hospital.short_name,
         "locationKnown": True,
     }
+
+
+def update_hospital_short_name(
+    session: Session,
+    hospital_id: str,
+    short_name: str | None,
+) -> dict[str, str | None]:
+    hospital = session.get(Hospital, hospital_id)
+    if not hospital:
+        raise DomainError("HOSPITAL_NOT_FOUND", "Hospital no trobat")
+    hospital.short_name = (short_name or "").strip() or None
+    bump_revision(session)
+    session.flush()
+    return {"id": hospital.id, "shortName": hospital.short_name}
 
 
 def delete_calendar_range(session: Session, start: date, end: date) -> dict[str, int]:
@@ -938,28 +954,30 @@ def _projected_fairness_score(
         if new_agenda_id in loads:
             counts[member_id][new_agenda_id] += loads[new_agenda_id]
     totals = {member_id: sum(values.values()) for member_id, values in counts.items()}
-    means: dict[str, float | None] = {}
-    for agenda_id in context["agendaIds"]:
-        comparable = [
-            member_id
-            for member_id in context["memberIds"]
-            if totals[member_id] and agenda_id in context["capabilities"][member_id]
-        ]
-        means[agenda_id] = (
-            sum(counts[member_id][agenda_id] / totals[member_id] for member_id in comparable)
-            / len(comparable)
-            if comparable
-            else None
-        )
     personal_distances: list[float] = []
     for member_id in context["memberIds"]:
         if not totals[member_id]:
             continue
-        measured = [
-            abs(counts[member_id][agenda_id] / totals[member_id] - means[agenda_id])
-            for agenda_id in context["agendaIds"]
-            if agenda_id in context["capabilities"][member_id] and means[agenda_id] is not None
-        ]
+        measured: list[float] = []
+        for agenda_id in context["agendaIds"]:
+            if agenda_id not in context["capabilities"][member_id]:
+                continue
+            peers = [
+                peer_id
+                for peer_id in context["memberIds"]
+                if peer_id != member_id
+                and totals[peer_id]
+                and agenda_id in context["capabilities"][peer_id]
+            ]
+            if not peers:
+                continue
+            peer_mean = (
+                sum(counts[peer_id][agenda_id] / totals[peer_id] for peer_id in peers)
+                / len(peers)
+            )
+            measured.append(
+                abs(counts[member_id][agenda_id] / totals[member_id] - peer_mean)
+            )
         if measured:
             personal_distances.append(sum(measured) / len(measured))
     return (

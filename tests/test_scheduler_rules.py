@@ -67,12 +67,14 @@ def problem(
     historical: dict[str, dict[str, int]] | None = None,
     optimization_mode: str = "fairness",
     schema_version: int = 2,
+    start_month: str = "2027-01",
+    end_month: str | None = None,
 ) -> ScheduleProblem:
     return ScheduleProblem(
         schema_version=schema_version,
         planning_revision=1,
-        start_month="2027-01",
-        end_month="2027-01",
+        start_month=start_month,
+        end_month=end_month or start_month,
         team=team,
         agendas=agendas,
         coverage={str(day): coverage.get(str(day), {}) for day in range(1, 6)},
@@ -810,7 +812,7 @@ def test_management_can_displace_a_low_priority_half_day() -> None:
     assert result.vacancies == [{"date": "2027-01-04", "type": "half"}]
 
 
-def test_management_prefers_friday_then_monday() -> None:
+def test_management_prefers_friday_without_repeating_calendar_week() -> None:
     team = [member("manager", [], available=[1, 2, 5], quota=5)]
     result = CpSatScheduler().solve(
         problem([], team, {}, holidays=["2027-01-01"])
@@ -820,9 +822,40 @@ def test_management_prefers_friday_then_monday() -> None:
         item for item in result.assignments if item["type"] == "management"
     ]
     weekdays = Counter(date.fromisoformat(item["date"]).isoweekday() for item in management)
+    weeks = Counter(date.fromisoformat(item["date"]).isocalendar()[:2] for item in management)
     assert result.outcome == "solution"
-    assert weekdays == {5: 4, 1: 1}
+    assert weekdays == {5: 4}
+    assert max(weeks.values()) == 1
     assert all(item["telematic"] for item in management)
+    invalid = result.to_dict()
+    repeated_week = next(
+        item
+        for item in invalid["assignments"]
+        if item["date"] == "2027-01-04" and item["type"] == "no_assignment"
+    )
+    repeated_week["type"] = "management"
+    assert any(
+        "management weekly limit exceeded" in error
+        for error in validate_solution(
+            problem([], team, {}, holidays=["2027-01-01"]),
+            invalid,
+        )
+    )
+
+
+def test_management_can_repeat_a_week_when_quota_exceeds_calendar_weeks() -> None:
+    team = [member("manager", [], available=[1, 2, 3, 4, 5], quota=5)]
+    result = CpSatScheduler().solve(
+        problem([], team, {}, start_month="2027-02")
+    )
+
+    management = [
+        item for item in result.assignments if item["type"] == "management"
+    ]
+    weeks = Counter(date.fromisoformat(item["date"]).isocalendar()[:2] for item in management)
+    assert result.outcome == "solution"
+    assert len(management) == 5
+    assert sorted(weeks.values()) == [1, 1, 1, 2]
 
 
 def test_management_prefers_a_slack_day_before_the_preferred_weekday() -> None:
@@ -896,6 +929,33 @@ def test_historical_fairness_uses_equal_weight_person_profiles() -> None:
     assert result.outcome == "solution"
     assert monday == {"veteran": "b", "newcomer": "a"}
     assert "no_assignment" not in monday.values()
+
+
+def test_historical_fairness_excludes_each_person_from_their_reference() -> None:
+    agendas = [agenda("a", priority=1), agenda("b", priority=1)]
+    absence = [{"start": "2027-01-01", "end": "2027-01-31"}]
+    team = [
+        member("profile-a", ["a", "b"], absences=absence),
+        member("balanced", ["a", "b"], absences=absence),
+        member("profile-b", ["a", "b"], absences=absence),
+    ]
+    historical = {
+        "profile-a": {"a": 8, "b": 2},
+        "balanced": {"a": 5, "b": 5},
+        "profile-b": {"a": 2, "b": 8},
+    }
+
+    result = CpSatScheduler().solve(
+        problem(agendas, team, {"1": {"a": 1, "b": 1}}, historical=historical)
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["fairness"]["personDistanceBasisPoints"] == {
+        "profile-a": 4500,
+        "balanced": 0,
+        "profile-b": 4500,
+    }
+    assert result.metrics["fairness"]["worstDistanceBasisPoints"] == 4500
 
 
 def test_scheduler_rejects_happiness_optimization_mode() -> None:

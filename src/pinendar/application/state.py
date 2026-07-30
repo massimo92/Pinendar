@@ -258,6 +258,7 @@ def import_legacy_state(session: Session, state: dict[str, Any], catalog: Hospit
                     id=item.get("id") or uid(),
                     catalog_id=catalog_id,
                     name=item.get("name") if catalog_id not in catalog.by_id else None,
+                    short_name=(item.get("shortName") or "").strip() or None,
                     address=item.get("address") if catalog_id not in catalog.by_id else None,
                     location_known=catalog_id in catalog.by_id,
                 )
@@ -716,6 +717,7 @@ def bootstrap(session: Session, catalog: HospitalCatalog) -> dict[str, Any]:
                 "id": selected.id,
                 "catalogId": selected.catalog_id,
                 "name": details.get("name") or selected.name or "Centre sense nom",
+                "shortName": selected.short_name,
                 "address": details.get("address") or details.get("streetAddress") or selected.address or "",
                 "locationKnown": selected.location_known,
             }

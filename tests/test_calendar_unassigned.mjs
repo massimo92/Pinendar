@@ -4,6 +4,7 @@ import {
   dailyAssignmentLoad,
   eligibleUnassignedMemberIds,
   vacanciesForDate,
+  visibleAbsencesForDate,
 } from '../public/calendar-utils.mjs';
 
 const members = [
@@ -68,6 +69,31 @@ assert.deepEqual(
     selectedAgendaIds: new Set(['half-a']),
   }),
   [{ date: '2026-08-01', type: 'half-a' }],
+);
+assert.deepEqual(
+  visibleAbsencesForDate({
+    savedAbsences: [{
+      memberId: 'active',
+      category: 'vacances',
+      start: '2026-08-01',
+      end: '2026-08-03',
+    }],
+    calendarAbsences: [{
+      id: 'vacation-active',
+      memberId: 'active',
+      category: 'vacances',
+      start: '2026-08-01',
+      end: '2026-08-03',
+    }],
+    date: '2026-08-02',
+  }),
+  [{
+    id: 'vacation-active',
+    memberId: 'active',
+    category: 'vacances',
+    start: '2026-08-01',
+    end: '2026-08-03',
+  }],
 );
 
 const incidents = calendarIncidentsForDate({

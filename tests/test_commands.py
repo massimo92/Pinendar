@@ -3,7 +3,13 @@ from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from pinendar.application.commands import color_hue, madrid_today, random_color
+from pinendar.application.commands import (
+    _fairness_result,
+    _projected_fairness_score,
+    color_hue,
+    madrid_today,
+    random_color,
+)
 from pinendar.application.jobs import build_problem
 from pinendar.application.state import import_calendar_record, serialize_calendar
 from pinendar.infrastructure.models import (
@@ -61,6 +67,37 @@ def create_manual_planning_member(
     )
     assert response.status_code == 201
     return response.json()
+
+
+def test_exchange_fairness_excludes_each_person_from_their_reference() -> None:
+    context = {
+        "memberIds": ["profile-a", "balanced", "profile-b"],
+        "agendaIds": ["a", "b"],
+        "loads": {"a": 1.0, "b": 1.0},
+        "counts": {
+            "profile-a": {"a": 8.0, "b": 2.0},
+            "balanced": {"a": 5.0, "b": 5.0},
+            "profile-b": {"a": 2.0, "b": 8.0},
+        },
+        "capabilities": {
+            "profile-a": {"a", "b"},
+            "balanced": {"a", "b"},
+            "profile-b": {"a", "b"},
+        },
+    }
+
+    baseline = _projected_fairness_score(context, [])
+    projected = _projected_fairness_score(
+        context,
+        [
+            ("profile-a", "a", "b"),
+            ("profile-b", "b", "a"),
+        ],
+    )
+
+    assert baseline == (4500, 9000)
+    assert projected == (3000, 6000)
+    assert _fairness_result(baseline, projected)["fairnessEffect"] == "improves"
 
 
 def same_load_agendas(state: dict) -> tuple[dict, dict]:
@@ -1242,6 +1279,30 @@ def test_selected_hospital_response_uses_database_id_for_removal(authenticated_c
     )
     assert selected["id"] == hospital["id"]
     assert authenticated_client.delete(f"/api/v1/selected-hospitals/{hospital['id']}").status_code == 204
+
+
+def test_selected_hospital_short_name_can_be_saved_and_cleared(
+    authenticated_client: TestClient,
+) -> None:
+    hospital = authenticated_client.get("/api/v1/bootstrap").json()["hospitals"][0]
+
+    saved = authenticated_client.patch(
+        f"/api/v1/selected-hospitals/{hospital['id']}",
+        json={"shortName": "TRU"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.json() == {"id": hospital["id"], "shortName": "TRU"}
+    selected = authenticated_client.get("/api/v1/bootstrap").json()["hospitals"]
+    assert next(item for item in selected if item["id"] == hospital["id"])["shortName"] == "TRU"
+
+    cleared = authenticated_client.patch(
+        f"/api/v1/selected-hospitals/{hospital['id']}",
+        json={"shortName": ""},
+    )
+
+    assert cleared.status_code == 200
+    assert cleared.json()["shortName"] is None
 
 
 def test_manual_hospital_is_saved_without_map_location(authenticated_client: TestClient) -> None:

@@ -43,7 +43,7 @@ La tabla es el valor inicial y puede editarse en cada agenda. Una regla especial
 13. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
 14. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
 15. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
-16. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas.
+16. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas. Se limita a un día por semana natural; si la cuota supera el número de semanas naturales del mes, el límite semanal aumenta solo hasta lo necesario para que la cuota sea alcanzable.
 
 Una asignación manual bloqueada se conserva como regla dura al regenerar su periodo. Si vuelve imposible el cálculo, la regeneración falla sin cambiar el calendario.
 
@@ -78,7 +78,7 @@ Las preferencias por agenda usan +1 para corazón, −1 para pulgar abajo y 0 cu
 ## Flujo de uso
 
 1. Configurar equipo, cobertura, festivos, guardias, vacaciones y reglas.
-2. Generar un mes y revisar cobertura, vacantes resaltadas en rojo, personas sin agenda en violeta, agendas parciales en naranja y estadísticas de equidad. Las vistas de día, semana y mes muestran indicadores diarios; los KPIs del periodo visible cuentan vacantes y días-persona sin agenda. Día y semana agrupan los eventos por hospital y muestran turno y carga, también en las vacantes, sin repetir el hospital dentro de cada tarjeta. En el mes, las asignaciones muestran solo el nombre de la persona y se identifican por el color de agenda. Las tarjetas de día y semana colocan turno y carga junto al nombre de la agenda. El desplegable de edición agrupa las opciones por hospital y no repite el hospital dentro de cada opción.
+2. Generar un mes y revisar cobertura, vacantes resaltadas en rojo, personas sin agenda en violeta, agendas parciales en naranja y estadísticas de equidad. Las vistas de día, semana y mes muestran indicadores diarios; los KPIs del periodo visible cuentan vacantes y días-persona sin agenda. Día y semana agrupan los eventos por hospital y muestran turno y carga, también en las vacantes, sin repetir el hospital dentro de cada tarjeta. En el mes, las asignaciones muestran solo el nombre de la persona y se identifican por el color de agenda. Las tarjetas de día y semana colocan turno y carga junto al nombre de la agenda. El desplegable de edición agrupa las opciones por hospital y no repite el hospital dentro de cada opción. Estadísticas añade una señal de capacidad sobre las últimas ocho semanas: exige al menos cuatro, distingue presión puntual de déficit estructural probable por volumen, persistencia y concentración, y solo habla de holgura probable cuando no hay vacantes y persisten días-persona sin asignar.
 3. Ajustar manualmente el calendario:
    - Si la persona ya tiene una agenda, intercambiar de forma atómica su asignación con otra persona compatible del mismo día y carga. Las opciones se ordenan por mejora de equidad. Una asignación fija solo puede cambiarse entrando directamente en ella y confirmando un aviso previo; nunca aparece como destino desde otra persona. La excepción afecta únicamente al evento y conserva la regla recurrente del perfil.
    - Si la persona no tiene actividad, abrir y asignarle una plaza extraordinaria compatible con su perfil y las reglas duras. Esta plaza cuenta en carga, histórico y equidad, pero no altera la demanda ordinaria ni sus vacantes.
@@ -94,7 +94,7 @@ Si un periodo ya contiene eventos o vacantes, la aplicación muestra las cantida
 - **Equipo**: perfiles, estado activo auditado, patrones de trabajo semanales o alternantes, capacidades, gestión, reglas, vacaciones y archivo.
 - **Agendas**: hospital, modalidad, prioridad, cobertura semanal y reglas especiales recurrentes.
 - **Guardias y festivos**: formularios simples y listado.
-- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, métrica propia de Gestión y evolución.
+- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, señal prudente de capacidad de plantilla y gráfico acumulado con selector entre equidad/felicidad y resolución diaria/mensual.
 - **Ajustes**: idioma, hospitales y festivos.
 - **Guía de uso**: explicación no técnica del flujo, las reglas, los criterios de reparto, los avisos y los cambios manuales.
 

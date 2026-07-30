@@ -42,6 +42,7 @@ class Hospital(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     catalog_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String)
+    short_name: Mapped[str | None] = mapped_column(String(20))
     address: Mapped[str | None] = mapped_column(String)
     location_known: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 
 import {
   MANAGEMENT_ACTIVITY,
+  assignmentExchangePreviewLabels,
   compactActivityMeta,
   compactHospitalName,
   historicalActivityCounts,
+  historicalEquityAnalysis,
+  historicalEquityTimeline,
+  hospitalInitials,
+  operationalEquityAnalysis,
   planningActivities,
   planningActivityGroups,
   sortByName,
@@ -22,10 +27,26 @@ assert.equal(MANAGEMENT_ACTIVITY.telematic, true);
 assert.equal(compactActivityMeta({ id: 'morning-full', shift: 'morning', loadPercentage: 100 }), 'M · C');
 assert.equal(compactActivityMeta({ id: 'afternoon-half', shift: 'afternoon', loadPercentage: 50 }), 'T · P');
 assert.equal(compactActivityMeta(MANAGEMENT_ACTIVITY), 'C');
-assert.equal(compactHospitalName({ name: 'Hospital Universitari de Girona Dr. Josep Trueta' }), 'Trueta');
-assert.equal(compactHospitalName({ name: 'Hospital Santa Caterina-Ias' }), 'Santa Caterina');
-assert.equal(compactHospitalName({ name: "Hospital d'Olot i Comarcal de la Garrotxa" }), 'Olot');
-assert.equal(compactHospitalName({ name: 'CAP Güell' }), 'CAP Güell');
+assert.equal(hospitalInitials("Hospital d'Olot i Comarcal de la Garrotxa"), 'HOCG');
+assert.equal(hospitalInitials('Hospital Santa Caterina-Ias'), 'HSC');
+assert.equal(hospitalInitials('Hospital Universitari de Girona Dr. Josep Trueta'), 'HUGDJT');
+assert.equal(hospitalInitials('CAP Güell'), 'CG');
+assert.equal(compactHospitalName({ shortName: 'Trueta', name: 'Hospital Universitari de Girona Dr. Josep Trueta' }), 'Trueta');
+assert.equal(compactHospitalName({ shortName: '  ', name: 'Hospital Santa Caterina-Ias' }), 'HSC');
+assert.deepEqual(
+  assignmentExchangePreviewLabels({
+    sourceAgenda: { name: 'Eco', hospitalId: 'trueta' },
+    targetAgenda: { name: 'TAC', hospitalId: 'bellvitge' },
+    hospitals: [
+      { catalogId: 'trueta', name: 'Hospital Universitari de Girona Dr. Josep Trueta' },
+      { catalogId: 'bellvitge', name: 'Hospital Universitari de Bellvitge' },
+    ],
+  }),
+  {
+    sourceToTarget: 'Eco · HUGDJT → TAC · HUB',
+    targetToSource: 'TAC · HUB → Eco · HUGDJT',
+  },
+);
 
 const counts = historicalActivityCounts(
   [{ id: 'person-a' }, { id: 'person-b' }],
@@ -59,5 +80,78 @@ const grouped = planningActivityGroups({
 assert.deepEqual(grouped.map((group) => group.label), ['Banyoles', 'Trueta', 'Altres activitats']);
 assert.deepEqual(grouped[1].items.map((item) => item.name), ['Àgata', 'Zulu']);
 assert.deepEqual(grouped[2].items.map((item) => item.id), ['management']);
+
+const equityActivities = [
+  { id: 'general', name: 'General', loadPercentage: 100 },
+  { id: 'olot', name: 'Olot', loadPercentage: 100 },
+  { id: 'gestio', name: 'Gestió', loadPercentage: 100 },
+];
+const equityMembers = [{ id: 'old' }, { id: 'new' }];
+const equityAssignments = [
+  { date: '2024-01-08', memberId: 'old', type: 'general' },
+  { date: '2025-01-08', memberId: 'old', type: 'general' },
+  { date: '2026-01-08', memberId: 'old', type: 'general' },
+  { date: '2026-01-08', memberId: 'new', type: 'olot' },
+  { date: '2026-01-09', memberId: 'old', type: 'gestio', fixed: true },
+];
+const equity = historicalEquityAnalysis({
+  members: equityMembers,
+  activities: equityActivities,
+  assignments: equityAssignments,
+});
+assert.deepEqual(equity.activities.map((item) => item.id), ['general', 'olot']);
+assert.equal(equity.memberDetails.old.startDate, '2024-01-08');
+assert.equal(equity.memberDetails.new.startDate, '2026-01-08');
+assert.equal(equity.memberDetails.old.cells.find((cell) => cell.agenda.id === 'olot').historicalWeight, 0.25);
+assert.equal(equity.memberDetails.new.cells.find((cell) => cell.agenda.id === 'olot').historicalWeight, 0.5);
+assert.equal(equity.memberScores.old, 0, 'Un reparto concentrado no se excusa por capacidades o reglas');
+assert.equal(equity.memberScores.new, 0, 'La persona evaluada debe excluirse de la media del equipo');
+
+const balancedEquity = historicalEquityAnalysis({
+  members: equityMembers,
+  activities: equityActivities,
+  assignments: [
+    { date: '2026-01-08', memberId: 'old', type: 'general' },
+    { date: '2026-01-09', memberId: 'old', type: 'olot' },
+    { date: '2026-01-08', memberId: 'new', type: 'general' },
+    { date: '2026-01-09', memberId: 'new', type: 'olot' },
+  ],
+});
+assert.equal(balancedEquity.memberScores.old, 100);
+assert.equal(balancedEquity.memberScores.new, 100);
+assert.equal(balancedEquity.globalScore, 100);
+
+const operationalEquity = operationalEquityAnalysis({
+  members: [
+    { id: 'person-a', allowedTypes: ['general', 'olot', 'remote'] },
+    { id: 'person-b', allowedTypes: ['general', 'olot', 'remote'] },
+  ],
+  activities: [
+    { id: 'general', name: 'General', loadPercentage: 100 },
+    { id: 'olot', name: 'Olot', loadPercentage: 100 },
+    { id: 'remote', name: 'Remota', loadPercentage: 100 },
+  ],
+  assignments: [
+    ...Array.from({ length: 8 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-a', type: 'general' })),
+    ...Array.from({ length: 2 }, (_, index) => ({ date: `2026-01-${String(index + 9).padStart(2, '0')}`, memberId: 'person-a', type: 'olot' })),
+    ...Array.from({ length: 6 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-b', type: 'general' })),
+    ...Array.from({ length: 3 }, (_, index) => ({ date: `2026-01-${String(index + 7).padStart(2, '0')}`, memberId: 'person-b', type: 'olot' })),
+    { date: '2026-01-10', memberId: 'person-b', type: 'remote' },
+  ],
+});
+assert.equal(operationalEquity.memberScores['person-a'], 80, 'La referencia operativa debe excluir a la persona evaluada');
+assert.equal(operationalEquity.memberScores['person-b'], 80);
+assert.equal(operationalEquity.globalScore, 80);
+assert.equal(operationalEquity.worstScore, 80);
+
+const equityTimeline = historicalEquityTimeline({
+  members: equityMembers,
+  activities: equityActivities,
+  assignments: equityAssignments,
+  resolution: 'month',
+});
+assert.deepEqual(equityTimeline.dates, ['2024-01-08', '2025-01-08', '2026-01-08']);
+assert.equal(equityTimeline.series.old.at(-1).value, equity.memberScores.old / 100);
+assert.equal(equityTimeline.series.new.at(-1).value, equity.memberScores.new / 100);
 
 console.log('activity-utils tests passed');

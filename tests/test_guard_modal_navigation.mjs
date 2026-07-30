@@ -61,8 +61,14 @@ assert.match(
 
 assert.match(
   appSource,
-  /data-happiness-legend-name[\s\S]*?is-filtered-out/,
+  /data-happiness-legend-name[\s\S]*?is-selected/,
   'La leyenda de felicidad debe permitir filtrar varias series',
+);
+
+assert.match(
+  appSource,
+  /data-happiness-legend-name[\s\S]*?is-previewed/,
+  'La leyenda debe previsualizar la línea al pasar el ratón o el foco',
 );
 
 assert.match(

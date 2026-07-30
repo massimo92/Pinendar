@@ -42,6 +42,7 @@ export const api = {
   searchHospitals: (query) => request(`/api/v1/hospitals?query=${encodeURIComponent(query)}`),
   hospitalDetails: (id) => request(`/api/v1/hospitals/${encodeURIComponent(id)}`),
   selectHospital: (body) => request('/api/v1/selected-hospitals', json('POST', body)),
+  updateHospitalAlias: (id, shortName) => request(`/api/v1/selected-hospitals/${encodeURIComponent(id)}`, json('PATCH', { shortName })),
   removeHospital: (id) => request(`/api/v1/selected-hospitals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   saveMember: (id, body) => request(id ? `/api/v1/members/${encodeURIComponent(id)}` : '/api/v1/members', json(id ? 'PUT' : 'POST', body)),
   deleteMember: (id) => request(`/api/v1/members/${encodeURIComponent(id)}`, { method: 'DELETE' }),
