@@ -841,6 +841,7 @@ def _validate_clinical_assignment(
     agenda_id: str,
     *,
     exclude_assignment_ids: set[str] | None = None,
+    maximum_daily_load: int = 100,
 ) -> Agenda:
     excluded = exclude_assignment_ids or set()
     agenda = session.get(Agenda, agenda_id)
@@ -898,14 +899,153 @@ def _validate_clinical_assignment(
             field="agendaId",
         )
     daily_load = agenda.load_percentage + sum(item.load_percentage for item in sibling_agendas)
-    if daily_load not in {50, 100}:
+    valid_loads = {value for value in (50, 100, 150, 200) if value <= maximum_daily_load}
+    if daily_load not in valid_loads:
         raise DomainError(
             "INVALID_DAILY_LOAD",
-            "La càrrega diària de la persona ha de sumar el 50% o el 100%",
+            f"La càrrega diària de la persona no pot superar el {maximum_daily_load}%",
             field="agendaId",
             details={"loadPercentage": daily_load},
         )
     return agenda
+
+
+def _clinical_day_rows(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+) -> list[Assignment]:
+    return list(
+        session.scalars(
+            select(Assignment)
+            .where(
+                Assignment.member_id == member_id,
+                Assignment.date == assignment_date,
+                Assignment.kind == "assigned",
+                Assignment.agenda_id.is_not(None),
+            )
+            .order_by(Assignment.id)
+        )
+    )
+
+
+def _peonada_person_details(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+    *,
+    aliases: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    member = session.get(Member, member_id)
+    rows = _clinical_day_rows(session, member_id, assignment_date)
+    reverse_aliases = {value: key for key, value in (aliases or {}).items()}
+    total = sum(item.load_percentage for item in rows)
+    return {
+        "memberId": member_id,
+        "memberName": member.name if member else "—",
+        "date": assignment_date.isoformat(),
+        "totalLoadPercentage": total,
+        "minimumPeonadaLoadPercentage": max(total - 100, 0),
+        "assignments": [
+            {
+                "id": reverse_aliases.get(item.id, item.id),
+                "agendaId": item.agenda_id,
+                "loadPercentage": item.load_percentage,
+                "peonada": item.peonada,
+            }
+            for item in rows
+        ],
+    }
+
+
+def _apply_peonada_selections(
+    session: Session,
+    people: list[tuple[str, date]],
+    selections: dict[str, list[str]] | None,
+    *,
+    aliases: dict[str, dict[str, str]] | None = None,
+    reset_existing: bool = False,
+) -> list[dict[str, Any]]:
+    unique_people = list(dict.fromkeys(people))
+    if reset_existing:
+        for member_id, assignment_date in unique_people:
+            for item in _clinical_day_rows(session, member_id, assignment_date):
+                item.peonada = False
+    details = [
+        _peonada_person_details(
+            session,
+            member_id,
+            assignment_date,
+            aliases=(aliases or {}).get(member_id),
+        )
+        for member_id, assignment_date in unique_people
+    ]
+    for person in details:
+        if person["totalLoadPercentage"] > 200:
+            raise DomainError(
+                "MAX_DAILY_LOAD_EXCEEDED",
+                "Una persona no pot superar el 200% de càrrega diària",
+                details={"people": details},
+            )
+    requires_review = any(
+        person["totalLoadPercentage"] > 100
+        or any(item["peonada"] for item in person["assignments"])
+        for person in details
+    )
+    if requires_review and selections is None:
+        raise DomainError(
+            "PEONADA_REVIEW_REQUIRED",
+            "Cal revisar quines assignacions són peonades",
+            details={"people": details},
+        )
+    selections = selections or {}
+    for person, (member_id, assignment_date) in zip(details, unique_people, strict=True):
+        rows = _clinical_day_rows(session, member_id, assignment_date)
+        alias_map = (aliases or {}).get(member_id, {})
+        selected_tokens = set(selections.get(member_id, []))
+        selected_ids = {alias_map.get(item, item) for item in selected_tokens}
+        valid_ids = {item.id for item in rows}
+        if selected_ids - valid_ids:
+            raise DomainError(
+                "INVALID_PEONADA_SELECTION",
+                "La selecció de peonades no és vàlida",
+                details={"people": details},
+            )
+        selected_load = sum(
+            item.load_percentage for item in rows if item.id in selected_ids
+        )
+        total = int(person["totalLoadPercentage"])
+        if total <= 100 and selected_ids:
+            raise DomainError(
+                "PEONADA_NOT_REQUIRED",
+                "Amb una càrrega de fins al 100% no cal marcar cap peonada",
+                details={"people": details},
+            )
+        if total > 100 and total - selected_load != 100:
+            message = (
+                "Cal marcar prou assignacions perquè la càrrega ordinària sigui del 100%"
+                if total - selected_load > 100
+                else "No es pot marcar tanta càrrega com a peonada: la càrrega ordinària ha de ser del 100%"
+            )
+            raise DomainError(
+                "PEONADA_REQUIRED",
+                message,
+                details={"people": details},
+            )
+        for item in rows:
+            item.peonada = item.id in selected_ids
+            if requires_review:
+                item.locked = True
+                item.manually_modified = True
+    return [
+        _peonada_person_details(
+            session,
+            member_id,
+            assignment_date,
+            aliases=(aliases or {}).get(member_id),
+        )
+        for member_id, assignment_date in unique_people
+    ]
 
 
 def _fairness_context(session: Session) -> dict[str, Any]:
@@ -1036,6 +1176,7 @@ def _validate_exchange(
         source.date,
         target.agenda_id,
         exclude_assignment_ids={source.id},
+        maximum_daily_load=200,
     )
     _validate_clinical_assignment(
         session,
@@ -1043,8 +1184,78 @@ def _validate_exchange(
         target.date,
         source.agenda_id,
         exclude_assignment_ids={target.id},
+        maximum_daily_load=200,
     )
     return source_agenda, target_agenda
+
+
+def _validate_vacancy_change(
+    session: Session,
+    source: Assignment,
+    vacancy: Vacancy,
+    *,
+    allow_fixed_source: bool = False,
+) -> tuple[Agenda, Agenda]:
+    if vacancy.date != source.date:
+        raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquesta vacant ja no està disponible")
+    if (
+        source.kind != "assigned"
+        or not source.agenda_id
+        or source.management
+        or source.agenda_id == vacancy.agenda_id
+    ):
+        raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquesta assignació no es pot canviar per la vacant")
+    if source.fixed and not allow_fixed_source:
+        raise DomainError(
+            "FIXED_ASSIGNMENT_CONFIRMATION_REQUIRED",
+            "Cal confirmar el canvi d'una assignació fixa",
+        )
+    source_agenda = session.get(Agenda, source.agenda_id)
+    target_agenda = _validate_clinical_assignment(
+        session,
+        source.member_id,
+        source.date,
+        vacancy.agenda_id,
+        exclude_assignment_ids={source.id},
+        maximum_daily_load=200,
+    )
+    if not source_agenda:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    return source_agenda, target_agenda
+
+
+def _validate_transfer(
+    session: Session,
+    source: Assignment,
+    target_member_id: str,
+    *,
+    allow_fixed_source: bool = False,
+) -> Agenda:
+    if (
+        source.kind != "assigned"
+        or not source.agenda_id
+        or source.management
+        or source.member_id == target_member_id
+    ):
+        raise DomainError("TRANSFER_NOT_ALLOWED", "Aquesta assignació no es pot cedir")
+    if len(_clinical_day_rows(session, source.member_id, source.date)) <= 1:
+        raise DomainError(
+            "TRANSFER_REQUIRES_MULTIPLE_ASSIGNMENTS",
+            "Només es pot cedir una agenda si la persona en té més d'una aquest dia",
+        )
+    if source.fixed and not allow_fixed_source:
+        raise DomainError(
+            "FIXED_ASSIGNMENT_CONFIRMATION_REQUIRED",
+            "Cal confirmar el canvi d'una assignació fixa",
+        )
+    _validate_member_planifiable(session, target_member_id, source.date)
+    return _validate_clinical_assignment(
+        session,
+        target_member_id,
+        source.date,
+        source.agenda_id,
+        maximum_daily_load=200,
+    )
 
 
 def exchange_options(
@@ -1096,9 +1307,37 @@ def exchange_options(
         target_member = session.get(Member, target.member_id)
         options.append(
             {
+                "optionType": "assignment",
                 "targetAssignmentId": target.id,
                 "targetMemberId": target.member_id,
                 "targetMemberName": target_member.name if target_member else "—",
+                "targetAgendaId": target_agenda.id,
+                **_fairness_result(baseline, projected),
+            }
+        )
+    vacancies = list(
+        session.scalars(
+            select(Vacancy).where(Vacancy.date == source.date).order_by(Vacancy.id)
+        )
+    )
+    for vacancy in vacancies:
+        try:
+            source_agenda, target_agenda = _validate_vacancy_change(
+                session,
+                source,
+                vacancy,
+                allow_fixed_source=include_fixed,
+            )
+        except DomainError:
+            continue
+        projected = _projected_fairness_score(
+            context,
+            [(source.member_id, source_agenda.id, target_agenda.id)],
+        )
+        options.append(
+            {
+                "optionType": "vacancy",
+                "targetVacancyId": vacancy.id,
                 "targetAgendaId": target_agenda.id,
                 **_fairness_result(baseline, projected),
             }
@@ -1107,7 +1346,7 @@ def exchange_options(
         key=lambda item: (
             -int(item["fairnessWorstDeltaBasisPoints"]),
             -int(item["fairnessDeltaBasisPoints"]),
-            str(item["targetMemberName"]).casefold(),
+            str(item.get("targetMemberName", "Vacant")).casefold(),
             str(item["targetAgendaId"]),
         )
     )
@@ -1124,13 +1363,71 @@ def exchange_options(
 def exchange_assignments(
     session: Session,
     assignment_id: str,
-    target_assignment_id: str,
+    target_assignment_id: str | None = None,
+    target_vacancy_id: int | None = None,
     *,
     confirm_fixed: bool = False,
+    peonada_selections: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     source = session.get(Assignment, assignment_id)
+    if not source:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    if bool(target_assignment_id) == bool(target_vacancy_id):
+        raise DomainError(
+            "EXCHANGE_TARGET_REQUIRED",
+            "Cal seleccionar una assignació o una vacant",
+        )
+    if target_vacancy_id is not None:
+        vacancy = session.get(Vacancy, target_vacancy_id)
+        if not vacancy:
+            raise DomainError("VACANCY_NOT_FOUND", "Vacant no trobada")
+        source_agenda, target_agenda = _validate_vacancy_change(
+            session,
+            source,
+            vacancy,
+            allow_fixed_source=confirm_fixed,
+        )
+        was_extra = source.extra
+        source.agenda_id = target_agenda.id
+        source.load_percentage = target_agenda.load_percentage
+        source.extra = False
+        source.fixed = False
+        source.locked = True
+        source.manually_modified = True
+        if not was_extra:
+            session.add(
+                Vacancy(
+                    generation_job_id=source.generation_job_id,
+                    date=source.date,
+                    agenda_id=source_agenda.id,
+                )
+            )
+        session.delete(vacancy)
+        peonada = _apply_peonada_selections(
+            session,
+            [(source.member_id, source.date)],
+            peonada_selections,
+            reset_existing=True,
+        )
+        bump_revision(session)
+        return {
+            "source": {
+                "id": source.id,
+                "memberId": source.member_id,
+                "type": source.agenda_id,
+                "extra": False,
+                "fixed": False,
+                "locked": True,
+                "peonada": source.peonada,
+            },
+            "vacancy": {
+                "filledId": target_vacancy_id,
+                "createdAgendaId": source_agenda.id if not was_extra else None,
+            },
+            "peonadaReview": peonada,
+        }
     target = session.get(Assignment, target_assignment_id)
-    if not source or not target:
+    if not target:
         raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
     source_agenda, target_agenda = _validate_exchange(
         session,
@@ -1151,6 +1448,12 @@ def exchange_assignments(
     target.locked = True
     source.manually_modified = True
     target.manually_modified = True
+    peonada = _apply_peonada_selections(
+        session,
+        [(source.member_id, source.date), (target.member_id, target.date)],
+        peonada_selections,
+        reset_existing=True,
+    )
     bump_revision(session)
     return {
         "source": {
@@ -1158,6 +1461,7 @@ def exchange_assignments(
             "memberId": source.member_id,
             "type": source.agenda_id,
             "extra": source.extra,
+            "peonada": source.peonada,
             "fixed": False,
             "locked": True,
         },
@@ -1166,10 +1470,301 @@ def exchange_assignments(
             "memberId": target.member_id,
             "type": target.agenda_id,
             "extra": target.extra,
+            "peonada": target.peonada,
             "fixed": False,
             "locked": True,
         },
+        "peonadaReview": peonada,
     }
+
+
+def transfer_options(
+    session: Session,
+    assignment_id: str,
+    *,
+    include_fixed: bool = False,
+) -> dict[str, Any]:
+    source = session.get(Assignment, assignment_id)
+    if not source:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    context = _fairness_context(session)
+    baseline = _projected_fairness_score(context, [])
+    options: list[dict[str, Any]] = []
+    members = list(
+        session.scalars(
+            select(Member)
+            .where(
+                Member.id != source.member_id,
+                Member.archived_at.is_(None),
+                Member.is_active.is_(True),
+            )
+            .order_by(Member.name, Member.id)
+        )
+    )
+    for member in members:
+        try:
+            source_agenda = _validate_transfer(
+                session,
+                source,
+                member.id,
+                allow_fixed_source=include_fixed,
+            )
+        except DomainError:
+            continue
+        rows = _clinical_day_rows(session, member.id, source.date)
+        current_load = sum(item.load_percentage for item in rows)
+        projected = _projected_fairness_score(
+            context,
+            [
+                (source.member_id, source_agenda.id, None),
+                (member.id, None, source_agenda.id),
+            ],
+        )
+        options.append(
+            {
+                "targetMemberId": member.id,
+                "targetMemberName": member.name,
+                "currentLoadPercentage": current_load,
+                "projectedLoadPercentage": current_load
+                + source_agenda.load_percentage,
+                "requiresPeonadaReview": (
+                    current_load + source_agenda.load_percentage > 100
+                ),
+                **_fairness_result(baseline, projected),
+            }
+        )
+    options.sort(
+        key=lambda item: (
+            -int(item["fairnessWorstDeltaBasisPoints"]),
+            -int(item["fairnessDeltaBasisPoints"]),
+            str(item["targetMemberName"]).casefold(),
+        )
+    )
+    return {
+        "assignmentId": source.id,
+        "memberId": source.member_id,
+        "agendaId": source.agenda_id,
+        "date": source.date.isoformat(),
+        "sourceFixed": source.fixed,
+        "options": options,
+    }
+
+
+def transfer_assignment(
+    session: Session,
+    assignment_id: str,
+    target_member_id: str,
+    *,
+    confirm_fixed: bool = False,
+    peonada_selections: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    source = session.get(Assignment, assignment_id)
+    if not source:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "Assignació no trobada")
+    source_member_id = source.member_id
+    assignment_date = source.date
+    _validate_transfer(
+        session,
+        source,
+        target_member_id,
+        allow_fixed_source=confirm_fixed,
+    )
+    no_assignment_rows = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.member_id == target_member_id,
+                Assignment.date == assignment_date,
+                Assignment.kind == "no_assignment",
+            )
+        )
+    )
+    for item in no_assignment_rows:
+        session.delete(item)
+    source.member_id = target_member_id
+    source.fixed = False
+    source.locked = True
+    source.manually_modified = True
+    peonada = _apply_peonada_selections(
+        session,
+        [
+            (source_member_id, assignment_date),
+            (target_member_id, assignment_date),
+        ],
+        peonada_selections,
+        reset_existing=True,
+    )
+    bump_revision(session)
+    return {
+        "id": source.id,
+        "date": source.date.isoformat(),
+        "sourceMemberId": source_member_id,
+        "targetMemberId": source.member_id,
+        "type": source.agenda_id,
+        "fixed": False,
+        "locked": True,
+        "peonada": source.peonada,
+        "peonadaReview": peonada,
+    }
+
+
+def vacancy_assignment_options(
+    session: Session,
+    vacancy_id: int,
+) -> dict[str, Any]:
+    vacancy = session.get(Vacancy, vacancy_id)
+    if not vacancy:
+        raise DomainError("VACANCY_NOT_FOUND", "Vacant no trobada")
+    agenda = session.get(Agenda, vacancy.agenda_id)
+    if not agenda:
+        raise DomainError("AGENDA_NOT_FOUND", "Agenda no trobada")
+    context = _fairness_context(session)
+    baseline = _projected_fairness_score(context, [])
+    options: list[dict[str, Any]] = []
+    members = list(
+        session.scalars(
+            select(Member)
+            .where(Member.archived_at.is_(None), Member.is_active.is_(True))
+            .order_by(Member.name, Member.id)
+        )
+    )
+    for member in members:
+        try:
+            _validate_member_planifiable(session, member.id, vacancy.date)
+            _validate_clinical_assignment(
+                session,
+                member.id,
+                vacancy.date,
+                agenda.id,
+                maximum_daily_load=200,
+            )
+        except DomainError:
+            continue
+        rows = _clinical_day_rows(session, member.id, vacancy.date)
+        current_load = sum(item.load_percentage for item in rows)
+        projected = _projected_fairness_score(
+            context,
+            [(member.id, None, agenda.id)],
+        )
+        options.append(
+            {
+                "memberId": member.id,
+                "memberName": member.name,
+                "currentLoadPercentage": current_load,
+                "projectedLoadPercentage": current_load + agenda.load_percentage,
+                "requiresPeonadaReview": (
+                    current_load + agenda.load_percentage > 100
+                    or any(item.peonada for item in rows)
+                ),
+                **_fairness_result(baseline, projected),
+            }
+        )
+    options.sort(
+        key=lambda item: (
+            -int(item["fairnessWorstDeltaBasisPoints"]),
+            -int(item["fairnessDeltaBasisPoints"]),
+            str(item["memberName"]).casefold(),
+        )
+    )
+    return {
+        "vacancyId": vacancy.id,
+        "agendaId": vacancy.agenda_id,
+        "date": vacancy.date.isoformat(),
+        "options": options,
+    }
+
+
+def assign_vacancy(
+    session: Session,
+    vacancy_id: int,
+    member_id: str,
+    *,
+    peonada_selections: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    vacancy = session.get(Vacancy, vacancy_id)
+    if not vacancy:
+        raise DomainError("VACANCY_NOT_FOUND", "Vacant no trobada")
+    _validate_member_planifiable(session, member_id, vacancy.date)
+    agenda = _validate_clinical_assignment(
+        session,
+        member_id,
+        vacancy.date,
+        vacancy.agenda_id,
+        maximum_daily_load=200,
+    )
+    no_assignment_rows = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.member_id == member_id,
+                Assignment.date == vacancy.date,
+                Assignment.kind == "no_assignment",
+            )
+        )
+    )
+    for item in no_assignment_rows:
+        session.delete(item)
+    assignment = Assignment(
+        id=uid(),
+        generation_job_id=vacancy.generation_job_id,
+        date=vacancy.date,
+        member_id=member_id,
+        agenda_id=agenda.id,
+        kind="assigned",
+        load_percentage=agenda.load_percentage,
+        locked=True,
+        fixed=False,
+        extra=False,
+        peonada=False,
+        manually_modified=True,
+        management=False,
+    )
+    session.add(assignment)
+    session.delete(vacancy)
+    peonada = _apply_peonada_selections(
+        session,
+        [(member_id, assignment.date)],
+        peonada_selections,
+        aliases={member_id: {"new": assignment.id}},
+        reset_existing=True,
+    )
+    bump_revision(session)
+    return {
+        "id": assignment.id,
+        "date": assignment.date.isoformat(),
+        "memberId": assignment.member_id,
+        "type": assignment.agenda_id,
+        "locked": True,
+        "extra": False,
+        "peonada": assignment.peonada,
+        "peonadaReview": peonada,
+    }
+
+
+def peonada_options(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+) -> dict[str, Any]:
+    details = _peonada_person_details(session, member_id, assignment_date)
+    if not details["assignments"]:
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "No hi ha assignacions per revisar")
+    return details
+
+
+def update_peonadas(
+    session: Session,
+    member_id: str,
+    assignment_date: date,
+    assignment_ids: list[str],
+) -> dict[str, Any]:
+    if not _clinical_day_rows(session, member_id, assignment_date):
+        raise DomainError("ASSIGNMENT_NOT_FOUND", "No hi ha assignacions per revisar")
+    people = _apply_peonada_selections(
+        session,
+        [(member_id, assignment_date)],
+        {member_id: assignment_ids},
+    )
+    bump_revision(session)
+    return people[0]
 
 
 def _unassigned_rows(
@@ -1276,6 +1871,7 @@ def open_extra_assignment(
     assignment.locked = True
     assignment.fixed = False
     assignment.extra = True
+    assignment.peonada = False
     assignment.manually_modified = True
     assignment.management = False
     bump_revision(session)
@@ -1311,6 +1907,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
         assignment.locked = True
         assignment.fixed = False
         assignment.extra = False
+        assignment.peonada = False
         assignment.manually_modified = True
         assignment.management = False
         bump_revision(session)
@@ -1360,6 +1957,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
         assignment.locked = True
         assignment.fixed = False
         assignment.extra = False
+        assignment.peonada = False
         assignment.manually_modified = True
         assignment.management = True
         bump_revision(session)
@@ -1413,6 +2011,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
     assignment.locked = True
     assignment.fixed = False
     assignment.extra = False
+    assignment.peonada = False
     assignment.manually_modified = True
     assignment.management = False
     bump_revision(session)

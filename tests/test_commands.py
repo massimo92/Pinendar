@@ -880,6 +880,434 @@ def test_invalid_exchange_is_rejected_without_changing_either_assignment(
         assert target and target.agenda_id == second_agenda["id"]
 
 
+def test_assignment_can_change_to_a_vacant_agenda_with_fairness_impact(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    first_agenda, second_agenda = same_load_agendas(state)
+    member = create_manual_planning_member(
+        authenticated_client,
+        name="Canvi a vacant",
+        email="canvi-vacant@hospital.test",
+        agenda_ids=[first_agenda["id"], second_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        source = Assignment(
+            id="vacancy-change-source",
+            date=planning_date,
+            member_id=member["id"],
+            agenda_id=first_agenda["id"],
+            load_percentage=first_agenda["loadPercentage"],
+        )
+        vacancy = Vacancy(date=planning_date, agenda_id=second_agenda["id"])
+        session.add_all([source, vacancy])
+        session.flush()
+        vacancy_id = vacancy.id
+
+    options = authenticated_client.get(
+        "/api/v1/calendar/events/vacancy-change-source/exchange-options"
+    )
+
+    assert options.status_code == 200
+    vacancy_option = next(
+        item
+        for item in options.json()["options"]
+        if item["optionType"] == "vacancy"
+        and item["targetVacancyId"] == vacancy_id
+    )
+    assert vacancy_option["targetAgendaId"] == second_agenda["id"]
+    assert vacancy_option["fairnessEffect"] in {"improves", "neutral", "worsens"}
+
+    changed = authenticated_client.post(
+        "/api/v1/calendar/events/vacancy-change-source/exchange",
+        json={"targetVacancyId": vacancy_id},
+    )
+
+    assert changed.status_code == 200
+    assert changed.json()["source"]["type"] == second_agenda["id"]
+    with database.session_factory() as session:
+        saved = session.get(Assignment, "vacancy-change-source")
+        remaining_vacancies = list(
+            session.scalars(
+                select(Vacancy).where(Vacancy.date == planning_date)
+            )
+        )
+        assert saved and saved.agenda_id == second_agenda["id"]
+        assert [item.agenda_id for item in remaining_vacancies] == [
+            first_agenda["id"]
+        ]
+
+
+def test_vacancy_assignment_requires_and_persists_a_peonada_above_full_load(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    full_agendas = [
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    ]
+    first_agenda, second_agenda = full_agendas[:2]
+    member = create_manual_planning_member(
+        authenticated_client,
+        name="Peonada manual",
+        email="peonada-manual@hospital.test",
+        agenda_ids=[first_agenda["id"], second_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        session.add(
+            Assignment(
+                id="ordinary-before-peonada",
+                date=planning_date,
+                member_id=member["id"],
+                agenda_id=first_agenda["id"],
+                load_percentage=100,
+            )
+        )
+        vacancy = Vacancy(date=planning_date, agenda_id=second_agenda["id"])
+        session.add(vacancy)
+        session.flush()
+        vacancy_id = vacancy.id
+
+    options = authenticated_client.get(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assignment-options"
+    )
+
+    assert options.status_code == 200
+    candidate = next(
+        item
+        for item in options.json()["options"]
+        if item["memberId"] == member["id"]
+    )
+    assert candidate["projectedLoadPercentage"] == 200
+    assert candidate["requiresPeonadaReview"] is True
+
+    review = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assign",
+        json={"memberId": member["id"]},
+    )
+
+    assert review.status_code == 409
+    assert review.json()["error"]["code"] == "PEONADA_REVIEW_REQUIRED"
+    assert review.json()["error"]["details"]["people"][0][
+        "minimumPeonadaLoadPercentage"
+    ] == 100
+
+    created = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assign",
+        json={
+            "memberId": member["id"],
+            "peonadaAssignments": {member["id"]: ["new"]},
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["peonada"] is True
+    new_assignment_id = created.json()["id"]
+    reloaded = authenticated_client.get("/api/v1/bootstrap").json()
+    assert next(
+        item
+        for item in reloaded["calendar"]["events"]
+        if item["id"] == new_assignment_id
+    )["peonada"] is True
+    with database.session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(Assignment).where(
+                    Assignment.member_id == member["id"],
+                    Assignment.date == planning_date,
+                )
+            )
+        )
+        assert sum(item.load_percentage for item in rows) == 200
+        assert {item.id for item in rows if item.peonada} == {new_assignment_id}
+        assert session.get(Vacancy, vacancy_id) is None
+
+    moved = authenticated_client.put(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/peonadas",
+        json={"assignmentIds": ["ordinary-before-peonada"]},
+    )
+    rejected_clear = authenticated_client.put(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/peonadas",
+        json={"assignmentIds": []},
+    )
+    rejected_overmark = authenticated_client.put(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/peonadas",
+        json={"assignmentIds": ["ordinary-before-peonada", new_assignment_id]},
+    )
+
+    assert moved.status_code == 200
+    assert {
+        item["id"] for item in moved.json()["assignments"] if item["peonada"]
+    } == {"ordinary-before-peonada"}
+    assert rejected_clear.status_code == 409
+    assert rejected_clear.json()["error"]["code"] == "PEONADA_REQUIRED"
+    assert rejected_overmark.status_code == 409
+    assert rejected_overmark.json()["error"]["code"] == "PEONADA_REQUIRED"
+
+
+def test_manual_vacancy_assignment_cannot_exceed_two_hundred_percent(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    full_agendas = [
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    ]
+    first_agenda, second_agenda, third_agenda = full_agendas[:3]
+    member = create_manual_planning_member(
+        authenticated_client,
+        name="Límit peonada",
+        email="limit-peonada@hospital.test",
+        agenda_ids=[
+            first_agenda["id"],
+            second_agenda["id"],
+            third_agenda["id"],
+        ],
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="load-limit-first",
+                    date=planning_date,
+                    member_id=member["id"],
+                    agenda_id=first_agenda["id"],
+                    load_percentage=100,
+                    peonada=False,
+                ),
+                Assignment(
+                    id="load-limit-second",
+                    date=planning_date,
+                    member_id=member["id"],
+                    agenda_id=second_agenda["id"],
+                    load_percentage=100,
+                    peonada=True,
+                ),
+            ]
+        )
+        vacancy = Vacancy(date=planning_date, agenda_id=third_agenda["id"])
+        session.add(vacancy)
+        session.flush()
+        vacancy_id = vacancy.id
+
+    options = authenticated_client.get(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assignment-options"
+    )
+    rejected = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assign",
+        json={
+            "memberId": member["id"],
+            "peonadaAssignments": {member["id"]: ["load-limit-second"]},
+        },
+    )
+
+    assert options.status_code == 200
+    assert member["id"] not in {
+        item["memberId"] for item in options.json()["options"]
+    }
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "INVALID_DAILY_LOAD"
+    assert rejected.json()["error"]["details"]["loadPercentage"] == 300
+
+
+def test_exchange_with_a_peonada_requires_review_for_both_people(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    full_agendas = [
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    ]
+    first_agenda, second_agenda, sibling_agenda = full_agendas[:3]
+    agenda_ids = [
+        first_agenda["id"],
+        second_agenda["id"],
+        sibling_agenda["id"],
+    ]
+    first_member = create_manual_planning_member(
+        authenticated_client,
+        name="Peonada origen",
+        email="peonada-origen@hospital.test",
+        agenda_ids=agenda_ids,
+    )
+    second_member = create_manual_planning_member(
+        authenticated_client,
+        name="Peonada destí",
+        email="peonada-desti@hospital.test",
+        agenda_ids=agenda_ids,
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="peonada-exchange-source",
+                    date=planning_date,
+                    member_id=first_member["id"],
+                    agenda_id=first_agenda["id"],
+                    load_percentage=100,
+                    peonada=True,
+                ),
+                Assignment(
+                    id="peonada-exchange-sibling",
+                    date=planning_date,
+                    member_id=first_member["id"],
+                    agenda_id=sibling_agenda["id"],
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="peonada-exchange-target",
+                    date=planning_date,
+                    member_id=second_member["id"],
+                    agenda_id=second_agenda["id"],
+                    load_percentage=100,
+                ),
+            ]
+        )
+
+    review = authenticated_client.post(
+        "/api/v1/calendar/events/peonada-exchange-source/exchange",
+        json={"targetAssignmentId": "peonada-exchange-target"},
+    )
+
+    assert review.status_code == 409
+    assert review.json()["error"]["code"] == "PEONADA_REVIEW_REQUIRED"
+    assert {
+        item["memberId"]
+        for item in review.json()["error"]["details"]["people"]
+    } == {first_member["id"], second_member["id"]}
+    review_people = {
+        item["memberId"]: item
+        for item in review.json()["error"]["details"]["people"]
+    }
+    assert review_people[first_member["id"]]["minimumPeonadaLoadPercentage"] == 100
+    assert review_people[second_member["id"]]["minimumPeonadaLoadPercentage"] == 0
+    assert all(
+        assignment["peonada"] is False
+        for item in review_people.values()
+        for assignment in item["assignments"]
+    )
+
+    exchanged = authenticated_client.post(
+        "/api/v1/calendar/events/peonada-exchange-source/exchange",
+        json={
+            "targetAssignmentId": "peonada-exchange-target",
+            "peonadaAssignments": {
+                first_member["id"]: ["peonada-exchange-sibling"],
+                second_member["id"]: [],
+            },
+        },
+    )
+
+    assert exchanged.status_code == 200
+    with database.session_factory() as session:
+        assert session.get(Assignment, "peonada-exchange-source").peonada is False
+        assert session.get(Assignment, "peonada-exchange-sibling").peonada is True
+        assert session.get(Assignment, "peonada-exchange-target").peonada is False
+
+
+def test_assignment_transfer_moves_the_agenda_and_recalculates_both_people(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    full_agendas = [
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    ]
+    transferred_agenda, source_sibling_agenda, target_agenda = full_agendas[:3]
+    agenda_ids = [
+        transferred_agenda["id"],
+        source_sibling_agenda["id"],
+        target_agenda["id"],
+    ]
+    source_member = create_manual_planning_member(
+        authenticated_client,
+        name="Cessió origen",
+        email="cessio-origen@hospital.test",
+        agenda_ids=agenda_ids,
+    )
+    target_member = create_manual_planning_member(
+        authenticated_client,
+        name="Cessió destí",
+        email="cessio-desti@hospital.test",
+        agenda_ids=agenda_ids,
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="transfer-source",
+                    date=planning_date,
+                    member_id=source_member["id"],
+                    agenda_id=transferred_agenda["id"],
+                    load_percentage=100,
+                    peonada=True,
+                ),
+                Assignment(
+                    id="transfer-source-sibling",
+                    date=planning_date,
+                    member_id=source_member["id"],
+                    agenda_id=source_sibling_agenda["id"],
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="transfer-target-existing",
+                    date=planning_date,
+                    member_id=target_member["id"],
+                    agenda_id=target_agenda["id"],
+                    load_percentage=100,
+                ),
+            ]
+        )
+
+    review = authenticated_client.post(
+        "/api/v1/calendar/events/transfer-source/transfer",
+        json={"targetMemberId": target_member["id"]},
+    )
+
+    assert review.status_code == 409
+    assert review.json()["error"]["code"] == "PEONADA_REVIEW_REQUIRED"
+    review_people = {
+        item["memberId"]: item
+        for item in review.json()["error"]["details"]["people"]
+    }
+    assert review_people[source_member["id"]]["totalLoadPercentage"] == 100
+    assert review_people[source_member["id"]]["minimumPeonadaLoadPercentage"] == 0
+    assert review_people[target_member["id"]]["totalLoadPercentage"] == 200
+    assert review_people[target_member["id"]]["minimumPeonadaLoadPercentage"] == 100
+    assert all(
+        assignment["peonada"] is False
+        for item in review_people.values()
+        for assignment in item["assignments"]
+    )
+
+    transferred = authenticated_client.post(
+        "/api/v1/calendar/events/transfer-source/transfer",
+        json={
+            "targetMemberId": target_member["id"],
+            "peonadaAssignments": {
+                source_member["id"]: [],
+                target_member["id"]: ["transfer-source"],
+            },
+        },
+    )
+
+    assert transferred.status_code == 200
+    with database.session_factory() as session:
+        moved = session.get(Assignment, "transfer-source")
+        source_sibling = session.get(Assignment, "transfer-source-sibling")
+        target_existing = session.get(Assignment, "transfer-target-existing")
+        assert moved and moved.member_id == target_member["id"]
+        assert moved.peonada is True
+        assert source_sibling and source_sibling.peonada is False
+        assert target_existing and target_existing.peonada is False
+
+
 def test_fixed_assignment_exchange_requires_confirmation_and_unlocks_the_override(
     authenticated_client: TestClient,
 ) -> None:

@@ -288,6 +288,7 @@ class PlanningEvent(Base):
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     fixed: Mapped[bool] = mapped_column(Boolean, default=False)
     extra: Mapped[bool] = mapped_column(Boolean, default=False)
+    peonada: Mapped[bool] = mapped_column(Boolean, default=False)
     manually_modified: Mapped[bool] = mapped_column(Boolean, default=False)
     management: Mapped[bool] = mapped_column(Boolean, default=False)
 

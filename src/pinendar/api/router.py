@@ -10,6 +10,7 @@ from pinendar.application.commands import (
     add_hospital,
     archive_agenda,
     archive_member,
+    assign_vacancy,
     delete_calendar_range,
     distinct_color,
     exchange_assignments,
@@ -17,11 +18,16 @@ from pinendar.application.commands import (
     extra_assignment_options,
     fairness,
     open_extra_assignment,
+    peonada_options,
     remove_hospital,
     save_agenda,
     save_member,
+    transfer_assignment,
+    transfer_options,
     update_assignment,
     update_hospital_short_name,
+    update_peonadas,
+    vacancy_assignment_options,
 )
 from pinendar.application.guard_imports import (
     add_guards,
@@ -153,8 +159,40 @@ class AssignmentRequest(BaseModel):
 
 
 class AssignmentExchangeRequest(BaseModel):
-    target_assignment_id: str = Field(alias="targetAssignmentId")
+    target_assignment_id: str | None = Field(default=None, alias="targetAssignmentId")
+    target_vacancy_id: int | None = Field(default=None, alias="targetVacancyId")
     confirm_fixed: bool = Field(default=False, alias="confirmFixed")
+    peonada_selections: dict[str, list[str]] | None = Field(
+        default=None,
+        alias="peonadaAssignments",
+    )
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "AssignmentExchangeRequest":
+        if bool(self.target_assignment_id) == bool(self.target_vacancy_id):
+            raise ValueError("Select exactly one exchange target")
+        return self
+
+
+class VacancyAssignmentRequest(BaseModel):
+    member_id: str = Field(alias="memberId")
+    peonada_selections: dict[str, list[str]] | None = Field(
+        default=None,
+        alias="peonadaAssignments",
+    )
+
+
+class AssignmentTransferRequest(BaseModel):
+    target_member_id: str = Field(alias="targetMemberId")
+    confirm_fixed: bool = Field(default=False, alias="confirmFixed")
+    peonada_selections: dict[str, list[str]] | None = Field(
+        default=None,
+        alias="peonadaAssignments",
+    )
+
+
+class PeonadaRequest(BaseModel):
+    assignment_ids: list[str] = Field(default_factory=list, alias="assignmentIds")
 
 
 class ExtraAssignmentRequest(BaseModel):
@@ -525,7 +563,108 @@ def exchange_assignment(
             database_session,
             assignment_id,
             payload.target_assignment_id,
+            payload.target_vacancy_id,
             confirm_fixed=payload.confirm_fixed,
+            peonada_selections=payload.peonada_selections,
+        )
+
+
+@router.get(
+    "/api/v1/calendar/events/{assignment_id}/transfer-options",
+    dependencies=[Depends(require_auth)],
+)
+def assignment_transfer_options(
+    assignment_id: str,
+    request: Request,
+    include_fixed: Annotated[bool, Query(alias="includeFixed")] = False,
+) -> dict[str, Any]:
+    with request.state.database.session_factory() as database_session:
+        return transfer_options(
+            database_session,
+            assignment_id,
+            include_fixed=include_fixed,
+        )
+
+
+@router.post(
+    "/api/v1/calendar/events/{assignment_id}/transfer",
+    dependencies=[Depends(require_auth)],
+)
+def transfer_calendar_assignment(
+    assignment_id: str,
+    payload: AssignmentTransferRequest,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory.begin() as database_session:
+        return transfer_assignment(
+            database_session,
+            assignment_id,
+            payload.target_member_id,
+            confirm_fixed=payload.confirm_fixed,
+            peonada_selections=payload.peonada_selections,
+        )
+
+
+@router.get(
+    "/api/v1/calendar/vacancies/{vacancy_id}/assignment-options",
+    dependencies=[Depends(require_auth)],
+)
+def calendar_vacancy_assignment_options(
+    vacancy_id: int,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory() as database_session:
+        return vacancy_assignment_options(database_session, vacancy_id)
+
+
+@router.post(
+    "/api/v1/calendar/vacancies/{vacancy_id}/assign",
+    dependencies=[Depends(require_auth)],
+    status_code=status.HTTP_201_CREATED,
+)
+def create_vacancy_assignment(
+    vacancy_id: int,
+    payload: VacancyAssignmentRequest,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory.begin() as database_session:
+        return assign_vacancy(
+            database_session,
+            vacancy_id,
+            payload.member_id,
+            peonada_selections=payload.peonada_selections,
+        )
+
+
+@router.get(
+    "/api/v1/calendar/dates/{assignment_date}/members/{member_id}/peonadas",
+    dependencies=[Depends(require_auth)],
+)
+def member_peonada_options(
+    assignment_date: date,
+    member_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory() as database_session:
+        return peonada_options(database_session, member_id, assignment_date)
+
+
+@router.put(
+    "/api/v1/calendar/dates/{assignment_date}/members/{member_id}/peonadas",
+    dependencies=[Depends(require_auth)],
+)
+def replace_member_peonadas(
+    assignment_date: date,
+    member_id: str,
+    payload: PeonadaRequest,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory.begin() as database_session:
+        return update_peonadas(
+            database_session,
+            member_id,
+            assignment_date,
+            payload.assignment_ids,
         )
 
 

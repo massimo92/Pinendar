@@ -302,6 +302,7 @@ def enqueue_job(
                         "locked": True,
                         **({"fixed": True} if item.fixed else {}),
                         **({"extra": True} if item.extra else {}),
+                        **({"peonada": True} if item.peonada else {}),
                         **({"manuallyModified": True} if item.manually_modified else {}),
                         **({"management": True} if item.management else {}),
                     }
@@ -535,6 +536,7 @@ class JobDispatcher:
                         locked=bool(item.get("locked")),
                         fixed=bool(item.get("fixed")),
                         extra=bool(item.get("extra")),
+                        peonada=bool(item.get("peonada")),
                         manually_modified=bool(item.get("manuallyModified") or item.get("locked")),
                         management=kind == "management" or bool(item.get("management")),
                     )

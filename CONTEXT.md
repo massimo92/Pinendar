@@ -121,9 +121,17 @@ _Avoid_: No asignación
 Sustitución simultánea y voluntaria de dos asignaciones clínicas de una misma fecha que conserva cubiertas ambas plazas y respeta todas las reglas duras.
 _Avoid_: Edición de agenda, reasignación unilateral
 
+**Cesión de asignación**:
+Traslado manual de una asignación clínica a otra persona sin mover las asignaciones que esta ya tiene. Solo se ofrece cuando quien cede conserva al menos otra agenda ese día. Después se recalculan desde cero las peonadas de ambas personas.
+_Avoid_: Intercambio, plaza extraordinaria
+
 **Plaza extraordinaria**:
 Actividad clínica añadida manualmente para una persona sin carga asignada, fuera de la demanda diaria ordinaria. Cuenta en carga, histórico y equidad, pero no en cobertura ordinaria ni genera una vacante.
-_Avoid_: Nueva agenda, cobertura extra
+_Avoid_: Nueva agenda, cobertura extra, peonada
+
+**Peonada**:
+Marca de una asignación clínica demandada que identifica trabajo extraordinario por encima de la jornada ordinaria del 100%. Solo se aplica mediante edición manual posterior al generador y no convierte la asignación en una plaza extraordinaria. Si una reasignación cambia el reparto diario, las marcas afectadas se eliminan y se definen de nuevo solo para las personas que continúan por encima del 100%.
+_Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 
 **Jornada parcial excepcional**:
 Día en que una persona cubre una única agenda del 50% porque la mejor cobertura requiere alguna jornada parcial. En empates, se completa antes la jornada de quien ya cubre la agenda más prioritaria.
