@@ -197,6 +197,10 @@ class PeonadaRequest(BaseModel):
 
 class ExtraAssignmentRequest(BaseModel):
     agenda_id: str = Field(alias="agendaId")
+    peonada_selections: dict[str, list[str]] | None = Field(
+        default=None,
+        alias="peonadaAssignments",
+    )
 
 
 class LanguageRequest(BaseModel):
@@ -693,7 +697,13 @@ def create_extra_assignment(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
-        return open_extra_assignment(database_session, member_id, assignment_date, payload.agenda_id)
+        return open_extra_assignment(
+            database_session,
+            member_id,
+            assignment_date,
+            payload.agenda_id,
+            peonada_selections=payload.peonada_selections,
+        )
 
 
 @router.post(

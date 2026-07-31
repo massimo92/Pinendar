@@ -63,7 +63,7 @@ export const api = {
   peonadaOptions: (date, memberId) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/peonadas`),
   updatePeonadas: (date, memberId, assignmentIds) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/peonadas`, json('PUT', { assignmentIds })),
   extraAssignmentOptions: (date, memberId) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/extra-options`),
-  openExtraAssignment: (date, memberId, agendaId) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/extra-assignments`, json('POST', { agendaId })),
+  openExtraAssignment: (date, memberId, body) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/extra-assignments`, json('POST', body)),
   deleteCalendarRange: (startDate, endDate) => request(`/api/v1/calendar/assignments?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`, { method: 'DELETE' }),
   startGeneration: (body) => request('/api/v1/generation-jobs', json('POST', body)),
   generationJob: (id) => request(`/api/v1/generation-jobs/${encodeURIComponent(id)}`),

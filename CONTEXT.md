@@ -126,7 +126,7 @@ Traslado manual de una asignación clínica a otra persona sin mover las asignac
 _Avoid_: Intercambio, plaza extraordinaria
 
 **Plaza extraordinaria**:
-Actividad clínica añadida manualmente para una persona sin carga asignada, fuera de la demanda diaria ordinaria. Cuenta en carga, histórico y equidad, pero no en cobertura ordinaria ni genera una vacante.
+Actividad clínica añadida manualmente fuera de la demanda diaria ordinaria. Puede asignarse a una persona con o sin carga previa, cuenta en carga, histórico y equidad, pero no en cobertura ordinaria ni genera una vacante. Si eleva la carga por encima del 100%, debe clasificarse qué parte es peonada.
 _Avoid_: Nueva agenda, cobertura extra, peonada
 
 **Peonada**:
@@ -158,7 +158,7 @@ Nivel de importancia de cobertura: muy alta, alta, moderada o baja.
 _Avoid_: Peso, orden manual
 
 **Jornada de gestión**:
-Actividad no asistencial de jornada completa asignada a una persona habilitada. Cuenta como día telemático, pero no es una agenda ni crea una plaza.
+Actividad no asistencial de jornada completa (100%) asignada a una persona habilitada. Puede coexistir con actividad clínica manual hasta el límite diario del 200%, pero nunca puede clasificarse como peonada; cuenta como día telemático, no es una agenda ni crea una plaza.
 _Avoid_: Agenda de gestión
 
 **Actividad planificada**:

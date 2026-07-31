@@ -36,4 +36,41 @@ assert.match(
   'La cesión debe continuar a la revisión de peonadas cuando haga falta',
 );
 
+assert.match(
+  appSource,
+  /const manualExtraAction = calendarView === 'day'/,
+  'La plaza extraordinaria sólo debe ofrecerse en la vista diaria',
+);
+assert.match(
+  appSource,
+  /calendar-extra-day-button[\s\S]*?open-manual-extra/,
+  'El día debe incluir un botón protegido para crear una plaza extraordinaria',
+);
+assert.match(
+  appSource,
+  /\$\{manualExtraAction\}<div class="calendar-incident-badges">/,
+  'El botón extraordinario debe ocupar el primer lugar de la cabecera diaria',
+);
+assert.match(
+  appSource,
+  /calendar-extra-day-icon[^`]*?>\+<\/span><\/button>/,
+  'El botón extraordinario debe mostrar sólo el símbolo más',
+);
+assert.match(
+  appSource,
+  /modal-manual-extra[\s\S]*?manual-extra-date-display[\s\S]*?<select name="memberId"[\s\S]*?<select name="agendaId"/,
+  'El alta manual debe mostrar fecha fija y selectores de persona y agenda',
+);
+
+assert.match(
+  appSource,
+  /pendingOperation: \{ type: 'extra-assignment'/,
+  'Una plaza extraordinaria por encima del 100% debe abrir la revisión de peonadas',
+);
+assert.match(
+  appSource,
+  /pending\.type === 'extra-assignment'[\s\S]*?peonadaAssignments/,
+  'La revisión de peonadas debe completar la plaza extraordinaria',
+);
+
 console.log('peonada modal navigation regression: ok');

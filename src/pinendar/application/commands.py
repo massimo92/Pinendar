@@ -879,12 +879,6 @@ def _validate_clinical_assignment(
             )
         )
     )
-    if any(item.kind == "management" or item.management for item in siblings):
-        raise DomainError(
-            "INVALID_DAILY_LOAD",
-            "La gestió necessita una jornada completament lliure",
-            field="agendaId",
-        )
     sibling_agendas = [
         sibling_agenda
         for item in siblings
@@ -898,7 +892,11 @@ def _validate_clinical_assignment(
             "No es pot repetir la mateixa agenda el mateix dia",
             field="agendaId",
         )
-    daily_load = agenda.load_percentage + sum(item.load_percentage for item in sibling_agendas)
+    daily_load = agenda.load_percentage + sum(
+        item.load_percentage
+        for item in siblings
+        if item.kind in {"assigned", "management"} or item.management
+    )
     valid_loads = {value for value in (50, 100, 150, 200) if value <= maximum_daily_load}
     if daily_load not in valid_loads:
         raise DomainError(
@@ -938,8 +936,13 @@ def _peonada_person_details(
 ) -> dict[str, Any]:
     member = session.get(Member, member_id)
     rows = _clinical_day_rows(session, member_id, assignment_date)
+    day_rows = _unassigned_rows(session, member_id, assignment_date)
     reverse_aliases = {value: key for key, value in (aliases or {}).items()}
-    total = sum(item.load_percentage for item in rows)
+    total = sum(
+        item.load_percentage
+        for item in day_rows
+        if item.kind != "no_assignment"
+    )
     return {
         "memberId": member_id,
         "memberName": member.name if member else "—",
@@ -967,9 +970,11 @@ def _apply_peonada_selections(
     reset_existing: bool = False,
 ) -> list[dict[str, Any]]:
     unique_people = list(dict.fromkeys(people))
-    if reset_existing:
-        for member_id, assignment_date in unique_people:
-            for item in _clinical_day_rows(session, member_id, assignment_date):
+    for member_id, assignment_date in unique_people:
+        for item in _unassigned_rows(session, member_id, assignment_date):
+            if item.kind == "management" or item.management:
+                item.peonada = False
+            elif reset_existing and item.kind == "assigned" and item.agenda_id:
                 item.peonada = False
     details = [
         _peonada_person_details(
@@ -1789,8 +1794,12 @@ def extra_assignment_options(
 ) -> dict[str, Any]:
     member = _validate_member_planifiable(session, member_id, assignment_date)
     rows = _unassigned_rows(session, member_id, assignment_date)
-    if any(item.kind != "no_assignment" for item in rows):
-        raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
+    no_assignment_rows = [item for item in rows if item.kind == "no_assignment"]
+    current_load = sum(
+        item.load_percentage
+        for item in rows
+        if item.kind != "no_assignment"
+    )
     context = _fairness_context(session)
     baseline = _projected_fairness_score(context, [])
     options: list[dict[str, Any]] = []
@@ -1805,7 +1814,7 @@ def extra_assignment_options(
             .order_by(Agenda.name, Agenda.id)
         )
     )
-    excluded = {item.id for item in rows}
+    excluded = {item.id for item in no_assignment_rows}
     for agenda_id in agenda_ids:
         try:
             agenda = _validate_clinical_assignment(
@@ -1814,13 +1823,18 @@ def extra_assignment_options(
                 assignment_date,
                 agenda_id,
                 exclude_assignment_ids=excluded,
+                maximum_daily_load=200,
             )
         except DomainError:
             continue
         projected = _projected_fairness_score(context, [(member_id, None, agenda.id)])
+        projected_load = current_load + agenda.load_percentage
         options.append(
             {
                 "agendaId": agenda.id,
+                "currentLoadPercentage": current_load,
+                "projectedLoadPercentage": projected_load,
+                "requiresPeonadaReview": projected_load > 100,
                 **_fairness_result(baseline, projected),
             }
         )
@@ -1844,26 +1858,28 @@ def open_extra_assignment(
     member_id: str,
     assignment_date: date,
     agenda_id: str,
+    *,
+    peonada_selections: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     _validate_member_planifiable(session, member_id, assignment_date)
     rows = _unassigned_rows(session, member_id, assignment_date)
-    if any(item.kind != "no_assignment" for item in rows):
-        raise DomainError("MEMBER_ALREADY_ASSIGNED", "La persona ja té activitat assignada")
+    no_assignment_rows = [item for item in rows if item.kind == "no_assignment"]
     agenda = _validate_clinical_assignment(
         session,
         member_id,
         assignment_date,
         agenda_id,
-        exclude_assignment_ids={item.id for item in rows},
+        exclude_assignment_ids={item.id for item in no_assignment_rows},
+        maximum_daily_load=200,
     )
-    assignment = rows[0] if rows else Assignment(
+    assignment = no_assignment_rows[0] if no_assignment_rows else Assignment(
         id=uid(),
         date=assignment_date,
         member_id=member_id,
     )
-    for duplicate in rows[1:]:
+    for duplicate in no_assignment_rows[1:]:
         session.delete(duplicate)
-    if not rows:
+    if not no_assignment_rows:
         session.add(assignment)
     assignment.agenda_id = agenda.id
     assignment.kind = "assigned"
@@ -1874,6 +1890,13 @@ def open_extra_assignment(
     assignment.peonada = False
     assignment.manually_modified = True
     assignment.management = False
+    peonada = _apply_peonada_selections(
+        session,
+        [(member_id, assignment_date)],
+        peonada_selections,
+        aliases={member_id: {"new": assignment.id}},
+        reset_existing=True,
+    )
     bump_revision(session)
     return {
         "id": assignment.id,
@@ -1882,6 +1905,8 @@ def open_extra_assignment(
         "type": assignment.agenda_id,
         "locked": True,
         "extra": True,
+        "peonada": assignment.peonada,
+        "peonadaReview": peonada,
     }
 
 

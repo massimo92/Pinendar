@@ -1114,6 +1114,163 @@ def test_manual_vacancy_assignment_cannot_exceed_two_hundred_percent(
     assert rejected.json()["error"]["details"]["loadPercentage"] == 300
 
 
+def test_extra_assignment_can_be_added_above_full_load_with_peonada_review(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    full_agendas = [
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    ]
+    existing_agenda, extra_agenda = full_agendas[:2]
+    member = create_manual_planning_member(
+        authenticated_client,
+        name="Extra amb peonada",
+        email="extra-peonada@hospital.test",
+        agenda_ids=[existing_agenda["id"], extra_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    with database.session_factory.begin() as session:
+        session.add(
+            Assignment(
+                id="ordinary-before-extra",
+                date=planning_date,
+                member_id=member["id"],
+                agenda_id=existing_agenda["id"],
+                load_percentage=100,
+            )
+        )
+
+    options = authenticated_client.get(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
+    )
+
+    assert options.status_code == 200
+    candidate = next(
+        item
+        for item in options.json()["options"]
+        if item["agendaId"] == extra_agenda["id"]
+    )
+    assert candidate["projectedLoadPercentage"] == 200
+    assert candidate["requiresPeonadaReview"] is True
+
+    review = authenticated_client.post(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        json={"agendaId": extra_agenda["id"]},
+    )
+
+    assert review.status_code == 409
+    assert review.json()["error"]["code"] == "PEONADA_REVIEW_REQUIRED"
+    assert review.json()["error"]["details"]["people"][0][
+        "minimumPeonadaLoadPercentage"
+    ] == 100
+
+    created = authenticated_client.post(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        json={
+            "agendaId": extra_agenda["id"],
+            "peonadaAssignments": {member["id"]: ["new"]},
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["extra"] is True
+    assert created.json()["peonada"] is True
+    with database.session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(Assignment).where(
+                    Assignment.member_id == member["id"],
+                    Assignment.date == planning_date,
+                )
+            )
+        )
+        assert sum(item.load_percentage for item in rows) == 200
+        assert {item.id for item in rows if item.extra} == {created.json()["id"]}
+        assert {item.id for item in rows if item.peonada} == {created.json()["id"]}
+
+
+def test_management_counts_towards_load_but_cannot_be_a_peonada(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    extra_agenda = next(
+        item for item in state["agendas"] if item["loadPercentage"] == 100
+    )
+    member = create_manual_planning_member(
+        authenticated_client,
+        name="Gestió amb activitat extra",
+        email="gestio-extra@hospital.test",
+        agenda_ids=[extra_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    planning_date = datetime(2026, 8, 11).date()
+    management_id = "management-before-extra"
+    with database.session_factory.begin() as session:
+        session.add(
+            Assignment(
+                id=management_id,
+                date=planning_date,
+                member_id=member["id"],
+                kind="management",
+                management=True,
+                load_percentage=100,
+                peonada=True,
+            )
+        )
+
+    options = authenticated_client.get(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-options"
+    )
+
+    assert options.status_code == 200
+    candidate = next(
+        item
+        for item in options.json()["options"]
+        if item["agendaId"] == extra_agenda["id"]
+    )
+    assert candidate["currentLoadPercentage"] == 100
+    assert candidate["projectedLoadPercentage"] == 200
+    assert candidate["requiresPeonadaReview"] is True
+
+    review = authenticated_client.post(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        json={"agendaId": extra_agenda["id"]},
+    )
+
+    assert review.status_code == 409
+    person_review = review.json()["error"]["details"]["people"][0]
+    assert person_review["totalLoadPercentage"] == 200
+    assert person_review["minimumPeonadaLoadPercentage"] == 100
+    assert {item["id"] for item in person_review["assignments"]} == {"new"}
+
+    invalid = authenticated_client.post(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        json={
+            "agendaId": extra_agenda["id"],
+            "peonadaAssignments": {member["id"]: [management_id]},
+        },
+    )
+
+    assert invalid.status_code == 409
+    assert invalid.json()["error"]["code"] == "INVALID_PEONADA_SELECTION"
+
+    created = authenticated_client.post(
+        f"/api/v1/calendar/dates/{planning_date.isoformat()}/members/{member['id']}/extra-assignments",
+        json={
+            "agendaId": extra_agenda["id"],
+            "peonadaAssignments": {member["id"]: ["new"]},
+        },
+    )
+
+    assert created.status_code == 201
+    with database.session_factory() as session:
+        management = session.get(Assignment, management_id)
+        assert management is not None
+        assert management.peonada is False
+        assert session.get(Assignment, created.json()["id"]).peonada is True
+
+
 def test_exchange_with_a_peonada_requires_review_for_both_people(
     authenticated_client: TestClient,
 ) -> None:
