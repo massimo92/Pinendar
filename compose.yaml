@@ -5,7 +5,7 @@ services:
       target: runtime
     init: true
     ports:
-      - "4173:4173"
+      - "127.0.0.1:4173:4173"
     environment:
       PINENDAR_SESSION_SECRET: ${PINENDAR_SESSION_SECRET:?Define PINENDAR_SESSION_SECRET en .env}
       PINENDAR_SECURE_COOKIES: "true"
@@ -25,6 +25,11 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   pinendar-data:

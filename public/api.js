@@ -23,6 +23,7 @@ async function request(path, options = {}) {
 const json = (method, body) => ({ method, body: JSON.stringify(body) });
 
 export const api = {
+  authConfig: () => request('/api/v1/auth/config'),
   login: (username, password) => request('/api/v1/auth/login', json('POST', { username, password })),
   signup: (username, password) => request('/api/v1/auth/signup', json('POST', { username, password })),
   recover: (username, recoveryCode, newPassword) => request('/api/v1/auth/recover', json('POST', { username, recoveryCode, newPassword })),

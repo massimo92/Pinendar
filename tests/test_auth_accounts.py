@@ -9,7 +9,7 @@ from pinendar.infrastructure.auth_store import AccountActivity, AuthStore
 from pinendar.main import cleanup_inactive_accounts, create_app, subtract_calendar_months
 
 
-def isolated_client(tmp_path: Path) -> TestClient:
+def isolated_client(tmp_path: Path, *, signup_enabled: bool = True) -> TestClient:
     return TestClient(
         create_app(
             Settings(
@@ -19,11 +19,25 @@ def isolated_client(tmp_path: Path) -> TestClient:
                 hospital_catalog_dir=Path("data/hospitals").resolve(),
                 static_dir=Path("public").resolve(),
                 session_secret="test-session-secret-with-enough-entropy",
+                signup_enabled=signup_enabled,
                 run_job_dispatcher=False,
                 scheduler_process_pool=False,
             )
         )
     )
+
+
+def test_signup_can_be_disabled_for_public_deployments(tmp_path: Path) -> None:
+    with isolated_client(tmp_path, signup_enabled=False) as client:
+        assert client.get("/api/v1/auth/config").json() == {"signupEnabled": False}
+
+        response = client.post(
+            "/api/v1/auth/signup",
+            json={"username": "alice", "password": "alice-password"},
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "SIGNUP_DISABLED"
 
 
 def test_accounts_have_independent_sqlite_environments(tmp_path: Path) -> None:

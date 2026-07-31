@@ -1,8 +1,8 @@
-import { api, waitForGeneration } from './api.js?v=11';
+import { api, waitForGeneration } from './api.js?v=12';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
-import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=5';
+import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=6';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
@@ -12,6 +12,7 @@ const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
 const app = $('#app');
 let state = null;
+let authConfig = { signupEnabled: false };
 let page = 'calendar';
 let quarter = currentQuarter();
 let selectedMemberFilters = new Set();
@@ -344,7 +345,8 @@ async function reloadState(message = '') {
 }
 
 function loginView(error = '', mode = 'login', recoveryCode = '', username = '') {
-  app.innerHTML = loginTemplate({ mode, error, recoveryCode, username }, esc);
+  const selectedMode = mode === 'signup' && !authConfig.signupEnabled ? 'login' : mode;
+  app.innerHTML = loginTemplate({ mode: selectedMode, error, recoveryCode, username, signupEnabled: authConfig.signupEnabled }, esc);
   app.querySelectorAll('[data-auth-mode]').forEach((button) => button.addEventListener('click', () => loginView('', button.dataset.authMode)));
   app.querySelector('[data-auth-action="continue"]')?.addEventListener('click', () => load());
   app.querySelector('[data-auth-action="copy-recovery"]')?.addEventListener('click', async () => {
@@ -2552,6 +2554,9 @@ async function load() {
     modal = state.account?.guideOnboardingPending ? { type: 'guide-onboarding' } : null;
     syncNavigationUrl('replace');
     render();
-  } catch (error) { loginView(); }
+  } catch (error) {
+    try { authConfig = await api.authConfig(); } catch (_) { /* Keep the safe UI default if config is unavailable. */ }
+    loginView();
+  }
 }
 load();

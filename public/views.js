@@ -2,7 +2,7 @@ function logo() {
   return document.querySelector('#icon-logo')?.innerHTML || '';
 }
 
-export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', username = '' }, escapeHtml) {
+export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', username = '', signupEnabled = true }, escapeHtml) {
   const fields = mode === 'signup'
     ? `<div class="field"><label>Usuari</label><input name="username" autocomplete="username" autofocus required minlength="3" placeholder="El teu usuari" /></div>
       <div class="field"><label>Contrasenya</label><input type="password" name="password" autocomplete="new-password" required minlength="8" placeholder="Mínim 8 caràcters" /></div>
@@ -30,7 +30,7 @@ export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', u
     ${fields}
     ${error ? `<p class="form-error">${escapeHtml(error)}</p>` : ''}
     <button class="button">${action}</button>
-    <div class="auth-links">${mode !== 'login' ? '<button type="button" data-auth-mode="login">Ja tinc compte</button>' : '<button type="button" data-auth-mode="signup">Crea un compte</button><button type="button" data-auth-mode="recover">He oblidat la contrasenya</button>'}</div>
+    <div class="auth-links">${mode !== 'login' ? '<button type="button" data-auth-mode="login">Ja tinc compte</button>' : `${signupEnabled ? '<button type="button" data-auth-mode="signup">Crea un compte</button>' : ''}<button type="button" data-auth-mode="recover">He oblidat la contrasenya</button>`}</div>
   </form></section>`;
 }
 

@@ -75,6 +75,11 @@ class RecoveryRequest(BaseModel):
     new_password: str = Field(alias="newPassword")
 
 
+@router.get("/api/v1/auth/config")
+def auth_config(request: Request) -> dict[str, bool]:
+    return {"signupEnabled": request.app.state.settings.signup_enabled}
+
+
 class FixedRuleRequest(BaseModel):
     id: str | None = None
     weekday: int = Field(ge=1, le=5)
@@ -293,6 +298,8 @@ def login(payload: LoginRequest, request: Request, response: Response) -> dict[s
 
 @router.post("/api/v1/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, request: Request, response: Response) -> dict[str, Any]:
+    if not request.app.state.settings.signup_enabled:
+        raise DomainError("SIGNUP_DISABLED", "La creació de comptes està desactivada")
     auth_store = request.app.state.auth_store
     if auth_store.username_exists(payload.username):
         raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")

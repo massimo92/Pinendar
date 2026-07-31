@@ -17,6 +17,8 @@ async def domain_error_handler(_request: Request, error: DomainError) -> JSONRes
     status = (
         401
         if error.code in {"UNAUTHORIZED", "INVALID_CREDENTIALS", "INVALID_RECOVERY_CODE"}
+        else 403
+        if error.code == "SIGNUP_DISABLED"
         else 404
         if error.code.endswith("NOT_FOUND")
         else 409

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     static_dir: Path = Path("public")
     bootstrap_username: str | None = None
     bootstrap_password: str | None = None
+    signup_enabled: bool = True
     session_secret: str = Field(default="change-this-session-secret-before-deploying", min_length=24)
     account_retention_months: int = Field(default=6, ge=1, le=120)
     secure_cookies: bool = False

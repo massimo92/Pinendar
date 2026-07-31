@@ -1,0 +1,29 @@
+services:
+  pinendar:
+    environment:
+      PINENDAR_SIGNUP_ENABLED: "false"
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.7.3
+    init: true
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARE_TUNNEL_TOKEN:?Define CLOUDFLARE_TUNNEL_TOKEN en .env}
+    depends_on:
+      pinendar:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
