@@ -164,7 +164,12 @@ def bump_revision(session: Session) -> int:
     return settings.planning_revision
 
 
-def initialize_database(database: Database, catalog: HospitalCatalog) -> None:
+def initialize_database(
+    database: Database,
+    catalog: HospitalCatalog,
+    *,
+    seed_example_data: bool = True,
+) -> None:
     with database.session_factory.begin() as session:
         if session.get(AppSettings, 1):
             return
@@ -175,8 +180,17 @@ def initialize_database(database: Database, catalog: HospitalCatalog) -> None:
                 legacy = json.loads(row[0])
         if legacy:
             import_legacy_state(session, legacy, catalog)
-        else:
+        elif seed_example_data:
             seed_initial_state(session, catalog)
+        else:
+            session.add(
+                AppSettings(
+                    id=1,
+                    language="ca",
+                    color_scheme_version=4,
+                    planning_revision=1,
+                )
+            )
 
 
 def seed_initial_state(session: Session, catalog: HospitalCatalog) -> None:

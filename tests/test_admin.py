@@ -272,4 +272,9 @@ def test_admin_can_create_account_when_runtime_migrations_are_disabled(tmp_path:
             "/api/v1/auth/login",
             json={"username": "alice", "password": "alice-password"},
         ).status_code == 200
-        assert client.get("/api/v1/bootstrap").status_code == 200
+        bootstrap_response = client.get("/api/v1/bootstrap")
+        assert bootstrap_response.status_code == 200
+        state = bootstrap_response.json()
+        assert state["team"] == []
+        assert state["agendas"] == []
+        assert state["hospitals"] == []
