@@ -2,7 +2,7 @@ function logo() {
   return document.querySelector('#icon-logo')?.innerHTML || '';
 }
 
-export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', username = '', signupEnabled = true }, escapeHtml) {
+export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', username = '', signupEnabled = true, approvalPending = false }, escapeHtml) {
   const fields = mode === 'signup'
     ? `<div class="field"><label>Usuari</label><input name="username" autocomplete="username" autofocus required minlength="3" placeholder="El teu usuari" /></div>
       <div class="field"><label>Contrasenya</label><input type="password" name="password" autocomplete="new-password" required minlength="8" placeholder="Mínim 8 caràcters" /></div>
@@ -18,7 +18,7 @@ export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', u
   const action = mode === 'signup' ? 'Crea el compte' : mode === 'recover' ? 'Canvia la contrasenya' : 'Entra a Pinendar';
   if (recoveryCode) return `<section class="login"><div class="login-card">
     <div class="brand">${logo()}<span>Pinendar</span></div>
-    <h1>Desa aquesta clau.</h1><p class="muted">És l’única manera de recuperar el compte sense correu. Només es mostra ara.</p>
+    <h1>Desa aquesta clau.</h1><p class="muted">${approvalPending ? 'La sol·licitud està pendent d’aprovació. Desa la clau i entra quan l’administrador l’hagi acceptat.' : 'És l’única manera de recuperar el compte sense correu. Només es mostra ara.'}</p>
     <code class="recovery-code" id="recovery-code">${escapeHtml(recoveryCode)}</code>
     <button class="button secondary" type="button" data-auth-action="copy-recovery">Copia la clau</button>
     <button class="button ghost" type="button" data-auth-action="download-recovery" data-username="${escapeHtml(username)}">Descarrega-la</button>
@@ -34,8 +34,9 @@ export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', u
   </form></section>`;
 }
 
-export function navTemplate({ page, language, labelFor }) {
+export function navTemplate({ page, language, labelFor, isAdmin = false }) {
   const items = [['calendar', 'Calendari'], ['guards', 'Guàrdies'], ['team', 'Equip'], ['agendas', 'Agendes'], ['setup', 'Configuració'], ['history', 'Equitat i històric'], ['guide', 'Guia d’ús']];
+  if (isAdmin) items.push(['admin', 'Administració']);
   return `<aside class="sidebar"><div class="brand">${logo()}<span>Pinendar</span></div>
     <nav class="nav">${items.map(([id, label]) => `<button data-page="${id}" class="${page === id ? 'active' : ''}"><span class="dot"></span>${language === 'es' ? labelFor(id) : label}</button>`).join('')}</nav>
     <div class="sidebar-foot">Servei de Radiologia Abdominal<br><span class="status">Dades locals · SQLite</span></div>

@@ -65,3 +65,9 @@ def require_auth(request: Request) -> None:
     request.state.account = account
     request.state.database = environment.database
     request.state.job_dispatcher = environment.dispatcher
+
+
+def require_admin(request: Request) -> None:
+    require_auth(request)
+    if not request.state.account.is_admin:
+        raise DomainError("FORBIDDEN", "Aquesta acció requereix permisos d’administració")

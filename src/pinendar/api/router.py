@@ -3,9 +3,16 @@ from datetime import date
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from pinendar.api.auth import COOKIE_NAME, SESSION_SECONDS, create_session, require_auth
+from pinendar.api.auth import (
+    COOKIE_NAME,
+    SESSION_SECONDS,
+    create_session,
+    require_admin,
+    require_auth,
+)
 from pinendar.application.commands import (
     add_hospital,
     archive_agenda,
@@ -67,6 +74,23 @@ class LoginRequest(BaseModel):
 class SignupRequest(BaseModel):
     username: str
     password: str
+
+
+class AdminAccountCreateRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AdminAccountUpdateRequest(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    disabled: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "AdminAccountUpdateRequest":
+        if self.username is None and self.password is None and self.disabled is None:
+            raise ValueError("At least one change is required")
+        return self
 
 
 class RecoveryRequest(BaseModel):
@@ -296,28 +320,27 @@ def login(payload: LoginRequest, request: Request, response: Response) -> dict[s
     return {"ok": True, "username": account.username}
 
 
-@router.post("/api/v1/auth/signup", status_code=status.HTTP_201_CREATED)
-def signup(payload: SignupRequest, request: Request, response: Response) -> dict[str, Any]:
+@router.post("/api/v1/auth/signup", status_code=status.HTTP_202_ACCEPTED)
+def signup(payload: SignupRequest, request: Request) -> dict[str, Any]:
     if not request.app.state.settings.signup_enabled:
         raise DomainError("SIGNUP_DISABLED", "La creació de comptes està desactivada")
+    client_address = request.headers.get("cf-connecting-ip") or (
+        request.client.host if request.client else "unknown"
+    )
+    if not request.app.state.signup_limiter.allow(client_address):
+        raise DomainError(
+            "SIGNUP_RATE_LIMITED",
+            "S’han enviat massa sol·licituds. Torna-ho a provar més tard",
+        )
     auth_store = request.app.state.auth_store
-    if auth_store.username_exists(payload.username):
-        raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")
-    environment_path = request.app.state.settings.environments_dir / f"{uuid.uuid4()}.sqlite"
-    request.app.state.environments.get(environment_path)
-    account, recovery_code = auth_store.create_account(
-        payload.username, payload.password, environment_path
-    )
-    settings = request.app.state.settings
-    response.set_cookie(
-        COOKIE_NAME,
-        create_session(settings.session_secret, account),
-        max_age=SESSION_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=settings.secure_cookies,
-    )
-    return {"ok": True, "username": account.username, "recoveryCode": recovery_code}
+    signup_request, recovery_code = auth_store.request_signup(payload.username, payload.password)
+    return {
+        "ok": True,
+        "status": "pending",
+        "requestId": signup_request.id,
+        "username": signup_request.username,
+        "recoveryCode": recovery_code,
+    }
 
 
 @router.post("/api/v1/auth/recover")
@@ -363,11 +386,158 @@ def get_bootstrap(request: Request) -> dict[str, Any]:
         result = bootstrap(database_session, request.app.state.catalog)
         result["account"] = {
             "username": request.state.account.username,
+            "isAdmin": request.state.account.is_admin,
             "guideOnboardingPending": request.app.state.auth_store.guide_onboarding_pending(
                 request.state.account.id
             ),
         }
         return result
+
+
+def account_payload(account: Any) -> dict[str, Any]:
+    return {
+        "id": account.id,
+        "username": account.username,
+        "disabled": account.disabled,
+        "isAdmin": account.is_admin,
+        "createdAt": account.created_at.isoformat(),
+        "lastActiveAt": account.last_active_at.isoformat() if account.last_active_at else None,
+    }
+
+
+def signup_request_payload(signup_request: Any) -> dict[str, Any]:
+    return {
+        "id": signup_request.id,
+        "username": signup_request.username,
+        "createdAt": signup_request.created_at.isoformat(),
+    }
+
+
+def backup_payload(backup: Any) -> dict[str, Any]:
+    return {
+        "name": backup.name,
+        "size": backup.size,
+        "createdAt": backup.created_at.isoformat(),
+        "downloadUrl": f"/api/v1/admin/backups/{backup.name}",
+    }
+
+
+@router.get("/api/v1/admin", dependencies=[Depends(require_admin)])
+def admin_overview(request: Request) -> dict[str, Any]:
+    return {
+        "signupRequests": [
+            signup_request_payload(item)
+            for item in request.app.state.auth_store.list_signup_requests()
+        ],
+        "accounts": [
+            account_payload(item) for item in request.app.state.auth_store.list_accounts()
+        ],
+        "backups": [backup_payload(item) for item in request.app.state.backups.list()],
+    }
+
+
+@router.post(
+    "/api/v1/admin/signup-requests/{request_id}/approve",
+    dependencies=[Depends(require_admin)],
+)
+def approve_signup(request_id: str, request: Request) -> dict[str, Any]:
+    pending = request.app.state.auth_store.get_signup_request(request_id)
+    if not pending:
+        raise DomainError("SIGNUP_REQUEST_NOT_FOUND", "Sol·licitud no trobada")
+    environment_path = request.app.state.settings.environments_dir / f"{uuid.uuid4()}.sqlite"
+    request.app.state.environments.create(environment_path)
+    try:
+        account = request.app.state.auth_store.approve_signup_request(
+            request_id, environment_path
+        )
+    except Exception:
+        request.app.state.environments.delete(environment_path)
+        raise
+    return {"ok": True, "id": account.id, "username": account.username}
+
+
+@router.post(
+    "/api/v1/admin/signup-requests/{request_id}/reject",
+    dependencies=[Depends(require_admin)],
+)
+def reject_signup(request_id: str, request: Request) -> dict[str, bool]:
+    request.app.state.auth_store.reject_signup_request(request_id)
+    return {"ok": True}
+
+
+@router.post(
+    "/api/v1/admin/accounts",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def create_account(payload: AdminAccountCreateRequest, request: Request) -> dict[str, Any]:
+    environment_path = request.app.state.settings.environments_dir / f"{uuid.uuid4()}.sqlite"
+    request.app.state.environments.create(environment_path)
+    try:
+        account, recovery_code = request.app.state.auth_store.create_account(
+            payload.username, payload.password, environment_path
+        )
+    except Exception:
+        request.app.state.environments.delete(environment_path)
+        raise
+    return {
+        "ok": True,
+        "id": account.id,
+        "username": account.username,
+        "recoveryCode": recovery_code,
+    }
+
+
+@router.patch("/api/v1/admin/accounts/{account_id}", dependencies=[Depends(require_admin)])
+def update_account(
+    account_id: str, payload: AdminAccountUpdateRequest, request: Request
+) -> dict[str, Any]:
+    target = request.app.state.auth_store.get_account(account_id)
+    if not target:
+        raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+    if target.is_admin and (
+        payload.disabled is True or account_id == request.state.account.id and payload.password is not None
+    ):
+        raise DomainError("ADMIN_ACCOUNT_PROTECTED", "No es pot bloquejar ni reiniciar l’administrador actiu")
+    account = request.app.state.auth_store.update_account(
+        account_id,
+        username=payload.username,
+        password=payload.password,
+        disabled=payload.disabled,
+    )
+    return {"ok": True, "id": account.id, "username": account.username}
+
+
+@router.delete("/api/v1/admin/accounts/{account_id}", dependencies=[Depends(require_admin)])
+def delete_account(account_id: str, request: Request) -> Response:
+    target = request.app.state.auth_store.get_account(account_id)
+    if not target:
+        raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+    if target.is_admin or target.id == request.state.account.id:
+        raise DomainError("ADMIN_ACCOUNT_PROTECTED", "No es pot eliminar el compte administrador")
+    if not request.app.state.environments.manages(target.environment_path):
+        raise DomainError("ENVIRONMENT_NOT_FOUND", "Entorn d’usuari no vàlid")
+    deleted = request.app.state.auth_store.delete_account(account_id)
+    if not request.app.state.environments.delete(deleted.environment_path):
+        raise DomainError("ENVIRONMENT_NOT_FOUND", "Entorn d’usuari no vàlid")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/api/v1/admin/backups",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def create_backup(request: Request) -> dict[str, Any]:
+    return backup_payload(request.app.state.backups.create())
+
+
+@router.get("/api/v1/admin/backups/{name}", dependencies=[Depends(require_admin)])
+def download_backup(name: str, request: Request) -> FileResponse:
+    path = request.app.state.backups.resolve(name)
+    if not path:
+        raise DomainError("BACKUP_NOT_FOUND", "Còpia no trobada")
+    return FileResponse(path, filename=path.name, media_type="application/zip")
 
 
 @router.post("/api/v1/guard-imports/preview", dependencies=[Depends(require_auth)])

@@ -1,0 +1,53 @@
+.admin-create-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin: 18px 0;
+}
+
+.admin-account-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-account-row {
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) 130px minmax(210px, 1fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px;
+}
+
+.admin-account-row input,
+.admin-account-row select,
+.admin-create-form input {
+  min-width: 0;
+  width: 100%;
+}
+
+.admin-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.admin-recovery code {
+  display: block;
+  margin-top: 7px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.schedule-table a.button {
+  display: inline-block;
+  text-decoration: none;
+}
+
+.section-head .badge {
+  align-self: center;
+}

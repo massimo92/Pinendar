@@ -1,7 +1,7 @@
 services:
   pinendar:
     environment:
-      PINENDAR_SIGNUP_ENABLED: "false"
+      PINENDAR_SIGNUP_ENABLED: "true"
 
   cloudflared:
     image: cloudflare/cloudflared:2026.7.3
