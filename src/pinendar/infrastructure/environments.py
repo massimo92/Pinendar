@@ -34,7 +34,11 @@ class EnvironmentRegistry:
             if self.settings.migrate_on_startup:
                 migrate(resolved)
             database = Database(resolved)
-            initialize_database(database, self.catalog)
+            initialize_database(
+                database,
+                self.catalog,
+                seed_example_data=resolved == self.settings.database_path.resolve(),
+            )
             dispatcher = JobDispatcher(database, process_pool=self.settings.scheduler_process_pool)
             if self.settings.run_job_dispatcher:
                 dispatcher.start()

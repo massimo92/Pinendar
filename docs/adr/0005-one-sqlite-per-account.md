@@ -12,6 +12,7 @@ Pinendar necesita varias cuentas sin compartir hospitales, agendas, personas ni 
 
 - Un SQLite central guarda cuentas, hashes Argon2id, claves de recuperación cifradas por hash y la ruta de cada entorno.
 - Cada cuenta apunta a un SQLite de datos independiente.
+- La base inicial conserva sus datos de ejemplo por compatibilidad; los entornos de cuentas adicionales empiezan solo con la configuración mínima y sin hospitales, agendas ni personas.
 - La sesión firmada contiene la identidad y una versión revocable.
 - La recuperación usa una clave mostrada al generarla. Una sesión autenticada puede rotarla; recuperar la contraseña también la rota y revoca sesiones anteriores.
 - La base `data/pinendar.sqlite` existente pertenece a la cuenta inicial `admin`.
