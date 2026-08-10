@@ -13,8 +13,6 @@ const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector
 const app = $('#app');
 let state = null;
 let authConfig = { signupEnabled: false };
-let adminState = null;
-let adminRecovery = null;
 let page = 'calendar';
 let quarter = currentQuarter();
 let selectedMemberFilters = new Set();
@@ -200,7 +198,7 @@ function agendaGroups(items = activeAgendas()) {
 }
 function hospitalOptions(selected = '') { return state.hospitals.map((hospital) => `<option value="${esc(hospital.catalogId)}" ${hospital.catalogId === selected ? 'selected' : ''}>${esc(hospital.name)}</option>`).join(''); }
 function isTele(type) { return Boolean(agenda(type).telematic); }
-function t(key) { return ({ calendar: state?.language === 'es' ? 'Calendario' : 'Calendari', guards: state?.language === 'es' ? 'Guardias' : 'Guàrdies', team: state?.language === 'es' ? 'Equipo' : 'Equip', agendas: 'Agendas', setup: state?.language === 'es' ? 'Configuración' : 'Configuració', history: state?.language === 'es' ? 'Equidad e histórico' : 'Històric', guide: state?.language === 'es' ? 'Guía de uso' : 'Guia d’ús', admin: state?.language === 'es' ? 'Administración' : 'Administració' }[key] || key); }
+function t(key) { return ({ calendar: state?.language === 'es' ? 'Calendario' : 'Calendari', guards: state?.language === 'es' ? 'Guardias' : 'Guàrdies', team: state?.language === 'es' ? 'Equipo' : 'Equip', agendas: 'Agendas', setup: state?.language === 'es' ? 'Configuración' : 'Configuració', history: state?.language === 'es' ? 'Equidad e histórico' : 'Històric', guide: state?.language === 'es' ? 'Guía de uso' : 'Guia d’ús' }[key] || key); }
 function localize(value = '') {
   if (state?.language !== 'es') return String(value);
   const text = String(value); const core = text.trim(); if (!core) return text;
@@ -390,13 +388,13 @@ function loginView(error = '', mode = 'login', recoveryCode = '', username = '',
 }
 
 function nav() {
-  return navTemplate({ page, language: state.language, labelFor: t, isAdmin: state.account?.isAdmin });
+  return navTemplate({ page, language: state.language, labelFor: t });
 }
 function header(title, subtitle, actions = '') {
   return headerTemplate({ title, subtitle, actions, language: state.language, account: state.account });
 }
 
-const NAV_PAGES = new Set(['calendar', 'guards', 'team', 'agendas', 'setup', 'history', 'guide', 'admin']);
+const NAV_PAGES = new Set(['calendar', 'guards', 'team', 'agendas', 'setup', 'history', 'guide']);
 const CALENDAR_VIEWS = new Set(['day', 'week', 'month']);
 const CALENDAR_ISSUE_FILTERS = new Set(['vacancy', 'unassigned', 'partial']);
 function syncNavigationUrl(method = 'replace') {
@@ -416,7 +414,7 @@ function syncNavigationUrl(method = 'replace') {
 }
 function restoreNavigation() {
   const params = new URLSearchParams(window.location.search);
-  if (NAV_PAGES.has(params.get('page')) && (params.get('page') !== 'admin' || state.account?.isAdmin)) page = params.get('page');
+  if (NAV_PAGES.has(params.get('page'))) page = params.get('page');
   if (CALENDAR_VIEWS.has(params.get('view'))) calendarView = params.get('view');
   if (isValidDateKey(params.get('date'))) calendarDate = params.get('date');
   const memberIds = new Set(activeTeam().map((member) => member.id));
@@ -1940,49 +1938,11 @@ async function initHospitalMap() {
   else if (coordinates.length > 1) { const bounds = coordinates.reduce((box, coordinate) => box.extend(coordinate), new window.maplibregl.LngLatBounds(coordinates[0], coordinates[0])); map.fitBounds(bounds, { padding: 65, maxZoom: areaFeatures.length === 1 ? 15 : 12, duration: 0 }); }
 }
 
-function adminDate(value) {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat(state.language === 'es' ? 'es-ES' : 'ca-ES', {
-    dateStyle: 'medium', timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function adminBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function adminPage() {
-  const es = state.language === 'es';
-  if (!state.account?.isAdmin) return `${header(t('admin'))}<div class="card empty-state">${es ? 'Área no disponible' : 'Àrea no disponible'}</div>`;
-  if (!adminState) return `${header(t('admin'), es ? 'Cargando usuarios y copias…' : 'Carregant usuaris i còpies…')}<div class="card empty-state">${es ? 'Cargando…' : 'Carregant…'}</div>`;
-  const pending = adminState.signupRequests.map((item) => `<tr><td><b>${esc(item.username)}</b></td><td>${esc(adminDate(item.createdAt))}</td><td><div class="row-actions"><button class="button small" data-action="admin-approve" data-id="${esc(item.id)}">${es ? 'Aceptar' : 'Accepta'}</button><button class="button danger small" data-action="admin-reject" data-id="${esc(item.id)}">${es ? 'Rechazar' : 'Rebutja'}</button></div></td></tr>`).join('');
-  const accounts = adminState.accounts.map((item) => `<form class="admin-account-row" data-admin-account-form data-id="${esc(item.id)}"><input name="username" required minlength="3" value="${esc(item.username)}" aria-label="${es ? 'Usuario' : 'Usuari'}"><select name="disabled" ${item.isAdmin ? 'disabled' : ''} aria-label="${es ? 'Estado' : 'Estat'}"><option value="false" ${!item.disabled ? 'selected' : ''}>${es ? 'Activo' : 'Actiu'}</option><option value="true" ${item.disabled ? 'selected' : ''}>${es ? 'Bloqueado' : 'Bloquejat'}</option></select><input name="password" type="password" minlength="8" placeholder="${es ? 'Nueva contraseña (opcional)' : 'Contrasenya nova (opcional)'}" ${item.isAdmin ? 'disabled' : ''}><span class="member-detail">${item.isAdmin ? 'Admin · ' : ''}${es ? 'Último acceso' : 'Darrer accés'}: ${esc(adminDate(item.lastActiveAt))}</span><div class="row-actions"><button class="button ghost small">${es ? 'Guardar' : 'Desa'}</button>${item.isAdmin ? '' : `<button type="button" class="button danger small" data-action="admin-delete-account" data-id="${esc(item.id)}" data-username="${esc(item.username)}">${es ? 'Eliminar' : 'Elimina'}</button>`}</div></form>`).join('');
-  const backups = adminState.backups.map((item) => `<tr><td><b>${esc(item.name)}</b></td><td>${esc(adminDate(item.createdAt))}</td><td>${esc(adminBytes(item.size))}</td><td><a class="button ghost small" href="${esc(item.downloadUrl)}">${es ? 'Descargar' : 'Descarrega'}</a></td></tr>`).join('');
-  const recovery = adminRecovery ? `<div class="info-box admin-recovery"><div><b>${es ? 'Guarda la clave de recuperación de' : 'Desa la clau de recuperació de'} ${esc(adminRecovery.username)}</b><code id="admin-recovery-code">${esc(adminRecovery.recoveryCode)}</code></div><button class="button ghost small" data-action="admin-copy-recovery">${es ? 'Copiar' : 'Copia'}</button></div>` : '';
-  return `${header(t('admin'), es ? 'Solicitudes, cuentas y copias de seguridad' : 'Sol·licituds, comptes i còpies de seguretat', `<button class="button ghost small" data-action="admin-refresh">${es ? 'Actualizar' : 'Actualitza'}</button>`)}
-    ${recovery}
-    <section class="section card panel"><div class="section-head"><div><div class="card-kicker">SIGNUP</div><h2>${es ? 'Solicitudes pendientes' : 'Sol·licituds pendents'}</h2></div><span class="badge">${adminState.signupRequests.length}</span></div><div class="table-wrap"><table class="schedule-table"><thead><tr><th>${es ? 'Usuario' : 'Usuari'}</th><th>${es ? 'Solicitada' : 'Sol·licitada'}</th><th>${es ? 'Acciones' : 'Accions'}</th></tr></thead><tbody>${pending || `<tr><td colspan="3" class="empty-state">${es ? 'No hay solicitudes pendientes.' : 'No hi ha sol·licituds pendents.'}</td></tr>`}</tbody></table></div></section>
-    <section class="section card panel"><div class="section-head"><div><div class="card-kicker">USUARIS</div><h2>${es ? 'Cuentas' : 'Comptes'}</h2></div></div><form class="admin-create-form" data-admin-create-form><input name="username" required minlength="3" placeholder="${es ? 'Usuario nuevo' : 'Usuari nou'}"><input name="password" type="password" required minlength="8" placeholder="${es ? 'Contraseña inicial' : 'Contrasenya inicial'}"><button class="button">${es ? 'Añadir usuario' : 'Afegeix usuari'}</button></form><div class="admin-account-list">${accounts}</div></section>
-    <section class="section card panel"><div class="section-head"><div><div class="card-kicker">SQLITE</div><h2>${es ? 'Copias de seguridad' : 'Còpies de seguretat'}</h2></div><button class="button" data-action="admin-create-backup">${es ? 'Crear copia' : 'Crea una còpia'}</button></div><p class="muted">${es ? 'Incluye autenticación y los datos aislados de todas las cuentas.' : 'Inclou autenticació i les dades aïllades de tots els comptes.'}</p><div class="table-wrap"><table class="schedule-table"><thead><tr><th>${es ? 'Archivo' : 'Fitxer'}</th><th>${es ? 'Creada' : 'Creada'}</th><th>${es ? 'Tamaño' : 'Mida'}</th><th></th></tr></thead><tbody>${backups || `<tr><td colspan="4" class="empty-state">${es ? 'Todavía no hay copias.' : 'Encara no hi ha còpies.'}</td></tr>`}</tbody></table></div></section>`;
-}
-
-async function refreshAdmin(showLoading = true) {
-  if (!state.account?.isAdmin) return;
-  if (showLoading) { adminState = null; render(); }
-  try {
-    adminState = await api.adminOverview();
-    render();
-  } catch (error) { showError(error); }
-}
-
 function render() {
   if (!state) return;
   if (hospitalMap) { hospitalMap.remove(); hospitalMap = null; }
   $$('[data-enhanced-select-portal]').forEach((menu) => menu.remove());
-  const view = { calendar: calendarPage, guards: guardsPage, team: teamPage, agendas: agendasPage, setup: setupPage, history: historyPage, guide: guidePage, admin: adminPage }[page]();
+  const view = { calendar: calendarPage, guards: guardsPage, team: teamPage, agendas: agendasPage, setup: setupPage, history: historyPage, guide: guidePage }[page]();
   app.innerHTML = shellTemplate({ navigation: nav(), view, modal: modalView() });
   $$('.modal-head .icon-button').forEach((button) => { if (!button.hasAttribute('aria-label')) button.setAttribute('aria-label', state.language === 'es' ? 'Cerrar' : 'Tanca'); });
   document.documentElement.lang = state.language === 'es' ? 'es' : 'ca'; translateDom(app);
@@ -2144,14 +2104,8 @@ document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.e
 
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-assign-vacancy],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
-  if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); if (page === 'admin') await refreshAdmin(false); } return; }
+  if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
   const action = button.dataset.action;
-  if (action === 'admin-refresh') { await refreshAdmin(); return; }
-  if (action === 'admin-approve') { try { await api.approveSignup(button.dataset.id); await refreshAdmin(false); toast(state.language === 'es' ? 'Solicitud aceptada' : 'Sol·licitud acceptada'); } catch (error) { showError(error); } return; }
-  if (action === 'admin-reject') { if (!window.confirm(state.language === 'es' ? '¿Rechazar esta solicitud?' : 'Rebutjar aquesta sol·licitud?')) return; try { await api.rejectSignup(button.dataset.id); await refreshAdmin(false); toast(state.language === 'es' ? 'Solicitud rechazada' : 'Sol·licitud rebutjada'); } catch (error) { showError(error); } return; }
-  if (action === 'admin-delete-account') { if (!window.confirm(`${state.language === 'es' ? 'Se eliminarán definitivamente la cuenta y todos sus datos' : 'S’eliminaran definitivament el compte i totes les dades'}: ${button.dataset.username}`)) return; try { await api.deleteAccount(button.dataset.id); await refreshAdmin(false); toast(state.language === 'es' ? 'Cuenta eliminada' : 'Compte eliminat'); } catch (error) { showError(error); } return; }
-  if (action === 'admin-create-backup') { try { await api.createBackup(); await refreshAdmin(false); toast(state.language === 'es' ? 'Copia creada' : 'Còpia creada'); } catch (error) { showError(error); } return; }
-  if (action === 'admin-copy-recovery') { await navigator.clipboard.writeText(adminRecovery?.recoveryCode || ''); toast(state.language === 'es' ? 'Clave copiada' : 'Clau copiada'); return; }
   if (button.dataset.calendarIssueFilter) { const issue = button.dataset.calendarIssueFilter; if (selectedCalendarIssueFilters.has(issue)) selectedCalendarIssueFilters.delete(issue); else selectedCalendarIssueFilters.add(issue); syncNavigationUrl('replace'); render(); return; }
   if (button.dataset.calendarView) { if (calendarView !== button.dataset.calendarView) { calendarView = button.dataset.calendarView; syncNavigationUrl('push'); render(); } return; }
   if (button.dataset.calendarOpen) { calendarDate = button.dataset.calendarOpen; calendarView = 'day'; modal = null; syncNavigationUrl('push'); render(); return; }
@@ -2276,7 +2230,7 @@ document.addEventListener('click', async (event) => {
   if (action === 'generate-recovery-code') { try { const result = await api.rotateRecoveryCode(); modal = { type: 'recovery-code', code: result.recoveryCode }; render(); } catch (error) { showError(error); } return; }
   if (action === 'copy-recovery-code') { await navigator.clipboard.writeText(modal.code); toast('Clau copiada'); return; }
   if (action === 'download-recovery-code') { download(`pinendar-${state.account?.username || 'compte'}-recuperacio.txt`, `Pinendar · ${state.account?.username || ''}\nClau de recuperació: ${modal.code}\n`, 'text/plain'); return; }
-  if (action === 'logout') { await api.logout(); state = null; adminState = null; adminRecovery = null; loginView(); return; }
+  if (action === 'logout') { await api.logout(); state = null; loginView(); return; }
   if (action === 'open-member') { modal = { type: 'member', tab: 'general', vacationMonth: monthKey(dateKey(new Date())), vacationDates: [] }; render(); return; }
   if (action === 'open-agenda') { modal = { type: 'agenda' }; render(); return; }
   if (action === 'add-manual-hospital') { const name = hospitalSearchQuery.trim(); if (name.length < 2) return; modal = { type: 'manual-hospital', name }; render(); return; }
@@ -2558,33 +2512,6 @@ async function handleForm(formElement) {
   }
 }
 document.addEventListener('submit', async (event) => {
-  if (event.target.matches?.('[data-admin-create-form]')) {
-    event.preventDefault();
-    const values = new FormData(event.target);
-    try {
-      adminRecovery = await api.createAccount({ username: values.get('username'), password: values.get('password') });
-      event.target.reset();
-      await refreshAdmin(false);
-      toast(state.language === 'es' ? 'Usuario creado' : 'Usuari creat');
-    } catch (error) { showError(error); }
-    return;
-  }
-  if (event.target.matches?.('[data-admin-account-form]')) {
-    event.preventDefault();
-    const values = new FormData(event.target);
-    const password = String(values.get('password') || '');
-    const payload = {
-      username: values.get('username'),
-      disabled: values.get('disabled') === 'true',
-      ...(password ? { password } : {}),
-    };
-    try {
-      await api.updateAccount(event.target.dataset.id, payload);
-      await refreshAdmin(false);
-      toast(state.language === 'es' ? 'Usuario actualizado' : 'Usuari actualitzat');
-    } catch (error) { showError(error); }
-    return;
-  }
   if (event.target.matches?.('[data-hospital-alias-form]')) {
     event.preventDefault();
     const aliasForm = new FormData(event.target);
@@ -2627,7 +2554,6 @@ async function load() {
     modal = state.account?.guideOnboardingPending ? { type: 'guide-onboarding' } : null;
     syncNavigationUrl('replace');
     render();
-    if (page === 'admin' && state.account?.isAdmin) await refreshAdmin(false);
   } catch (error) {
     try { authConfig = await api.authConfig(); } catch (_) { /* Keep the safe UI default if config is unavailable. */ }
     loginView();

@@ -4,6 +4,7 @@ import hmac
 import json
 import secrets
 import time
+from typing import cast
 
 from fastapi import Request
 
@@ -11,6 +12,7 @@ from pinendar.application.state import DomainError
 from pinendar.infrastructure.auth_store import AccountIdentity
 
 COOKIE_NAME = "pinendar_session"
+ADMIN_COOKIE_NAME = "pinendar_admin_session"
 SESSION_SECONDS = 8 * 60 * 60
 
 
@@ -47,12 +49,15 @@ def session_payload(token: str | None, secret: str) -> dict[str, object] | None:
         return None
 
 
-def require_auth(request: Request) -> None:
+def authenticate_request(request: Request, cookie_name: str) -> AccountIdentity:
     settings = request.app.state.settings
-    payload = session_payload(request.cookies.get(COOKIE_NAME), settings.session_secret)
+    payload = session_payload(request.cookies.get(cookie_name), settings.session_secret)
     if not payload:
         raise DomainError("UNAUTHORIZED", "No autoritzat")
-    account = request.app.state.auth_store.get_account(str(payload.get("accountId", "")))
+    account = cast(
+        AccountIdentity | None,
+        request.app.state.auth_store.get_account(str(payload.get("accountId", ""))),
+    )
     if (
         not account
         or account.disabled
@@ -65,9 +70,14 @@ def require_auth(request: Request) -> None:
     request.state.account = account
     request.state.database = environment.database
     request.state.job_dispatcher = environment.dispatcher
+    return account
+
+
+def require_auth(request: Request) -> None:
+    authenticate_request(request, COOKIE_NAME)
 
 
 def require_admin(request: Request) -> None:
-    require_auth(request)
-    if not request.state.account.is_admin:
+    account = authenticate_request(request, ADMIN_COOKIE_NAME)
+    if not account.is_admin:
         raise DomainError("FORBIDDEN", "Aquesta acció requereix permisos d’administració")

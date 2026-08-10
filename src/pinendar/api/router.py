@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pinendar.api.auth import (
+    ADMIN_COOKIE_NAME,
     COOKIE_NAME,
     SESSION_SECONDS,
     create_session,
@@ -366,6 +367,29 @@ def logout(response: Response) -> dict[str, bool]:
     return {"ok": True}
 
 
+@router.post("/api/v1/admin/auth/login")
+def admin_login(payload: LoginRequest, request: Request, response: Response) -> dict[str, Any]:
+    settings = request.app.state.settings
+    account = request.app.state.auth_store.authenticate(payload.username, payload.password)
+    if not account.is_admin:
+        raise DomainError("INVALID_CREDENTIALS", "Usuari o contrasenya incorrectes")
+    response.set_cookie(
+        ADMIN_COOKIE_NAME,
+        create_session(settings.session_secret, account),
+        max_age=SESSION_SECONDS,
+        httponly=True,
+        samesite="strict",
+        secure=settings.secure_cookies,
+    )
+    return {"ok": True, "username": account.username}
+
+
+@router.post("/api/v1/admin/auth/logout")
+def admin_logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(ADMIN_COOKIE_NAME, httponly=True, samesite="strict")
+    return {"ok": True}
+
+
 @router.post("/api/v1/auth/recovery-code", dependencies=[Depends(require_auth)])
 def rotate_recovery_code(request: Request) -> dict[str, str]:
     recovery_code = request.app.state.auth_store.rotate_recovery_code(
@@ -386,7 +410,6 @@ def get_bootstrap(request: Request) -> dict[str, Any]:
         result = bootstrap(database_session, request.app.state.catalog)
         result["account"] = {
             "username": request.state.account.username,
-            "isAdmin": request.state.account.is_admin,
             "guideOnboardingPending": request.app.state.auth_store.guide_onboarding_pending(
                 request.state.account.id
             ),

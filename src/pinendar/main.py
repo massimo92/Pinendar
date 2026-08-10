@@ -127,6 +127,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         def unknown_api(path: str) -> JSONResponse:
             return JSONResponse(status_code=404, content=error_body("ENDPOINT_NOT_FOUND", "Endpoint no trobat"))
 
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/", include_in_schema=False)
+        def admin_frontend() -> FileResponse:
+            return FileResponse(static_dir / "admin.html")
+
         @app.get("/{path:path}", include_in_schema=False)
         def frontend(path: str = "") -> FileResponse:
             requested = static_dir / path

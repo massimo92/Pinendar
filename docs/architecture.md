@@ -24,7 +24,7 @@ Gestión es una asignación especial con `agenda_id` nulo y tipo propio. Ocupa e
 
 Miembros y agendas se archivan. Su histórico se conserva; configuración y eventos futuros se eliminan desde la fecha de archivo. El catálogo hospitalario común sigue versionado como JSON y la base solo almacena sus referencias.
 
-`auth.sqlite` conserva identidades, roles y solicitudes pendientes con credenciales Argon2id. Cada cuenta aprobada apunta a una SQLite independiente. El signup no crea sesión ni entorno hasta que el administrador lo aprueba.
+`auth.sqlite` conserva identidades, roles y solicitudes pendientes con credenciales Argon2id. Cada cuenta aprobada apunta a una SQLite independiente. El signup no crea sesión ni entorno hasta que el administrador lo aprueba. La consola `/admin` es un frontend separado y usa una cookie de sesión exclusiva; la sesión de la aplicación nunca autoriza su API.
 
 `PlanningEvent` conserva persona, fecha, tipo, carga y banderas fija, extraordinaria y manual. Vacantes, guardias, ausencias e histórico de guardias son entidades separadas. `GenerationJob` solo audita ejecuciones mediante una relación opcional y nunca limita las consultas.
 

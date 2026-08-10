@@ -23,7 +23,7 @@ Cada cuenta dispone de un entorno independiente. Las bases SQLite, copias, expor
 
 El registro público crea una solicitud pendiente y muestra al solicitante su clave de recuperación. La cuenta no puede iniciar sesión hasta que un administrador la acepte.
 
-La sección **Administración** solo aparece para cuentas administradoras. Permite aceptar o rechazar solicitudes, crear, editar, bloquear o eliminar usuarios y generar copias ZIP descargables. Cada copia contiene `auth.sqlite`, todas las bases de datos de las cuentas y un manifiesto `metadata.json`.
+La consola independiente `/admin` usa su propio login y una cookie distinta de la aplicación. Permite aceptar o rechazar solicitudes, crear, editar, bloquear o eliminar usuarios y generar copias ZIP descargables. Una sesión en Pinendar no concede acceso administrativo, aunque pertenezca al administrador. Cada copia contiene `auth.sqlite`, todas las bases de datos de las cuentas y un manifiesto `metadata.json`.
 
 Las copias guardadas en el mismo volumen protegen frente a errores lógicos, pero no frente a la pérdida del servidor. Deben descargarse o replicarse fuera del host.
 

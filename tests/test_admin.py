@@ -14,7 +14,7 @@ from pinendar.main import create_app
 
 def login_admin(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/auth/login",
+        "/api/v1/admin/auth/login",
         json={"username": "admin", "password": "admin-password"},
     )
     assert response.status_code == 200
@@ -44,7 +44,7 @@ def test_signup_waits_for_admin_approval(tmp_path: Path) -> None:
             f"/api/v1/admin/signup-requests/{pending['id']}/approve"
         ).status_code == 200
 
-        client.post("/api/v1/auth/logout")
+        client.post("/api/v1/admin/auth/logout")
         assert client.post(
             "/api/v1/auth/login",
             json={"username": "alice", "password": "alice-password"},
@@ -54,13 +54,42 @@ def test_signup_waits_for_admin_approval(tmp_path: Path) -> None:
 def test_non_admin_cannot_use_admin_api(tmp_path: Path) -> None:
     with isolated_client(tmp_path) as client:
         request_and_approve(client, "alice", "alice-password")
-        client.post(
-            "/api/v1/auth/login",
+        response = client.post(
+            "/api/v1/admin/auth/login",
             json={"username": "alice", "password": "alice-password"},
         )
+        assert response.status_code == 401
         response = client.get("/api/v1/admin")
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "FORBIDDEN"
+        assert response.status_code == 401
+        assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_admin_and_application_sessions_are_independent(tmp_path: Path) -> None:
+    with isolated_client(tmp_path) as client:
+        request_and_approve(client, "alice", "alice-password")
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "alice", "password": "alice-password"},
+        ).status_code == 200
+        login_admin(client)
+
+        assert client.get("/api/v1/bootstrap").json()["account"]["username"] == "alice"
+        assert client.get("/api/v1/admin").status_code == 200
+        client.post("/api/v1/admin/auth/logout")
+        assert client.get("/api/v1/admin").status_code == 401
+        assert client.get("/api/v1/bootstrap").status_code == 200
+
+
+def test_admin_frontend_is_separate_from_application(tmp_path: Path) -> None:
+    with isolated_client(tmp_path) as client:
+        admin_page = client.get("/admin")
+        app_page = client.get("/")
+
+        assert admin_page.status_code == 200
+        assert "/admin.js" in admin_page.text
+        assert "/app.js" not in admin_page.text
+        assert "/app.js" in app_page.text
+        assert "/admin.js" not in app_page.text
 
 
 def test_rejected_signup_can_apply_again(tmp_path: Path) -> None:
@@ -74,7 +103,7 @@ def test_rejected_signup_can_apply_again(tmp_path: Path) -> None:
         assert client.post(
             f"/api/v1/admin/signup-requests/{request_id}/reject"
         ).status_code == 200
-        client.post("/api/v1/auth/logout")
+        client.post("/api/v1/admin/auth/logout")
 
         second = client.post(
             "/api/v1/auth/signup",
@@ -134,7 +163,7 @@ def test_admin_can_create_edit_disable_and_delete_accounts(tmp_path: Path) -> No
             json={"username": "alicia", "password": "new-password", "disabled": True},
         )
         assert updated.status_code == 200
-        client.post("/api/v1/auth/logout")
+        client.post("/api/v1/admin/auth/logout")
         assert client.post(
             "/api/v1/auth/login",
             json={"username": "alicia", "password": "new-password"},
@@ -238,7 +267,7 @@ def test_admin_can_create_account_when_runtime_migrations_are_disabled(tmp_path:
             json={"username": "alice", "password": "alice-password"},
         )
         assert created.status_code == 201
-        client.post("/api/v1/auth/logout")
+        client.post("/api/v1/admin/auth/logout")
         assert client.post(
             "/api/v1/auth/login",
             json={"username": "alice", "password": "alice-password"},

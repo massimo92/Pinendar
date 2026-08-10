@@ -38,14 +38,14 @@ def request_and_approve(client: TestClient, username: str, password: str) -> dic
     assert requested.status_code == 202
     assert requested.json()["status"] == "pending"
     assert client.post(
-        "/api/v1/auth/login",
+        "/api/v1/admin/auth/login",
         json={"username": "admin", "password": "admin-password"},
     ).status_code == 200
     pending = client.get("/api/v1/admin").json()["signupRequests"]
     normalized = requested.json()["username"]
     request_id = next(item["id"] for item in pending if item["username"] == normalized)
     assert client.post(f"/api/v1/admin/signup-requests/{request_id}/approve").status_code == 200
-    client.post("/api/v1/auth/logout")
+    client.post("/api/v1/admin/auth/logout")
     return requested.json()
 
 
@@ -231,7 +231,7 @@ def test_cleanup_deletes_only_accounts_older_than_six_calendar_months(tmp_path: 
     cutoff = subtract_calendar_months(now, 6)
     with TestClient(app) as client:
         expired = client.post(
-            "/api/v1/auth/login",
+            "/api/v1/admin/auth/login",
             json={"username": "admin", "password": "admin-password"},
         )
         assert expired.status_code == 200

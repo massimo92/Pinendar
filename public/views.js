@@ -34,9 +34,8 @@ export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', u
   </form></section>`;
 }
 
-export function navTemplate({ page, language, labelFor, isAdmin = false }) {
+export function navTemplate({ page, language, labelFor }) {
   const items = [['calendar', 'Calendari'], ['guards', 'Guàrdies'], ['team', 'Equip'], ['agendas', 'Agendes'], ['setup', 'Configuració'], ['history', 'Equitat i històric'], ['guide', 'Guia d’ús']];
-  if (isAdmin) items.push(['admin', 'Administració']);
   return `<aside class="sidebar"><div class="brand">${logo()}<span>Pinendar</span></div>
     <nav class="nav">${items.map(([id, label]) => `<button data-page="${id}" class="${page === id ? 'active' : ''}"><span class="dot"></span>${language === 'es' ? labelFor(id) : label}</button>`).join('')}</nav>
     <div class="sidebar-foot">Servei de Radiologia Abdominal<br><span class="status">Dades locals · SQLite</span></div>
