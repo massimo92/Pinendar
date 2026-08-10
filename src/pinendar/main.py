@@ -16,8 +16,10 @@ from pinendar.api.router import router
 from pinendar.application.state import DomainError
 from pinendar.config import Settings
 from pinendar.infrastructure.auth_store import AuthStore, utc_now
+from pinendar.infrastructure.backups import BackupManager
 from pinendar.infrastructure.catalog import HospitalCatalog
 from pinendar.infrastructure.environments import EnvironmentRegistry
+from pinendar.infrastructure.rate_limit import SlidingWindowRateLimiter
 
 LOGGER = logging.getLogger(__name__)
 ACCOUNT_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
@@ -78,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Compatibility aliases for commands and tests which explicitly inspect the default environment.
             app.state.database = environment.database
             app.state.job_dispatcher = environment.dispatcher
+        app.state.auth_store.ensure_admin(resolved.admin_username)
         cleanup_inactive_accounts(app)
         cleanup_task = asyncio.create_task(cleanup_inactive_accounts_daily(app))
         try:
@@ -93,6 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.catalog = HospitalCatalog(resolved.hospital_catalog_dir)
     app.state.auth_store = AuthStore(resolved.auth_database_path)
+    app.state.backups = BackupManager(resolved.backups_dir, app.state.auth_store)
+    app.state.signup_limiter = SlidingWindowRateLimiter(
+        resolved.signup_requests_per_hour, 60 * 60
+    )
     app.state.environments = EnvironmentRegistry(resolved, app.state.catalog)
     app.add_exception_handler(DomainError, domain_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
@@ -119,6 +126,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         def unknown_api(path: str) -> JSONResponse:
             return JSONResponse(status_code=404, content=error_body("ENDPOINT_NOT_FOUND", "Endpoint no trobat"))
+
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/", include_in_schema=False)
+        def admin_frontend() -> FileResponse:
+            return FileResponse(static_dir / "admin.html")
 
         @app.get("/{path:path}", include_in_schema=False)
         def frontend(path: str = "") -> FileResponse:

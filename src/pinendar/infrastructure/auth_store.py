@@ -35,6 +35,7 @@ class Account(AuthBase):
     environment_path: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     session_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
@@ -52,6 +53,16 @@ class AccountActivity(AuthBase):
     last_active_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class SignupRequest(AuthBase):
+    __tablename__ = "signup_requests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    recovery_hash: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
 @dataclass(frozen=True)
 class AccountIdentity:
     id: str
@@ -59,6 +70,25 @@ class AccountIdentity:
     environment_path: Path
     session_version: int
     disabled: bool
+    is_admin: bool
+
+
+@dataclass(frozen=True)
+class AccountSummary:
+    id: str
+    username: str
+    environment_path: Path
+    disabled: bool
+    is_admin: bool
+    created_at: datetime
+    last_active_at: datetime | None
+
+
+@dataclass(frozen=True)
+class SignupRequestSummary:
+    id: str
+    username: str
+    created_at: datetime
 
 
 class AuthStore:
@@ -81,6 +111,15 @@ class AuthStore:
 
     def create_schema(self) -> None:
         AuthBase.metadata.create_all(self.engine)
+        with self.engine.begin() as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(accounts)"))
+            }
+            if "is_admin" not in columns:
+                connection.execute(
+                    text("ALTER TABLE accounts ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0")
+                )
 
     def ready(self) -> bool:
         with self.engine.connect() as connection:
@@ -120,6 +159,19 @@ class AuthStore:
             environment_path=Path(account.environment_path),
             session_version=account.session_version,
             disabled=account.disabled,
+            is_admin=account.is_admin,
+        )
+
+    @staticmethod
+    def summary(account: Account, last_active_at: datetime | None) -> AccountSummary:
+        return AccountSummary(
+            id=account.id,
+            username=account.username,
+            environment_path=Path(account.environment_path),
+            disabled=account.disabled,
+            is_admin=account.is_admin,
+            created_at=account.created_at,
+            last_active_at=last_active_at,
         )
 
     def username_exists(self, username: str) -> bool:
@@ -131,24 +183,166 @@ class AuthStore:
         with self.session_factory() as session:
             return len(session.scalars(select(Account.id)).all())
 
-    def create_account(self, username: str, password: str, environment_path: Path) -> tuple[AccountIdentity, str]:
+    def create_account(
+        self,
+        username: str,
+        password: str,
+        environment_path: Path,
+        *,
+        is_admin: bool = False,
+    ) -> tuple[AccountIdentity, str]:
         normalized = self.normalize_username(username)
         self.validate_password(password)
         recovery_code = self.recovery_code()
         with self.session_factory.begin() as session:
             if session.scalar(select(Account.id).where(Account.username == normalized)):
                 raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")
+            if session.scalar(select(SignupRequest.id).where(SignupRequest.username == normalized)):
+                raise DomainError(
+                    "USERNAME_RESERVED",
+                    "Aquest usuari té una sol·licitud pendent",
+                    field="username",
+                )
             account = Account(
                 id=str(uuid.uuid4()),
                 username=normalized,
                 password_hash=self.password_hasher.hash(password),
                 recovery_hash=self.password_hasher.hash(recovery_code),
                 environment_path=str(environment_path.resolve()),
+                is_admin=is_admin,
             )
             session.add(account)
             session.flush()
             session.add(AccountActivity(account_id=account.id, last_active_at=utc_now()))
             return self.identity(account), recovery_code
+
+    def request_signup(self, username: str, password: str) -> tuple[SignupRequestSummary, str]:
+        normalized = self.normalize_username(username)
+        self.validate_password(password)
+        recovery_code = self.recovery_code()
+        with self.session_factory.begin() as session:
+            if session.scalar(select(Account.id).where(Account.username == normalized)):
+                raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")
+            if session.scalar(select(SignupRequest.id).where(SignupRequest.username == normalized)):
+                raise DomainError(
+                    "SIGNUP_PENDING",
+                    "Ja hi ha una sol·licitud pendent per a aquest usuari",
+                    field="username",
+                )
+            request = SignupRequest(
+                id=str(uuid.uuid4()),
+                username=normalized,
+                password_hash=self.password_hasher.hash(password),
+                recovery_hash=self.password_hasher.hash(recovery_code),
+            )
+            session.add(request)
+            session.flush()
+            return SignupRequestSummary(request.id, request.username, request.created_at), recovery_code
+
+    def list_signup_requests(self) -> list[SignupRequestSummary]:
+        with self.session_factory() as session:
+            requests = list(session.scalars(select(SignupRequest).order_by(SignupRequest.created_at)))
+            return [SignupRequestSummary(item.id, item.username, item.created_at) for item in requests]
+
+    def get_signup_request(self, request_id: str) -> SignupRequestSummary | None:
+        with self.session_factory() as session:
+            request = session.get(SignupRequest, request_id)
+            if not request:
+                return None
+            return SignupRequestSummary(request.id, request.username, request.created_at)
+
+    def approve_signup_request(
+        self, request_id: str, environment_path: Path
+    ) -> AccountIdentity:
+        with self.session_factory.begin() as session:
+            request = session.get(SignupRequest, request_id)
+            if not request:
+                raise DomainError("SIGNUP_REQUEST_NOT_FOUND", "Sol·licitud no trobada")
+            if session.scalar(select(Account.id).where(Account.username == request.username)):
+                raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")
+            account = Account(
+                id=str(uuid.uuid4()),
+                username=request.username,
+                password_hash=request.password_hash,
+                recovery_hash=request.recovery_hash,
+                environment_path=str(environment_path.resolve()),
+            )
+            session.add(account)
+            session.flush()
+            session.add(AccountActivity(account_id=account.id, last_active_at=utc_now()))
+            session.delete(request)
+            return self.identity(account)
+
+    def reject_signup_request(self, request_id: str) -> None:
+        with self.session_factory.begin() as session:
+            request = session.get(SignupRequest, request_id)
+            if not request:
+                raise DomainError("SIGNUP_REQUEST_NOT_FOUND", "Sol·licitud no trobada")
+            session.delete(request)
+
+    def ensure_admin(self, username: str) -> AccountIdentity | None:
+        normalized = self.normalize_username(username)
+        with self.session_factory.begin() as session:
+            account = session.scalar(select(Account).where(Account.username == normalized))
+            if not account:
+                return None
+            account.is_admin = True
+            session.flush()
+            return self.identity(account)
+
+    def list_accounts(self) -> list[AccountSummary]:
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(Account, AccountActivity.last_active_at)
+                .outerjoin(AccountActivity, AccountActivity.account_id == Account.id)
+                .order_by(Account.created_at, Account.username)
+            ).all()
+            return [self.summary(account, last_active_at) for account, last_active_at in rows]
+
+    def update_account(
+        self,
+        account_id: str,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+        disabled: bool | None = None,
+    ) -> AccountIdentity:
+        normalized = self.normalize_username(username) if username is not None else None
+        if password is not None:
+            self.validate_password(password)
+        with self.session_factory.begin() as session:
+            account = session.get(Account, account_id)
+            if not account:
+                raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+            if normalized is not None and normalized != account.username:
+                if session.scalar(select(Account.id).where(Account.username == normalized)):
+                    raise DomainError("USERNAME_EXISTS", "Aquest usuari ja existeix", field="username")
+                if session.scalar(select(SignupRequest.id).where(SignupRequest.username == normalized)):
+                    raise DomainError("USERNAME_RESERVED", "Aquest usuari té una sol·licitud pendent", field="username")
+                account.username = normalized
+            if password is not None:
+                account.password_hash = self.password_hasher.hash(password)
+                account.session_version += 1
+            if disabled is not None and disabled != account.disabled:
+                account.disabled = disabled
+                account.session_version += 1
+            session.flush()
+            return self.identity(account)
+
+    def delete_account(self, account_id: str) -> AccountIdentity:
+        with self.session_factory.begin() as session:
+            account = session.get(Account, account_id)
+            if not account:
+                raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+            identity = self.identity(account)
+            activity = session.get(AccountActivity, account.id)
+            onboarding = session.get(AccountOnboarding, account.id)
+            if activity:
+                session.delete(activity)
+            if onboarding:
+                session.delete(onboarding)
+            session.delete(account)
+            return identity
 
     def authenticate(self, username: str, password: str) -> AccountIdentity:
         normalized = self.normalize_username(username)
@@ -237,7 +431,7 @@ class AuthStore:
                 session.scalars(
                     select(Account)
                     .join(AccountActivity, AccountActivity.account_id == Account.id)
-                    .where(AccountActivity.last_active_at < cutoff)
+                    .where(AccountActivity.last_active_at < cutoff, Account.is_admin.is_(False))
                 )
             )
             identities = [self.identity(account) for account in accounts]

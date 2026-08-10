@@ -14,6 +14,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         database_path=tmp_path / "pinendar.sqlite",
         auth_database_path=tmp_path / "auth.sqlite",
         environments_dir=tmp_path / "environments",
+        backups_dir=tmp_path / "backups",
         hospital_catalog_dir=Path("data/hospitals").resolve(),
         static_dir=Path("public").resolve(),
         bootstrap_username="admin",

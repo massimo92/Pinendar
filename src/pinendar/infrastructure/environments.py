@@ -42,6 +42,19 @@ class EnvironmentRegistry:
             self._environments[resolved] = environment
             return environment
 
+    def create(self, path: Path) -> Environment:
+        resolved = path.resolve()
+        if not self.manages(resolved) or resolved == self.settings.database_path.resolve():
+            raise ValueError("Account environments must be inside the configured environments directory")
+        migrate(resolved)
+        return self.get(resolved)
+
+    def manages(self, path: Path) -> bool:
+        resolved = path.resolve()
+        return resolved == self.settings.database_path.resolve() or resolved.is_relative_to(
+            self.settings.environments_dir.resolve()
+        )
+
     def stop_all(self) -> None:
         with self._lock:
             environments = list(self._environments.values())
@@ -52,9 +65,7 @@ class EnvironmentRegistry:
 
     def delete(self, path: Path) -> bool:
         resolved = path.resolve()
-        default_database = self.settings.database_path.resolve()
-        environments_dir = self.settings.environments_dir.resolve()
-        if resolved != default_database and not resolved.is_relative_to(environments_dir):
+        if not self.manages(resolved):
             return False
 
         with self._lock:

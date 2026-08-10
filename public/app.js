@@ -1,8 +1,8 @@
-import { api, waitForGeneration } from './api.js?v=12';
+import { api, waitForGeneration } from './api.js?v=13';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
-import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=6';
+import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
@@ -344,11 +344,11 @@ async function reloadState(message = '') {
   }
 }
 
-function loginView(error = '', mode = 'login', recoveryCode = '', username = '') {
+function loginView(error = '', mode = 'login', recoveryCode = '', username = '', approvalPending = false) {
   const selectedMode = mode === 'signup' && !authConfig.signupEnabled ? 'login' : mode;
-  app.innerHTML = loginTemplate({ mode: selectedMode, error, recoveryCode, username, signupEnabled: authConfig.signupEnabled }, esc);
+  app.innerHTML = loginTemplate({ mode: selectedMode, error, recoveryCode, username, signupEnabled: authConfig.signupEnabled, approvalPending }, esc);
   app.querySelectorAll('[data-auth-mode]').forEach((button) => button.addEventListener('click', () => loginView('', button.dataset.authMode)));
-  app.querySelector('[data-auth-action="continue"]')?.addEventListener('click', () => load());
+  app.querySelector('[data-auth-action="continue"]')?.addEventListener('click', () => approvalPending ? loginView('', 'login') : load());
   app.querySelector('[data-auth-action="copy-recovery"]')?.addEventListener('click', async () => {
     await navigator.clipboard.writeText($('#recovery-code').textContent);
   });
@@ -373,7 +373,7 @@ function loginView(error = '', mode = 'login', recoveryCode = '', username = '')
     try {
       if (selectedMode === 'signup') {
         const result = await api.signup(enteredUsername, password);
-        loginView('', selectedMode, result.recoveryCode, result.username);
+        loginView('', selectedMode, result.recoveryCode, result.username, result.status === 'pending');
       } else if (selectedMode === 'recover') {
         const result = await api.recover(enteredUsername, data.get('recoveryCode'), password);
         loginView('', selectedMode, result.recoveryCode, result.username);
@@ -2105,6 +2105,7 @@ document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.e
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-assign-vacancy],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
   if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
+  const action = button.dataset.action;
   if (button.dataset.calendarIssueFilter) { const issue = button.dataset.calendarIssueFilter; if (selectedCalendarIssueFilters.has(issue)) selectedCalendarIssueFilters.delete(issue); else selectedCalendarIssueFilters.add(issue); syncNavigationUrl('replace'); render(); return; }
   if (button.dataset.calendarView) { if (calendarView !== button.dataset.calendarView) { calendarView = button.dataset.calendarView; syncNavigationUrl('push'); render(); } return; }
   if (button.dataset.calendarOpen) { calendarDate = button.dataset.calendarOpen; calendarView = 'day'; modal = null; syncNavigationUrl('push'); render(); return; }
@@ -2168,7 +2169,6 @@ document.addEventListener('click', async (event) => {
   if (button.dataset.removeGenerationCondition) { const [kind, id] = button.dataset.removeGenerationCondition.split(':'); if (kind === 'guard') modal.guards = modal.guards.filter((item) => item.id !== id); else modal.absences = modal.absences.filter((item) => item.id !== id); render(); return; }
   if (button.dataset.removeGuard) { try { await api.deleteGuard(button.dataset.removeGuard); await reloadState(); } catch (error) { showError(error); } render(); return; }
   if (button.dataset.removeTime) { const [, date] = button.dataset.removeTime.split(':'); try { await api.deleteHoliday(date); await reloadState(); } catch (error) { showError(error); } render(); return; }
-  const action = button.dataset.action;
   if (action === 'open-manual-extra') { modal = { type: 'extra-assignment', manual: true, memberId: '', date: calendarDate, payload: null }; render(); return; }
   if (action === 'submit-modal') { event.preventDefault(); const formElement = button.closest('form'); if (formElement.reportValidity()) await handleForm(formElement); return; }
   if (action === 'confirm-generation-overwrite') { modal.replaceExisting = true; modal.overlap = null; modal.conflict = ''; await handleForm(button.closest('form')); return; }

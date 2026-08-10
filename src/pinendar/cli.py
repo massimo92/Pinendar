@@ -19,6 +19,7 @@ def main() -> None:
     create_parser.add_argument("--username", required=True)
     create_parser.add_argument("--password", required=True)
     create_parser.add_argument("--environment", type=Path, required=True)
+    create_parser.add_argument("--admin", action="store_true")
     reset_parser = account_subparsers.add_parser("reset-password")
     reset_parser.add_argument("--username", required=True)
     reset_parser.add_argument("--password", required=True)
@@ -35,7 +36,10 @@ def main() -> None:
             if args.account_command == "create":
                 migrate(args.environment)
                 account, recovery_code = auth_store.create_account(
-                    args.username, args.password, args.environment
+                    args.username,
+                    args.password,
+                    args.environment,
+                    is_admin=args.admin,
                 )
                 print(f"Usuari creat: {account.username}")
                 print(f"Clau de recuperació (desa-la ara): {recovery_code}")
