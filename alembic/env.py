@@ -1,4 +1,3 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -9,10 +8,6 @@ from pinendar.infrastructure.models import Base
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
-
-database_path = os.environ.get("PINENDAR_DATABASE_PATH")
-if database_path:
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
 
 target_metadata = Base.metadata
 
