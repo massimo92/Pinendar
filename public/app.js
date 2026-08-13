@@ -4,6 +4,7 @@ import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMe
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
+import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=1';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
 const WEEK_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv', 'Ds', 'Dg'];
@@ -1969,8 +1970,28 @@ function exportRows() { return calendarEvents().filter((item) => (!selectedMembe
 function exportName() { return `pinendar-${projectionStartMonth(calendarProjection())}-${projectionEndMonth(calendarProjection())}`; }
 function exportData() { return exportRows().map((item) => { const member = person(item.memberId) || {}; const agendaItem = agenda(item.type); return { Data: item.date, Metge: member.name || '', Correu: member.email || '', Agenda: item.type === 'no_assignment' ? 'NO ASSIGNACIÓ' : agendaItem.name, Hospital: item.type === 'no_assignment' ? '' : agendaHospital(agendaItem)?.name || '', Peonada: item.peonada ? 'Sí' : 'No' }; }); }
 function exportCsv() { const rows = [['Data', 'Metge', 'Correu', 'Agenda', 'Hospital'], ...exportData().map((item) => Object.values(item))]; download(`${exportName()}.csv`, `\ufeff${rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\n')}`, 'text/csv;charset=utf-8'); }
-function icsText(value = '') { return String(value).replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll(',', '\\,').replaceAll(';', '\\;'); }
-function exportIcs() { const events = exportRows().filter((item) => item.type !== 'no_assignment').map((item) => { const member = person(item.memberId) || {}; const agendaItem = agenda(item.type); const hospital = agendaHospital(agendaItem); const day = item.date.replaceAll('-', ''); return `BEGIN:VEVENT\nUID:${item.id}@pinendar\nDTSTART;VALUE=DATE:${day}\nDTEND;VALUE=DATE:${addDays(item.date, 1).replaceAll('-', '')}\nSUMMARY:${icsText(agendaItem.name)}\nLOCATION:${icsText(hospital?.name || '')}\nATTENDEE;CN=${icsText(member.name || '')}:MAILTO:${member.email || ''}\nEND:VEVENT`; }); download(`${exportName()}.ics`, `BEGIN:VCALENDAR\nVERSION:2.0\nCALSCALE:GREGORIAN\nPRODID:-//Pinendar//CA\n${events.join('\n')}\nEND:VCALENDAR`, 'text/calendar;charset=utf-8'); }
+function exportIcs() {
+  const events = exportRows().filter((item) => item.type !== 'no_assignment').map((item) => {
+    const agendaItem = agenda(item.type); const hospital = agendaHospital(agendaItem);
+    return buildIcsEvent({
+      event: item,
+      member: person(item.memberId) || {},
+      agenda: agendaItem,
+      hospital: hospital ? { ...hospital, alias: compactHospitalName(hospital) } : {},
+    });
+  });
+  const bounds = periodBounds(calendarProjection());
+  if (!selectedAgendaFilters.size) {
+    calendarAbsences()
+      .filter((item) => item.category === 'vacances' && item.start <= bounds.end && item.end >= bounds.start && (!selectedMemberFilters.size || selectedMemberFilters.has(item.memberId)))
+      .forEach((item) => events.push(buildIcsEvent({
+        event: { ...item, type: 'vacation', allDay: true, start: item.start < bounds.start ? bounds.start : item.start, end: item.end > bounds.end ? bounds.end : item.end },
+        member: person(item.memberId) || {},
+        agenda: { name: state.language === 'es' ? 'Vacaciones' : 'Vacances' },
+      })));
+  }
+  download(`${exportName()}.ics`, buildIcsCalendar(events), 'text/calendar;charset=utf-8');
+}
 function exportExcel() { if (!window.XLSX) return toast('No s’ha pogut carregar l’exportador Excel'); const sheet = window.XLSX.utils.json_to_sheet(exportData()); const workbook = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(workbook, sheet, 'Pinendar'); const bytes = window.XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }); download(`${exportName()}.xlsx`, bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); }
 function spreadsheetRow(values) { return `<Row>${values.map((value) => `<Cell><Data ss:Type="String">${esc(value)}</Data></Cell>`).join('')}</Row>`; }
 function conditionTemplate(kind) { const headers = kind === 'guards' ? ['Fecha', 'Personas'] : ['Persona', 'Inici', 'Final']; const people = activeTeam().map((member) => spreadsheetRow([member.name, member.email])).join(''); const xml = `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="${kind === 'guards' ? 'Guardies' : 'Vacances'}"><Table>${spreadsheetRow(headers)}</Table></Worksheet><Worksheet ss:Name="Persones"><Table>${spreadsheetRow(['Persona', 'Correu'])}${people}</Table></Worksheet></Workbook>`; download(`plantilla-${kind === 'guards' ? 'guardies' : 'vacances'}-pinendar.xls`, xml, 'application/vnd.ms-excel'); }
