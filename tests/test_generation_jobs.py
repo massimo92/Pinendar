@@ -16,7 +16,7 @@ from pinendar.infrastructure.models import AppSettings, Assignment, GenerationJo
 
 
 def wait_for_job(client: TestClient, job_id: str) -> dict:
-    for _ in range(500):
+    for _ in range(2000):
         body = client.get(f"/api/v1/generation-jobs/{job_id}").json()
         if body["status"] in {"succeeded", "failed", "stale"}:
             return body

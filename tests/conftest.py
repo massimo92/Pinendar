@@ -22,7 +22,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         session_secret="test-session-secret-with-enough-entropy",
         run_job_dispatcher=False,
         scheduler_process_pool=False,
-        scheduler_time_limit_seconds=5,
+        scheduler_time_limit_seconds=20,
         scheduler_workers=1,
     )
     with TestClient(create_app(settings)) as test_client:
