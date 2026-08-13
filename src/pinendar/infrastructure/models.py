@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from datetime import date as DateType
 
 from sqlalchemy import (
     Boolean,
@@ -289,6 +290,7 @@ class PlanningEvent(Base):
     fixed: Mapped[bool] = mapped_column(Boolean, default=False)
     extra: Mapped[bool] = mapped_column(Boolean, default=False)
     peonada: Mapped[bool] = mapped_column(Boolean, default=False)
+    deferred_origin_date: Mapped[DateType | None] = mapped_column(Date)
     manually_modified: Mapped[bool] = mapped_column(Boolean, default=False)
     management: Mapped[bool] = mapped_column(Boolean, default=False)
 

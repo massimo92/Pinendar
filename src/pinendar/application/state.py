@@ -478,6 +478,11 @@ def import_calendar_record(
                 fixed=bool(item.get("fixed")),
                 extra=bool(item.get("extra")),
                 peonada=bool(item.get("peonada")),
+                deferred_origin_date=(
+                    parse_date(item["deferredOriginDate"])
+                    if item.get("deferredOriginDate")
+                    else None
+                ),
                 manually_modified=bool(item.get("manuallyModified") or item.get("locked")),
                 management=kind == "management" or bool(item.get("management")),
             )
@@ -660,6 +665,11 @@ def serialize_calendar(session: Session) -> dict[str, Any]:
                 **({"fixed": True} if item.fixed else {}),
                 **({"extra": True} if item.extra else {}),
                 **({"peonada": True} if item.peonada else {}),
+                **(
+                    {"deferredOriginDate": item.deferred_origin_date.isoformat()}
+                    if item.deferred_origin_date
+                    else {}
+                ),
                 **({"manuallyModified": True} if item.manually_modified else {}),
                 **({"management": True} if item.management else {}),
             }

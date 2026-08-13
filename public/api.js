@@ -70,6 +70,7 @@ export const api = {
   transferAssignment: (id, body) => request(`/api/v1/calendar/events/${encodeURIComponent(id)}/transfer`, json('POST', body)),
   vacancyAssignmentOptions: (id) => request(`/api/v1/calendar/vacancies/${encodeURIComponent(id)}/assignment-options`),
   assignVacancy: (id, body) => request(`/api/v1/calendar/vacancies/${encodeURIComponent(id)}/assign`, json('POST', body)),
+  deferVacancy: (id, body) => request(`/api/v1/calendar/vacancies/${encodeURIComponent(id)}/defer`, json('POST', body)),
   peonadaOptions: (date, memberId) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/peonadas`),
   updatePeonadas: (date, memberId, assignmentIds) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/peonadas`, json('PUT', { assignmentIds })),
   extraAssignmentOptions: (date, memberId) => request(`/api/v1/calendar/dates/${encodeURIComponent(date)}/members/${encodeURIComponent(memberId)}/extra-options`),

@@ -37,6 +37,10 @@ from pinendar.application.commands import (
     update_peonadas,
     vacancy_assignment_options,
 )
+from pinendar.application.deferred_operations import (
+    apply_deferred_vacancy,
+    deferred_vacancy_options,
+)
 from pinendar.application.guard_imports import (
     add_guards,
     create_member_alias,
@@ -210,6 +214,11 @@ class VacancyAssignmentRequest(BaseModel):
         default=None,
         alias="peonadaAssignments",
     )
+
+
+class DeferredVacancyRequest(BaseModel):
+    target_date: date = Field(alias="targetDate")
+    expected_revision: int | None = Field(default=None, alias="expectedRevision")
 
 
 class AssignmentTransferRequest(BaseModel):
@@ -818,7 +827,32 @@ def calendar_vacancy_assignment_options(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory() as database_session:
-        return vacancy_assignment_options(database_session, vacancy_id)
+        result = vacancy_assignment_options(database_session, vacancy_id)
+        deferred = deferred_vacancy_options(database_session, vacancy_id)
+        return {
+            **result,
+            "deferredOptions": deferred["options"],
+            "planningRevision": deferred["planningRevision"],
+        }
+
+
+@router.post(
+    "/api/v1/calendar/vacancies/{vacancy_id}/defer",
+    dependencies=[Depends(require_auth)],
+    status_code=status.HTTP_201_CREATED,
+)
+def defer_calendar_vacancy(
+    vacancy_id: int,
+    payload: DeferredVacancyRequest,
+    request: Request,
+) -> dict[str, Any]:
+    with request.state.database.session_factory.begin() as database_session:
+        return apply_deferred_vacancy(
+            database_session,
+            vacancy_id,
+            payload.target_date,
+            expected_revision=payload.expected_revision,
+        )
 
 
 @router.post(

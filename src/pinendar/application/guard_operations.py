@@ -361,7 +361,10 @@ def _repair_date(
     old_by_key = {
         (row.member_id, row.agenda_id): row
         for row in rows
-        if row.kind == "assigned" and row.agenda_id and not row.extra
+        if row.kind == "assigned"
+        and row.agenda_id
+        and not row.extra
+        and not row.deferred_origin_date
     }
     old_no_assignment = {
         row.member_id: row for row in rows if row.kind == "no_assignment"
@@ -374,7 +377,9 @@ def _repair_date(
     old_extras = {
         row.id: row
         for row in rows
-        if row.kind == "assigned" and row.agenda_id and row.extra
+        if row.kind == "assigned"
+        and row.agenda_id
+        and (row.extra or row.deferred_origin_date)
     }
 
     model = cp_model.CpModel()
@@ -577,7 +582,12 @@ def _repair_date(
                     "kind": "assigned",
                     "locked": row.locked,
                     "fixed": False,
-                    "extra": True,
+                    "extra": row.extra,
+                    "deferredOriginDate": (
+                        row.deferred_origin_date.isoformat()
+                        if row.deferred_origin_date
+                        else None
+                    ),
                     "management": False,
                 }
             )
@@ -880,6 +890,11 @@ def apply_guard_operation(
             row.locked = item["locked"]
             row.fixed = item["fixed"]
             row.extra = item["extra"]
+            row.deferred_origin_date = (
+                date.fromisoformat(item["deferredOriginDate"])
+                if item.get("deferredOriginDate")
+                else None
+            )
             row.management = item["management"]
         for vacancy in repair["oldVacancies"]:
             session.delete(vacancy)

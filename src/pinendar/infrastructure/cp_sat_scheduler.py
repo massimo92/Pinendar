@@ -18,7 +18,7 @@ from pinendar.domain.scheduler import (
     period_dates,
 )
 
-MODEL_VERSION = "17"
+MODEL_VERSION = "18"
 PERCENT_SCALE = 10_000
 ORTOOLS_VERSION = version("ortools")
 
@@ -147,7 +147,7 @@ def _daily_demand(
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -236,6 +236,12 @@ class CpSatScheduler:
         locked_types_by_day: dict[tuple[str, date], set[str]] = defaultdict(set)
         for member_id, value, event_type in locked_by_key:
             locked_types_by_day[(member_id, value)].add(event_type)
+        preserved_deferred = Counter(
+            (date.fromisoformat(item["deferredOriginDate"]), item["type"])
+            for item in problem.locked_assignments
+            if item.get("deferredOriginDate")
+            and item.get("type") not in {"management", "no_assignment"}
+        )
 
         for value, member_ids in planifiable.items():
             for member_id in member_ids:
@@ -327,8 +333,16 @@ class CpSatScheduler:
                     and not locked_by_key.get(
                         (member_id, assignment_date, assignment_agenda), {}
                     ).get("extra")
+                    and not locked_by_key.get(
+                        (member_id, assignment_date, assignment_agenda), {}
+                    ).get("deferredOriginDate")
                 ]
-                model.add(sum(covered) + variable == amount)
+                model.add(
+                    sum(covered)
+                    + variable
+                    + preserved_deferred[(value, agenda_id)]
+                    == amount
+                )
 
         legacy_rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
         personal_rules: list[tuple[str, dict[str, Any]]] = []
@@ -923,7 +937,13 @@ class CpSatScheduler:
                     **(
                         {
                             key: locked_item[key]
-                            for key in ("locked", "extra", "manuallyModified")
+                            for key in (
+                                "locked",
+                                "extra",
+                                "peonada",
+                                "deferredOriginDate",
+                                "manuallyModified",
+                            )
                             if key in locked_item
                         }
                         if locked_item
@@ -1120,7 +1140,8 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
         ):
             errors.append(f"onsite agenda on telework day {member_id}:{value}:{agenda_id}")
         if agenda_id not in {"no_assignment", "management"}:
-            covered[(value, agenda_id)] += 1
+            coverage_date = item.get("deferredOriginDate") or value
+            covered[(coverage_date, agenda_id)] += 1
     if set(actual_load) != expected or any(value not in {50, 100} for value in actual_load.values()):
         errors.append("daily assignment load is not 50 or 100 percent")
     if any(value > 1 for value in assignment_keys.values()):

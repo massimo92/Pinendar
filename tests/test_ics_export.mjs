@@ -20,6 +20,12 @@ const afternoonPeonada = buildIcsEvent({
   agenda: { name: 'TAC urgent', shift: 'afternoon' },
   hospital,
 });
+const deferred = buildIcsEvent({
+  event: { id: 'deferred-event', date: '2026-08-17', deferredOriginDate: '2026-08-11' },
+  member,
+  agenda: { name: 'RM telemàtica', shift: 'morning' },
+  hospital,
+});
 
 assert.match(morning, /DTSTART:20260813T080000\r\n/);
 assert.match(morning, /DTEND:20260813T150000\r\n/);
@@ -27,6 +33,8 @@ assert.match(morning, /SUMMARY:Anna Serra · Ecografia · Trueta\r\n/);
 assert.match(afternoonPeonada, /DTSTART:20260814T150000\r\n/);
 assert.match(afternoonPeonada, /DTEND:20260814T200000\r\n/);
 assert.match(afternoonPeonada, /SUMMARY:Anna Serra · TAC urgent · Trueta \(P\)\r\n/);
+assert.match(deferred, /SUMMARY:Anna Serra · RM telemàtica · Trueta \(D\)\r\n/);
+assert.match(deferred, /DESCRIPTION:Diferida del 2026-08-11\r\n/);
 assert.match(morning, /CATEGORIES:Trueta\r\n/);
 assert.match(morning, new RegExp(`COLOR:${hospitalExportColor(hospital)}\\r\\n`));
 
@@ -64,10 +72,10 @@ assert.equal(
   hospitalExportColor({ catalogId: 'hospital-trueta' }),
 );
 
-const calendar = buildIcsCalendar([morning, afternoonPeonada, management, vacation]);
+const calendar = buildIcsCalendar([morning, afternoonPeonada, deferred, management, vacation]);
 assert.ok(calendar.startsWith('BEGIN:VCALENDAR\r\nVERSION:2.0'));
 assert.match(calendar, /CALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nPRODID:-\/\/Pinendar\/\/CA/);
 assert.ok(calendar.endsWith('END:VCALENDAR'));
-assert.equal(calendar.match(/BEGIN:VEVENT/g)?.length, 4);
+assert.equal(calendar.match(/BEGIN:VEVENT/g)?.length, 5);
 
 console.log('ics-export tests passed');

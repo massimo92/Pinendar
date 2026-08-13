@@ -45,7 +45,8 @@ export function buildIcsEvent({ event, member = {}, agenda = {}, hospital = {} }
   const allDay = Boolean(event.allDay || event.type === 'management' || agenda.id === 'management');
   const hospitalAlias = hospital.alias || hospital.shortName || hospital.name;
   const summaryParts = [member.name, agenda.name, hospitalAlias].filter(Boolean);
-  const summary = `${summaryParts.join(' · ')}${event.peonada ? ' (P)' : ''}`;
+  const markers = `${event.deferredOriginDate ? ' (D)' : ''}${event.peonada ? ' (P)' : ''}`;
+  const summary = `${summaryParts.join(' · ')}${markers}`;
   const category = hospitalAlias || 'Pinendar';
   const dates = allDay
     ? [
@@ -66,6 +67,7 @@ export function buildIcsEvent({ event, member = {}, agenda = {}, hospital = {} }
     `CATEGORIES:${icsText(category)}`,
     `COLOR:${hospitalExportColor(hospital)}`,
     `ATTENDEE;CN=${icsText(member.name || '')}:MAILTO:${member.email || ''}`,
+    ...(event.deferredOriginDate ? [`DESCRIPTION:${icsText(`Diferida del ${event.deferredOriginDate}`)}`] : []),
     'END:VEVENT',
   ].join('\r\n');
 }

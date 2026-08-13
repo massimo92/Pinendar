@@ -133,6 +133,10 @@ _Avoid_: Nueva agenda, cobertura extra, peonada
 Marca de una asignación clínica demandada que identifica trabajo extraordinario por encima de la jornada ordinaria del 100%. Solo se aplica mediante edición manual posterior al generador y no convierte la asignación en una plaza extraordinaria. Si una reasignación cambia el reparto diario, las marcas afectadas se eliminan y se definen de nuevo solo para las personas que continúan por encima del 100%.
 _Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 
+**Asignación diferida**:
+Asignación de una plaza telemática que no pudo cubrirse en su fecha de origen y se realiza dentro de los seis días naturales posteriores usando capacidad que habría quedado sin asignar. Conserva su fecha de origen y cubre la vacante original.
+_Avoid_: Agenda nueva, peonada, cambio de fecha
+
 **Jornada parcial excepcional**:
 Día en que una persona cubre una única agenda del 50% porque la mejor cobertura requiere alguna jornada parcial. En empates, se completa antes la jornada de quien ya cubre la agenda más prioritaria.
 _Avoid_: Media persona, sin asignación parcial
