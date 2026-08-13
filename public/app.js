@@ -1,10 +1,10 @@
-import { api, waitForGeneration } from './api.js?v=13';
+import { api, waitForGeneration } from './api.js?v=14';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
-import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=1';
+import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
 const WEEK_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv', 'Ds', 'Dg'];

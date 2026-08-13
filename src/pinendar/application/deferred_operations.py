@@ -355,6 +355,13 @@ def _solve_target(
     if partial:
         phases.append(sum(partial.values()))
 
+    changes: list[Any] = [
+        1 - variable if key in old_by_key else variable
+        for key, variable in ordinary.items()
+    ]
+    if changes:
+        phases.append(sum(changes))
+
     active_members = list(
         session.scalars(
             select(Member)
@@ -454,12 +461,6 @@ def _solve_target(
         model.add_max_equality(worst, list(person_distances.values()))
         phases.extend([worst, sum(person_distances.values())])
 
-    changes: list[Any] = [
-        1 - variable if key in old_by_key else variable
-        for key, variable in ordinary.items()
-    ]
-    if changes:
-        phases.append(sum(changes))
     phases.append(
         sum(
             variable * (index + 1)
