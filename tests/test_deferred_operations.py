@@ -211,6 +211,80 @@ def test_deferred_vacancy_can_suggest_and_apply_a_multi_person_chain(
         assert session.get(Vacancy, vacancy_id) is None
 
 
+def test_deferred_vacancy_minimizes_movements_before_fairness(
+    authenticated_client: TestClient,
+) -> None:
+    deferred_agenda, others = full_agendas(authenticated_client)
+    ordinary_agenda = others[0]
+    free = create_member(
+        authenticated_client,
+        name="Minimal Free",
+        allowed_types=[deferred_agenda["id"], ordinary_agenda["id"]],
+    )
+    assigned = create_member(
+        authenticated_client,
+        name="Minimal Assigned",
+        allowed_types=[deferred_agenda["id"], ordinary_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    origin = date(2026, 8, 11)
+    target = date(2026, 8, 14)
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id=f"minimal-free-history-{index}",
+                    date=date(2026, 7, index + 1),
+                    member_id=free["id"],
+                    agenda_id=deferred_agenda["id"],
+                    load_percentage=100,
+                )
+                for index in range(5)
+            ]
+            + [
+                Assignment(
+                    id=f"minimal-assigned-history-{index}",
+                    date=date(2026, 7, index + 1),
+                    member_id=assigned["id"],
+                    agenda_id=ordinary_agenda["id"],
+                    load_percentage=100,
+                )
+                for index in range(5)
+            ]
+            + [
+                Assignment(
+                    id="minimal-free-target",
+                    date=target,
+                    member_id=free["id"],
+                    kind="no_assignment",
+                    load_percentage=0,
+                ),
+                Assignment(
+                    id="minimal-assigned-target",
+                    date=target,
+                    member_id=assigned["id"],
+                    agenda_id=ordinary_agenda["id"],
+                    load_percentage=100,
+                ),
+            ]
+        )
+        vacancy = Vacancy(date=origin, agenda_id=deferred_agenda["id"])
+        session.add(vacancy)
+        session.flush()
+        vacancy_id = vacancy.id
+
+    preview = authenticated_client.get(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assignment-options"
+    )
+
+    assert preview.status_code == 200, preview.json()
+    proposal = preview.json()["deferredOptions"][0]
+    assert proposal["targetDate"] == target.isoformat()
+    assert proposal["deferredMemberId"] == free["id"]
+    assert proposal["changeCount"] == 0
+    assert proposal["movements"] == []
+
+
 def test_non_telematic_vacancy_has_no_deferred_options(
     authenticated_client: TestClient,
 ) -> None:

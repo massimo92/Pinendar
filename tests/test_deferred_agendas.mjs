@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const apiSource = readFileSync(new URL('../public/api.js', import.meta.url), 'utf8');
+const indexSource = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 assert.match(
   appSource,
@@ -25,5 +26,10 @@ assert.match(
   'El CSV debe incluir la marca diferida y la fecha de origen',
 );
 assert.match(apiSource, /deferVacancy:[\s\S]*?\/defer/);
+assert.match(
+  indexSource,
+  /calendar\.css\?v=74/,
+  'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
+);
 
 console.log('deferred agendas UI regression: ok');
