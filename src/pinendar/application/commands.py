@@ -1207,6 +1207,7 @@ def _validate_vacancy_change(
         source.kind != "assigned"
         or not source.agenda_id
         or source.management
+        or source.deferred_origin_date
         or source.agenda_id == vacancy.agenda_id
     ):
         raise DomainError("EXCHANGE_NOT_ALLOWED", "Aquesta assignació no es pot canviar per la vacant")
@@ -1441,12 +1442,18 @@ def exchange_assignments(
         allow_fixed_source=confirm_fixed,
     )
     source_extra, target_extra = source.extra, target.extra
+    source_deferred_origin, target_deferred_origin = (
+        source.deferred_origin_date,
+        target.deferred_origin_date,
+    )
     source.agenda_id = target_agenda.id
     target.agenda_id = source_agenda.id
     source.load_percentage = target_agenda.load_percentage
     target.load_percentage = source_agenda.load_percentage
     source.extra = target_extra
     target.extra = source_extra
+    source.deferred_origin_date = target_deferred_origin
+    target.deferred_origin_date = source_deferred_origin
     source.fixed = False
     target.fixed = False
     source.locked = True
@@ -1933,6 +1940,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
         assignment.fixed = False
         assignment.extra = False
         assignment.peonada = False
+        assignment.deferred_origin_date = None
         assignment.manually_modified = True
         assignment.management = False
         bump_revision(session)
@@ -1983,6 +1991,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
         assignment.fixed = False
         assignment.extra = False
         assignment.peonada = False
+        assignment.deferred_origin_date = None
         assignment.manually_modified = True
         assignment.management = True
         bump_revision(session)
@@ -2037,6 +2046,7 @@ def update_assignment(session: Session, assignment_id: str, agenda_id: str) -> d
     assignment.fixed = False
     assignment.extra = False
     assignment.peonada = False
+    assignment.deferred_origin_date = None
     assignment.manually_modified = True
     assignment.management = False
     bump_revision(session)

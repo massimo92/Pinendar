@@ -127,6 +127,9 @@ const ES_TEXT = {
   'Trasllada aquesta agenda a una altra persona sense moure les seves.': 'Traslada esta agenda a otra persona sin mover las suyas.', 'CESSIÓ D’ASSIGNACIÓ': 'CESIÓN DE ASIGNACIÓN',
   'La persona escollida conservarà les seves agendes i afegirà aquesta. Si supera el 100%, hauràs de definir la peonada.': 'La persona elegida conservará sus agendas y añadirá esta. Si supera el 100%, tendrás que definir la peonada.',
   'No hi ha cap persona disponible i capacitada per rebre aquesta agenda.': 'No hay ninguna persona disponible y capacitada para recibir esta agenda.', 'Cedeix l’agenda': 'Ceder la agenda', 'Agenda cedida': 'Agenda cedida',
+  'AGENDA SENSE COBRIR': 'AGENDA SIN CUBRIR', 'Diferir l’agenda': 'Diferir la agenda', 'Es farà durant els sis dies naturals següents. Revisa els moviments proposats abans de confirmar.': 'Se realizará durante los seis días naturales siguientes. Revisa los movimientos propuestos antes de confirmar.',
+  'Opció preferida ·': 'Opción preferida ·', 'farà l’agenda diferida.': 'hará la agenda diferida.', 'No cal moure cap altra assignació.': 'No es necesario mover ninguna otra asignación.', 'moviment necessari': 'movimiento necesario', 'moviments necessaris': 'movimientos necesarios', 'Confirma la diferida': 'Confirmar la diferida',
+  'Cobrir-la en la data original': 'Cubrirla en la fecha original', 'Tria una persona. Si supera el 100%, hauràs d’indicar quina càrrega és peonada.': 'Elige una persona. Si supera el 100%, tendrás que indicar qué carga es peonada.', 'No hi ha cap persona disponible que pugui cobrir aquesta agenda com a peonada.': 'No hay ninguna persona disponible que pueda cubrir esta agenda como peonada.', 'Agenda diferida': 'Agenda diferida',
   'Afegeix una plaça extraordinària': 'Añadir una plaza extraordinaria', 'Afegeix activitat manual': 'Añadir actividad manual', 'Fora de la demanda ordinària': 'Fuera de la demanda ordinaria',
   'Aquesta activitat s’afegirà fora de la demanda ordinària. Si la càrrega supera el 100%, hauràs de definir la peonada.': 'Esta actividad se añadirá fuera de la demanda ordinaria. Si la carga supera el 100%, tendrás que definir la peonada.',
   'Tria una data i una persona per veure les agendes compatibles.': 'Elige una fecha y una persona para ver las agendas compatibles.', 'Afegeix l’esdeveniment': 'Añadir el evento'
@@ -591,8 +594,12 @@ function calendarCell(key) {
     const partialBadge = partial ? `<i class="calendar-partial-badge">${state.language === 'es' ? 'Parcial' : 'Parcial'}</i>` : '';
     const peonadaLabel = state.language === 'es' ? 'Peonada' : 'Peonada';
     const peonadaMarker = item.peonada ? `<i class="calendar-peonada-marker" title="${peonadaLabel}" aria-label="${peonadaLabel}">P</i>` : '';
+    const deferredLabel = item.deferredOriginDate
+      ? `${state.language === 'es' ? 'Diferida del' : 'Diferida del'} ${fmtDate(item.deferredOriginDate, { day: 'numeric', month: 'short' })}`
+      : '';
+    const deferredMarker = item.deferredOriginDate ? `<i class="calendar-deferred-marker" title="${esc(deferredLabel)}" aria-label="${esc(deferredLabel)}">D</i>` : '';
     const compactMeta = unassigned ? '' : `<i class="calendar-event-compact-meta">${compactActivityMeta(meta)}</i>`;
-    const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}"><b>${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${compactMeta}</span></button>`;
+    const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''} ${item.deferredOriginDate ? 'deferred' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}${deferredLabel ? ` · ${esc(deferredLabel)}` : ''}"><b>${deferredMarker}${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${deferredLabel ? `<i class="calendar-deferred-origin">${esc(deferredLabel)}</i>` : ''}${compactMeta}</span></button>`;
     return eventEntry(html, hospital);
   };
   const vacancyItems = selectedCalendarIssueFilters.has('vacancy')
@@ -1775,13 +1782,27 @@ function vacancyAssignmentModal() {
     return `<span class="fairness-impact ${option.fairnessEffect}">${label}</span>`;
   };
   const options = modal.payload?.options || [];
+  const deferredOptions = modal.payload?.deferredOptions || [];
+  const deferredRows = deferredOptions.map((option, index) => {
+    const destination = person(option.deferredMemberId);
+    const movementRows = (option.movements || []).map((movement) => {
+      const movedAgenda = agenda(movement.agendaId);
+      return `<li>${esc(movedAgenda?.name || '—')}: ${esc(person(movement.fromMemberId)?.name || '—')} → ${esc(person(movement.toMemberId)?.name || '—')}</li>`;
+    }).join('');
+    const movements = movementRows
+      ? `<details><summary>${option.changeCount} ${option.changeCount === 1 ? 'moviment necessari' : 'moviments necessaris'}</summary><ul>${movementRows}</ul></details>`
+      : '<small>No cal moure cap altra assignació.</small>';
+    return `<article class="deferred-option ${index === 0 ? 'preferred' : ''}"><div class="assignment-choice-head"><b>${index === 0 ? 'Opció preferida · ' : ''}${fmtDate(option.targetDate, { weekday: 'long', day: 'numeric', month: 'long' })}</b>${fairnessBadge(option)}</div><p>${esc(destination?.name || '—')} farà l’agenda diferida.</p>${movements}<button type="button" class="button small" data-action="apply-deferred" data-target-date="${esc(option.targetDate)}">Confirma la diferida</button></article>`;
+  }).join('');
   const rows = options.map((option) => {
     const loadWarning = option.projectedLoadPercentage > 100
       ? `<i class="peonada-required">${option.projectedLoadPercentage}% · cal revisar peonada</i>`
       : `<i>${option.projectedLoadPercentage}% de càrrega</i>`;
     return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(option.memberName)}</b>${fairnessBadge(option)}</span><small>Càrrega actual: ${option.currentLoadPercentage}% → ${option.projectedLoadPercentage}%</small>${loadWarning}</span></label>`;
   }).join('');
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">ASSIGNA AGENDA SENSE COBRIR</div><h2>${esc(agendaItem?.name || '—')}</h2><div class="muted">${fmtDate(modal.payload?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(hospital ? compactHospitalName(hospital) : 'Sense hospital')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="vacancy-assignment-form"><input type="hidden" name="vacancyId" value="${esc(modal.vacancyId)}" /><div class="modal-body"><p class="assignment-action-help">Tria una persona disponible i capacitada. En clicar-la, el procés continuarà automàticament. La càrrega total no podrà superar el 200%.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha cap persona disponible que pugui cobrir aquesta agenda.</div>'}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></form></section></div>`;
+  const deferredSection = deferredRows ? `<section class="vacancy-resolution-section"><h3>Diferir l’agenda</h3><p class="assignment-action-help">Es farà durant els sis dies naturals següents. Revisa els moviments proposats abans de confirmar.</p><div class="deferred-option-list">${deferredRows}</div></section>` : '';
+  const peonadaSection = `<section class="vacancy-resolution-section"><h3>Cobrir-la en la data original</h3><p class="assignment-action-help">Tria una persona. Si supera el 100%, hauràs d’indicar quina càrrega és peonada.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha cap persona disponible que pugui cobrir aquesta agenda com a peonada.</div>'}</div></section>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">AGENDA SENSE COBRIR</div><h2>${esc(agendaItem?.name || '—')}</h2><div class="muted">${fmtDate(modal.payload?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(hospital ? compactHospitalName(hospital) : 'Sense hospital')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="vacancy-assignment-form"><input type="hidden" name="vacancyId" value="${esc(modal.vacancyId)}" /><div class="modal-body">${deferredSection}${peonadaSection}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></form></section></div>`;
 }
 
 function peonadaReviewModal() {
@@ -1968,8 +1989,8 @@ function fairnessCounts() { return historicalCounts(); }
 function download(name, content, mime) { const anchor = document.createElement('a'); const url = URL.createObjectURL(new Blob([content], { type: mime })); anchor.href = url; anchor.download = name; document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function exportRows() { return calendarEvents().filter((item) => (!selectedMemberFilters.size || selectedMemberFilters.has(item.memberId)) && (!selectedAgendaFilters.size || selectedAgendaFilters.has(item.type))); }
 function exportName() { return `pinendar-${projectionStartMonth(calendarProjection())}-${projectionEndMonth(calendarProjection())}`; }
-function exportData() { return exportRows().map((item) => { const member = person(item.memberId) || {}; const agendaItem = agenda(item.type); return { Data: item.date, Metge: member.name || '', Correu: member.email || '', Agenda: item.type === 'no_assignment' ? 'NO ASSIGNACIÓ' : agendaItem.name, Hospital: item.type === 'no_assignment' ? '' : agendaHospital(agendaItem)?.name || '', Peonada: item.peonada ? 'Sí' : 'No' }; }); }
-function exportCsv() { const rows = [['Data', 'Metge', 'Correu', 'Agenda', 'Hospital'], ...exportData().map((item) => Object.values(item))]; download(`${exportName()}.csv`, `\ufeff${rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\n')}`, 'text/csv;charset=utf-8'); }
+function exportData() { return exportRows().map((item) => { const member = person(item.memberId) || {}; const agendaItem = agenda(item.type); return { Data: item.date, Metge: member.name || '', Correu: member.email || '', Agenda: item.type === 'no_assignment' ? 'NO ASSIGNACIÓ' : agendaItem.name, Hospital: item.type === 'no_assignment' ? '' : agendaHospital(agendaItem)?.name || '', Peonada: item.peonada ? 'Sí' : 'No', Diferida: item.deferredOriginDate ? 'Sí' : 'No', 'Data origen': item.deferredOriginDate || '' }; }); }
+function exportCsv() { const rows = [['Data', 'Metge', 'Correu', 'Agenda', 'Hospital', 'Peonada', 'Diferida', 'Data origen'], ...exportData().map((item) => Object.values(item))]; download(`${exportName()}.csv`, `\ufeff${rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';')).join('\n')}`, 'text/csv;charset=utf-8'); }
 function exportIcs() {
   const events = exportRows().filter((item) => item.type !== 'no_assignment').map((item) => {
     const agendaItem = agenda(item.type); const hospital = agendaHospital(agendaItem);
@@ -2192,6 +2213,13 @@ document.addEventListener('click', async (event) => {
   if (button.dataset.removeTime) { const [, date] = button.dataset.removeTime.split(':'); try { await api.deleteHoliday(date); await reloadState(); } catch (error) { showError(error); } render(); return; }
   if (action === 'open-manual-extra') { modal = { type: 'extra-assignment', manual: true, memberId: '', date: calendarDate, payload: null }; render(); return; }
   if (action === 'submit-modal') { event.preventDefault(); const formElement = button.closest('form'); if (formElement.reportValidity()) await handleForm(formElement); return; }
+  if (action === 'apply-deferred') {
+    try {
+      await api.deferVacancy(modal.vacancyId, { targetDate: button.dataset.targetDate, expectedRevision: modal.payload?.planningRevision });
+      modal = null; await reloadState('Agenda diferida'); render();
+    } catch (error) { showError(error); }
+    return;
+  }
   if (action === 'confirm-generation-overwrite') { modal.replaceExisting = true; modal.overlap = null; modal.conflict = ''; await handleForm(button.closest('form')); return; }
   if (action === 'confirm-fixed-exchange') {
     const assignmentId = modal.id;

@@ -130,8 +130,11 @@ def test_event_migration_keeps_disjoint_months_and_latest_overlapping_date(tmp_p
     assert backup is not None and backup.exists()
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "o5d09e3f4a12",
+            "p6e10f4a5b23",
         )
+        assert "deferred_origin_date" in {
+            row[1] for row in connection.execute("PRAGMA table_info(planning_events)")
+        }
         assert "short_name" in {
             row[1] for row in connection.execute("PRAGMA table_info(hospitals)")
         }

@@ -114,6 +114,41 @@ def test_scheduler_covers_higher_priority_agenda_first() -> None:
     assert [item["type"] for item in monday_vacancies] == ["lower"]
 
 
+def test_locked_deferred_assignment_covers_its_origin_demand() -> None:
+    agendas = [agenda("remote", priority=1, telematic=True)]
+    team = [member("member-1", ["remote"], available=[1, 2])]
+    base = problem(
+        agendas,
+        team,
+        {"1": {"remote": 1}},
+        schema_version=8,
+    )
+    snapshot = {
+        **base.to_dict(),
+        "start_date": "2027-01-04",
+        "end_date": "2027-01-05",
+        "locked_assignments": [
+            {
+                "id": "deferred-locked",
+                "date": "2027-01-05",
+                "memberId": "member-1",
+                "type": "remote",
+                "locked": True,
+                "manuallyModified": True,
+                "deferredOriginDate": "2027-01-04",
+            }
+        ],
+    }
+
+    result = CpSatScheduler().solve(ScheduleProblem.from_dict(snapshot))
+
+    assert result.outcome == "solution", result.error
+    assert result.vacancies == []
+    assert next(
+        item for item in result.assignments if item["id"] == "deferred-locked"
+    )["deferredOriginDate"] == "2027-01-04"
+
+
 def test_scheduler_adds_nth_working_weekday_recurrence() -> None:
     agendas = [agenda("periodic", priority=1, recurrences=[{"ordinal": 3, "weekday": 1, "slots": 1}])]
     result = CpSatScheduler().solve(problem(agendas, [], {}))
