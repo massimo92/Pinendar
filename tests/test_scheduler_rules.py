@@ -202,6 +202,33 @@ def test_guard_creates_post_guard_absence_on_next_natural_day() -> None:
     assert any(item["date"] == "2027-01-11" for item in result.assignments)
 
 
+def test_each_guard_on_the_same_date_creates_its_own_post_guard_absence() -> None:
+    agendas = [agenda("clinical", priority=1)]
+    team = [
+        member("member-1", ["clinical"]),
+        member("member-2", ["clinical"]),
+    ]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"clinical": 2}},
+            guards=[
+                {"memberId": "member-1", "date": "2027-01-03"},
+                {"memberId": "member-2", "date": "2027-01-03"},
+            ],
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert [
+        item for item in result.vacancies if item["date"] == "2027-01-04"
+    ] == [
+        {"date": "2027-01-04", "type": "clinical"},
+        {"date": "2027-01-04", "type": "clinical"},
+    ]
+
+
 def test_scheduler_repeats_member_work_pattern_weeks() -> None:
     agendas = [agenda("clinical", priority=1)]
     team = [

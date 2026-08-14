@@ -45,7 +45,7 @@ def test_guard_import_tolerates_a_typo_and_out_of_range_rows(authenticated_clien
     assert body["rows"][1]["status"] == "out_of_range"
 
 
-def test_guard_import_requires_review_for_multiple_registered_members(authenticated_client: TestClient) -> None:
+def test_guard_import_accepts_multiple_registered_members_on_the_same_date(authenticated_client: TestClient) -> None:
     state = authenticated_client.get("/api/v1/bootstrap").json()
     members = [state["team"][0], state["team"][1]]
     response = authenticated_client.post(
@@ -65,8 +65,36 @@ def test_guard_import_requires_review_for_multiple_registered_members(authentica
 
     assert response.status_code == 200
     body = response.json()
-    assert body["canConfirm"] is False
-    assert body["conflicts"][0]["date"] == "2027-01-04"
+    assert body["canConfirm"] is True
+    assert body["conflicts"] == []
+    assert {item["memberId"] for item in body["rows"][0]["items"]} == {
+        members[0]["id"],
+        members[1]["id"],
+    }
+
+
+def test_guard_api_keeps_multiple_people_per_date_and_deduplicates_each_person(
+    authenticated_client: TestClient,
+) -> None:
+    members = authenticated_client.get("/api/v1/bootstrap").json()["team"][:2]
+    guards = [
+        {"memberId": member["id"], "date": "2027-01-04"}
+        for member in members
+    ]
+
+    created = authenticated_client.post("/api/v1/guards", json={"guards": guards})
+    repeated = authenticated_client.post(
+        "/api/v1/guards", json={"guards": [guards[0], guards[0]]}
+    )
+
+    assert created.status_code == 201
+    assert len(created.json()["guards"]) == 2
+    assert repeated.status_code == 201
+    assert repeated.json()["added"] == 0
+    assert {
+        (item["date"], item["memberId"])
+        for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["guards"]
+    } == {("2027-01-04", members[0]["id"]), ("2027-01-04", members[1]["id"])}
 
 
 def test_confirmed_alias_is_used_on_later_import(authenticated_client: TestClient) -> None:

@@ -72,11 +72,11 @@ Ausencia derivada que afecta al día natural siguiente a una guardia.
 _Avoid_: Descanso, libranza
 
 **Guardia**:
-Responsabilidad correspondiente a una fecha asumida por una persona del equipo y que genera post-guardia. Si se cede al exterior deja de ser una guardia activa dentro del calendario, aunque se conserva su transferencia en el histórico.
+Responsabilidad correspondiente a una fecha asumida por una persona del equipo y que genera post-guardia. Una fecha puede tener cualquier número de guardias, pero una persona solo puede asumir una en esa fecha. Si se cede al exterior deja de ser una guardia activa dentro del calendario, aunque se conserva su transferencia en el histórico.
 _Avoid_: Turno, agenda, guardia cancelada
 
 **Cesión de guardia**:
-Cambio unilateral de responsable en una fecha. El origen o el destino puede ser el exterior, pero no ambos.
+Cambio unilateral del responsable de una guardia concreta. El origen o el destino puede ser el exterior, pero no ambos; las demás guardias de esa fecha no cambian.
 _Avoid_: Cancelación, eliminación
 
 **Cobertura externa de guardia**:
@@ -84,7 +84,7 @@ Extremo exterior registrado únicamente como participante de una cesión o inter
 _Avoid_: Persona del equipo, guardia externa activa
 
 **Intercambio de guardias**:
-Permuta recíproca de responsables entre dos fechas. Uno de los participantes puede ser el exterior, lo que desplaza una guardia interna de una fecha a otra.
+Permuta recíproca de responsables entre dos guardias concretas. Uno de los participantes puede ser el exterior, lo que desplaza una guardia interna de una fecha a otra. Es inviable si deja a una persona con dos guardias en la misma fecha.
 _Avoid_: Movimiento de guardia, edición de fecha
 
 ## Demanda y asignación

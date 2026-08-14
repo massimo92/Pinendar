@@ -233,7 +233,9 @@ class Holiday(Base):
 
 class Guard(Base):
     __tablename__ = "guards"
-    __table_args__ = (UniqueConstraint("date"),)
+    __table_args__ = (
+        UniqueConstraint("date", "member_id", name="uq_guards_date_member_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     generation_job_id: Mapped[str | None] = mapped_column(

@@ -57,11 +57,11 @@ def _guard(
 
 
 def _validate_guard_specs(specs: list[dict[str, Any]]) -> None:
-    dates = [item["date"] for item in specs]
-    if len(dates) != len(set(dates)):
+    assignments = [(item["date"], item["memberId"]) for item in specs]
+    if len(assignments) != len(set(assignments)):
         raise DomainError(
-            "DUPLICATE_GUARD_DATE",
-            "Només hi pot haver una persona de guàrdia en cada data",
+            "DUPLICATE_GUARD_ASSIGNMENT",
+            "Una persona només pot tenir una guàrdia en la mateixa data",
         )
 
 
