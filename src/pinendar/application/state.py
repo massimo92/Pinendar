@@ -424,9 +424,13 @@ def import_legacy_state(session: Session, state: dict[str, Any], catalog: Hospit
 
     for holiday in state.get("holidays", []):
         session.add(Holiday(date=parse_date(holiday)))
+    seen_guards: set[tuple[date, str]] = set()
     for guard in state.get("guards", []):
-        if guard.get("memberId") in seen_members:
-            session.add(Guard(id=guard.get("id") or uid(), member_id=guard["memberId"], date=parse_date(guard["date"])))
+        guard_date = parse_date(guard["date"])
+        guard_key = (guard_date, guard.get("memberId", ""))
+        if guard.get("memberId") in seen_members and guard_key not in seen_guards:
+            session.add(Guard(id=guard.get("id") or uid(), member_id=guard["memberId"], date=guard_date))
+            seen_guards.add(guard_key)
 
     records = [*state.get("published", [])]
     if state.get("draft"):
@@ -494,9 +498,14 @@ def import_calendar_record(
     for item in conditions.get("guards", []):
         if item.get("memberId") in member_ids:
             guard_date = parse_date(item["date"])
-            existing_guard = session.scalar(select(Guard).where(Guard.date == guard_date))
+            existing_guard = session.scalar(
+                select(Guard).where(
+                    Guard.date == guard_date,
+                    Guard.member_id == item["memberId"],
+                )
+            )
             if existing_guard:
-                existing_guard.member_id = item["memberId"]
+                continue
             else:
                 session.add(
                     Guard(

@@ -26,6 +26,66 @@ assert.match(
 
 assert.match(
   appSource,
+  /function guardPickerModal/,
+  'El mes debe permitir elegir una guardia concreta cuando hay varias',
+);
+
+assert.match(
+  appSource,
+  /function guardActionModal[\s\S]*?modal\.returnGuardPickerDate[\s\S]*?data-action="return-guard-picker">Enrere/,
+  'Gestionar una guardia sólo debe mostrar Enrere cuando viene del selector mensual',
+);
+
+assert.doesNotMatch(
+  appSource.match(/function guardPickerModal[\s\S]*?function guardCessionModal/)?.[0] || '',
+  />Cancel·la</,
+  'El selector mensual no debe mostrar un botón redundante de cancelar',
+);
+
+assert.match(
+  appSource,
+  /open-calendar-guard'[\s\S]*?modal\?\.type === 'guard-picker'[\s\S]*?returnGuardPickerDate/,
+  'La selección mensual debe conservar el destino de vuelta',
+);
+
+assert.match(
+  appSource,
+  /function guardCessionModal[\s\S]*?modal\.returnToGuardAction[\s\S]*?data-action="return-guard-action">Enrere/,
+  'La cesión abierta desde gestionar guardia debe volver con Enrere',
+);
+
+assert.match(
+  appSource,
+  /function guardExchangeModal[\s\S]*?modal\.returnToGuardAction[\s\S]*?data-action="return-guard-action">Enrere/,
+  'El intercambio abierto desde gestionar guardia debe volver con Enrere',
+);
+
+assert.match(
+  appSource,
+  /return-guard-action'[\s\S]*?type: 'guard-action'[\s\S]*?returnGuardPickerDate/,
+  'Volver desde una operación debe conservar el selector mensual anterior',
+);
+
+assert.match(
+  appSource,
+  /data-action="open-calendar-guards"[\s\S]*?guardNames\.length > 1/,
+  'El indicador mensual debe mostrar cuántas guardias hay',
+);
+
+assert.match(
+  appSource,
+  /events\.guards\.map[\s\S]*?data-action="open-calendar-guard"/,
+  'Día y semana deben renderizar cada guardia por separado',
+);
+
+assert.match(
+  appSource,
+  /select data-action="guard-import-choice" data-guard-import-row[\s\S]*?data-guard-import-item/,
+  'Cada nombre ambiguo importado debe resolverse por separado',
+);
+
+assert.match(
+  appSource,
   /function guardActionModal/,
   'Al pulsar una guardia debe ofrecer cesión o intercambio',
 );

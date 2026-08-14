@@ -201,3 +201,66 @@ def test_guard_operation_rejects_a_stale_revision(
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "PLANNING_REVISION_CONFLICT"
+
+
+def test_guard_cession_rejects_duplicate_person_and_date_atomically(
+    authenticated_client: TestClient,
+) -> None:
+    _guard_fixture(authenticated_client)
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Guard(id="owner-guard", member_id="guard-owner", date=date(2026, 8, 10)),
+                Guard(id="backup-guard", member_id="guard-backup", date=date(2026, 8, 10)),
+            ]
+        )
+
+    response = authenticated_client.post(
+        "/api/v1/guard-cessions",
+        json={
+            "guardId": "owner-guard",
+            "date": "2026-08-10",
+            "toMemberId": "guard-backup",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "DUPLICATE_GUARD_ASSIGNMENT"
+    with database.session_factory() as session:
+        assert {
+            (item.id, item.member_id) for item in session.scalars(select(Guard))
+        } == {
+            ("owner-guard", "guard-owner"),
+            ("backup-guard", "guard-backup"),
+        }
+
+
+def test_guard_cession_only_changes_the_selected_guard(
+    authenticated_client: TestClient,
+) -> None:
+    _guard_fixture(authenticated_client)
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Guard(id="owner-guard", member_id="guard-owner", date=date(2026, 8, 10)),
+                Guard(id="backup-guard", member_id="guard-backup", date=date(2026, 8, 10)),
+            ]
+        )
+
+    response = authenticated_client.post(
+        "/api/v1/guard-cessions",
+        json={
+            "guardId": "owner-guard",
+            "date": "2026-08-10",
+            "toMemberId": None,
+        },
+    )
+
+    assert response.status_code == 201
+    with database.session_factory() as session:
+        assert session.get(Guard, "owner-guard") is None
+        remaining = session.get(Guard, "backup-guard")
+        assert remaining is not None
+        assert remaining.member_id == "guard-backup"

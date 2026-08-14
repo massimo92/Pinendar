@@ -214,7 +214,6 @@ def preview_guard_import(
         aliases.setdefault(f"email:{member.email.strip().casefold()}", []).append(member)
 
     output_rows: list[dict[str, Any]] = []
-    accepted_by_date: dict[str, dict[str, Any]] = {}
     summary = {"accepted": 0, "ignored": 0, "review": 0, "outOfRange": 0, "empty": 0}
     period_start = date.fromisoformat(bounds_start)
     period_end = date.fromisoformat(bounds_end)
@@ -241,20 +240,13 @@ def preview_guard_import(
         items = [_resolve_name(name, members, aliases) for name in names]
         for item in items:
             summary[item["status"]] += 1
-            if item["status"] == "accepted":
-                accepted_by_date.setdefault(date_value, {})[item["memberId"]] = item
         output_rows.append({"rowNumber": row_number, "date": date_value, "status": "ready", "items": items})
 
-    conflicts = [
-        {"date": date_value, "members": list(member_items.values())}
-        for date_value, member_items in accepted_by_date.items()
-        if len(member_items) > 1
-    ]
     return {
         "rows": output_rows,
-        "conflicts": conflicts,
+        "conflicts": [],
         "summary": summary,
-        "canConfirm": summary["review"] == 0 and not conflicts,
+        "canConfirm": summary["review"] == 0,
     }
 
 
@@ -299,9 +291,11 @@ def add_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
-    existing = {item.date: item for item in session.scalars(select(Guard))}
+    existing = {
+        (item.date, item.member_id): item for item in session.scalars(select(Guard))
+    }
     added: list[Guard] = []
-    pending_dates: set[date] = set()
+    pending_assignments: set[tuple[date, str]] = set()
     normalized_guards: list[tuple[dict[str, Any], str, date]] = []
     for raw_guard in guards:
         member_id = raw_guard.get("memberId") or raw_guard.get("member_id")
@@ -316,17 +310,8 @@ def add_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]
         normalized_guards.append((raw_guard, member_id, guard_date))
     _assert_guard_import_safe(session, {item[2] for item in normalized_guards})
     for raw_guard, member_id, guard_date in normalized_guards:
-        current = existing.get(guard_date)
-        if current or guard_date in pending_dates:
-            current_member_id = current.member_id if current else next(
-                item.member_id for item in added if item.date == guard_date
-            )
-            if current_member_id != member_id:
-                raise DomainError(
-                    "DUPLICATE_GUARD_DATE",
-                    f"Només hi pot haver una persona de guàrdia el {guard_date.isoformat()}",
-                    field="guards",
-                )
+        assignment = (guard_date, member_id)
+        if assignment in existing or assignment in pending_assignments:
             continue
         item = Guard(
             id=raw_guard.get("id") or uid(),
@@ -335,7 +320,7 @@ def add_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, Any]
         )
         session.add(item)
         added.append(item)
-        pending_dates.add(guard_date)
+        pending_assignments.add(assignment)
 
     if added:
         session.flush()
@@ -354,7 +339,7 @@ def replace_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, 
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
-    desired: dict[date, str] = {}
+    desired: set[tuple[date, str]] = set()
     for raw_guard in guards:
         raw_member_id = raw_guard.get("memberId") or raw_guard.get("member_id")
         member_id = str(raw_member_id) if raw_member_id is not None else ""
@@ -365,27 +350,23 @@ def replace_guards(session: Session, guards: list[dict[str, Any]]) -> dict[str, 
             raise DomainError("INVALID_DATE", "La data de la guàrdia no és vàlida", field="guards") from error
         if member_id not in active_member_ids:
             raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada", field="guards")
-        if guard_date in desired:
-            raise DomainError("DUPLICATE_GUARD_DATE", f"Només hi pot haver una persona de guàrdia el {guard_date.isoformat()}", field="guards")
-        desired[guard_date] = member_id
-    _assert_guard_import_safe(session, set(desired))
+        desired.add((guard_date, member_id))
+    _assert_guard_import_safe(session, {guard_date for guard_date, _member_id in desired})
     if not desired:
         return {"guards": []}
-    range_start, range_end = min(desired), max(desired)
+    desired_dates = {guard_date for guard_date, _member_id in desired}
+    range_start, range_end = min(desired_dates), max(desired_dates)
     existing = {
-        item.date: item
+        (item.date, item.member_id): item
         for item in session.scalars(
             select(Guard).where(Guard.date >= range_start, Guard.date <= range_end)
         )
     }
     changed = False
-    for guard_date, member_id in desired.items():
-        item = existing.pop(guard_date, None)
+    for guard_date, member_id in sorted(desired):
+        item = existing.pop((guard_date, member_id), None)
         if item is None:
             session.add(Guard(id=uid(), member_id=member_id, date=guard_date))
-            changed = True
-        elif item.member_id != member_id:
-            item.member_id = member_id
             changed = True
     if existing:
         session.execute(delete(Guard).where(Guard.id.in_([item.id for item in existing.values()])))

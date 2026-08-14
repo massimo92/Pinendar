@@ -9,7 +9,7 @@ Generar automáticamente un mes de calendario, revisarlo manualmente y conservar
 - **Persona**: nombre, correo, estado activo/inactivo auditado, archivo, patrón de trabajo de una a cinco semanas numeradas y repetibles, días telemáticos por semana, agendas habilitadas, preferencias opcionales por agenda, habilitación de gestión con uno a cinco días mensuales, reglas fijas personales y vacaciones. La semana aplicable se obtiene del número ISO de la semana natural.
 - **Agenda**: nombre, hospital, modalidad, prioridad, cobertura semanal y reglas especiales de demanda recurrente. Son telemáticas TAC ambulatorio, resonancia y telemando.
 - **Jornada de gestión**: actividad telemática especial de jornada completa. No es una agenda, no pertenece a ningún hospital y no crea demanda ni vacantes.
-- **Guardia**: fecha y médico. Deriva automáticamente una ausencia `post-guardia` el día natural siguiente; en domingo bloquea el lunes.
+- **Guardia**: fecha y persona. Una fecha admite cualquier número de personas de guardia, pero una persona solo puede tener una guardia en esa fecha. Cada guardia deriva automáticamente una ausencia `post-guardia` el día natural siguiente; en domingo bloquea el lunes.
 - **Festivo**: fecha no laborable de Girona, importable desde fuente pública y editable manualmente.
 - **Evento de planificación**: actividad vigente de una persona en una fecha: agenda, Gestión o sin asignación. Conserva su carga y si es fijo, extraordinario o manual.
 - **Ejecución de generación**: registro técnico del optimizador. No es un calendario ni determina qué eventos se muestran.
@@ -34,16 +34,17 @@ La tabla es el valor inicial y puede editarse en cada agenda. Una regla especial
 4. La jornada parcial del 50% solo se utiliza cuando reduce vacantes. Si dos medias agendas pueden completar una jornada sin empeorar la cobertura, el generador evita separarlas entre personas. Si varias distribuciones dejan el mismo mínimo de jornadas parciales, se completa primero a quien ya cubre la agenda más prioritaria.
 5. Una persona solo puede cubrir agendas incluidas en sus capacidades.
 6. Una guardia crea una ausencia `post-guardia` el día natural siguiente. La demanda de las agendas de ese día no desaparece, aunque una regla fija apuntara a la persona ausente.
-7. Las vacaciones o una ausencia `post-guardia` impiden toda asignación durante el periodo afectado.
-8. Una regla fija personal puede exigir todas o exactamente una de varias agendas con demanda para un día semanal y puede prohibir otras. Todas sus condiciones se aplican cuando la persona está planificable; si está ausente, la demanda permanece abierta para otra persona apta.
-9. Las reglas fijas no crean demanda. Las agendas obligatorias deben disponer de cobertura ordinaria o recurrente, y las combinaciones simultáneas no pueden superar el 100% de carga.
-10. Varias garantías personales sobre la misma agenda deben satisfacerse todas; no forman un grupo compartido. La configuración rechaza los conflictos directos conocidos y el planificador detecta los que dependen del periodo.
-11. La demanda de una fecha es la suma de la cobertura semanal de cada agenda y sus reglas especiales recurrentes coincidentes.
-12. Cada agenda tiene una prioridad de cobertura: muy alta, alta, moderada o baja. El generador protege lexicográficamente cada nivel.
-13. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
-14. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
-15. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
-16. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas. Se limita a un día por semana natural; si la cuota supera el número de semanas naturales del mes, el límite semanal aumenta solo hasta lo necesario para que la cuota sea alcanzable.
+7. Las cesiones e intercambios actúan sobre guardias individuales y no alteran las demás guardias de sus fechas. La operación completa se rechaza sin cambios si dejaría a una persona con dos guardias el mismo día.
+8. Las vacaciones o una ausencia `post-guardia` impiden toda asignación durante el periodo afectado.
+9. Una regla fija personal puede exigir todas o exactamente una de varias agendas con demanda para un día semanal y puede prohibir otras. Todas sus condiciones se aplican cuando la persona está planificable; si está ausente, la demanda permanece abierta para otra persona apta.
+10. Las reglas fijas no crean demanda. Las agendas obligatorias deben disponer de cobertura ordinaria o recurrente, y las combinaciones simultáneas no pueden superar el 100% de carga.
+11. Varias garantías personales sobre la misma agenda deben satisfacerse todas; no forman un grupo compartido. La configuración rechaza los conflictos directos conocidos y el planificador detecta los que dependen del periodo.
+12. La demanda de una fecha es la suma de la cobertura semanal de cada agenda y sus reglas especiales recurrentes coincidentes.
+13. Cada agenda tiene una prioridad de cobertura: muy alta, alta, moderada o baja. El generador protege lexicográficamente cada nivel.
+14. Si faltan personas o capacidades, las plazas que no puedan cubrirse quedan como vacantes; nunca se inventan agendas fuera de la configuración.
+15. Cualquier incompatibilidad debe rechazarse en el backend con un error estructurado. Un fallo no altera ningún evento vigente.
+16. Los días personales de teletrabajo se registran en la semana concreta del patrón. En esos días solo se pueden asignar agendas marcadas como telemáticas.
+17. La gestión solo puede habilitarse con un objetivo de uno a cinco días mensuales. Ocupa el 100% del día, cuenta como actividad telemática y no puede combinarse con agendas. Se limita a un día por semana natural; si la cuota supera el número de semanas naturales del mes, el límite semanal aumenta solo hasta lo necesario para que la cuota sea alcanzable.
 
 Una asignación manual bloqueada se conserva como regla dura al regenerar su periodo. Si vuelve imposible el cálculo, la regeneración falla sin cambiar el calendario.
 

@@ -650,15 +650,11 @@ function calendarCell(key) {
   const guardNames = events.guards.map((item) => person(item.memberId)?.name || '—');
   const guardLabel = guardNames.length ? `Guàrdia: ${guardNames.join(', ')}` : '';
   const guardColor = person(events.guards[0]?.memberId)?.color || '#f1c75b';
-  const calendarGuard = events.guards[0];
-  const storedGuard = activeGuards().find((item) => item.id === calendarGuard?.id)
-    || activeGuards().find((item) => item.date === key && item.memberId === calendarGuard?.memberId);
-  const guardAction = storedGuard ? `data-action="open-calendar-guard" data-guard-id="${storedGuard.id}"` : `data-calendar-open="${key}"`;
   const guardSummary = calendarView === 'month' && guardNames.length
-    ? `<button type="button" class="calendar-guard-hover" style="--member-color:${guardColor}" ${guardAction} aria-label="${esc(guardLabel)} · Gestiona la guàrdia"><span aria-hidden="true">G</span><span class="calendar-guard-tooltip" role="tooltip">${esc(guardLabel)}</span></button>`
+    ? `<button type="button" class="calendar-guard-hover" style="--member-color:${guardColor}" data-action="open-calendar-guards" data-guard-date="${key}" aria-label="${esc(guardLabel)} · Gestiona les guàrdies"><span aria-hidden="true">G${guardNames.length > 1 ? guardNames.length : ''}</span><span class="calendar-guard-tooltip" role="tooltip">${esc(guardLabel)}</span></button>`
     : '';
   const guardBanner = calendarView !== 'month' && guardNames.length
-    ? `<button type="button" class="calendar-guard-banner" style="--member-color:${guardColor}" ${guardAction}><span>Guàrdia</span><b>${esc(guardNames.join(', '))}</b></button>`
+    ? `<div class="calendar-guard-banners">${events.guards.map((item) => `<button type="button" class="calendar-guard-banner" style="--member-color:${person(item.memberId)?.color || guardColor}" data-action="open-calendar-guard" data-guard-id="${item.id}"><span>Guàrdia</span><b>${esc(person(item.memberId)?.name || '—')}</b></button>`).join('')}</div>`
     : '';
   const absenceEvents = events.absences.map((item) => {
     const member = person(item.memberId);
@@ -1253,8 +1249,9 @@ function guardTransferOperations() {
   return [...groups.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 function guardPartyName(memberId) { return memberId ? esc(person(memberId)?.name || '—') : '<span class="guard-external">Exterior</span>'; }
-function guardMemberOptions(selected = '', includeExternal = true, excludedMemberId = '') {
-  return `<option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option>${includeExternal ? `<option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>` : ''}${alphabetically(activeTeam()).filter((member) => member.id !== excludedMemberId).map((member) => `<option value="${member.id}" ${selected === member.id ? 'selected' : ''}>${esc(member.name)}</option>`).join('')}`;
+function guardMemberOptions(selected = '', includeExternal = true, excludedMemberIds = []) {
+  const excluded = new Set(excludedMemberIds);
+  return `<option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option>${includeExternal ? `<option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>` : ''}${alphabetically(activeTeam()).filter((member) => !excluded.has(member.id)).map((member) => `<option value="${member.id}" ${selected === member.id ? 'selected' : ''}>${esc(member.name)}</option>`).join('')}`;
 }
 function guardsPage() {
   const guards = activeGuards();
@@ -1344,7 +1341,14 @@ function guardActionModal() {
   const guard = activeGuards().find((item) => item.id === modal.guardId);
   if (!guard) return '';
   const member = person(guard.memberId);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIA</div><h2>Gestiona la guàrdia</h2><div class="muted">${esc(member?.name || '—')} · ${fmtDate(guard.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options"><button type="button" class="guard-action-option" data-action="open-guard-cession" data-guard-id="${guard.id}"><b>Cedeix</b><span>Canvia el responsable d’aquesta guàrdia.</span></button><button type="button" class="guard-action-option" data-action="open-guard-exchange" data-guard-id="${guard.id}"><b>Intercanvia</b><span>Permuta-la amb una altra guàrdia.</span></button></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></section></div>`;
+  const backAction = modal.returnGuardPickerDate ? `<div class="modal-actions"><button type="button" class="button ghost" data-action="return-guard-picker">Enrere</button></div>` : '';
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIA</div><h2>Gestiona la guàrdia</h2><div class="muted">${esc(member?.name || '—')} · ${fmtDate(guard.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options"><button type="button" class="guard-action-option" data-action="open-guard-cession" data-guard-id="${guard.id}"><b>Cedeix</b><span>Canvia el responsable d’aquesta guàrdia.</span></button><button type="button" class="guard-action-option" data-action="open-guard-exchange" data-guard-id="${guard.id}"><b>Intercanvia</b><span>Permuta-la amb una altra guàrdia.</span></button></div>${backAction}</section></div>`;
+}
+
+function guardPickerModal() {
+  const guards = activeGuards().filter((item) => item.date === modal.date);
+  const rows = guards.map((item) => `<button type="button" class="guard-action-option" data-action="open-calendar-guard" data-guard-id="${item.id}"><b>${esc(person(item.memberId)?.name || '—')}</b><span>Gestiona aquesta guàrdia</span></button>`).join('');
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GUÀRDIES</div><h2>${fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long' })}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options">${rows}</div></section></div>`;
 }
 
 function guardCessionModal() {
@@ -1352,18 +1356,26 @@ function guardCessionModal() {
   const sourceName = guard ? person(guard.memberId)?.name || '—' : 'Exterior';
   const dateValue = guard?.date || modal.date || '';
   const selectedTarget = Object.hasOwn(modal, 'toMemberId') ? (modal.toMemberId ?? 'external') : '';
+  const occupiedMemberIds = activeGuards().filter((item) => item.date === dateValue && item.id !== guard?.id).map((item) => item.memberId);
   const dateField = guard
     ? `<div class="field"><label>Data de la guàrdia</label><div class="guard-fixed-date">${fmtDate(guard.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div><input type="hidden" name="date" value="${guard.date}"></div>`
     : `<div class="field"><label>Data de la guàrdia</label><input type="date" name="date" required value="${dateValue}"></div>`;
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CESSIÓ DE GUÀRDIA</div><h2>${guard ? 'Canvia el responsable' : 'Entrada des de l’exterior'}</h2><div class="muted">Origen: ${esc(sourceName)}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-cession-form"><input type="hidden" name="guardId" value="${guard?.id || ''}"><div class="modal-body"><div class="form-grid">${dateField}<div class="field"><label>Nou responsable</label><select name="toMemberId" required>${guardMemberOptions(selectedTarget, Boolean(guard), guard?.memberId || '')}</select></div></div>${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2" placeholder="Motiu o referència del canvi">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
+  const secondaryAction = modal.returnToGuardAction
+    ? '<button type="button" class="button ghost" data-action="return-guard-action">Enrere</button>'
+    : '<button type="button" class="button ghost" data-action="close-modal">Cancel·la</button>';
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CESSIÓ DE GUÀRDIA</div><h2>${guard ? 'Canvia el responsable' : 'Entrada des de l’exterior'}</h2><div class="muted">Origen: ${esc(sourceName)}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-cession-form"><input type="hidden" name="guardId" value="${guard?.id || ''}"><div class="modal-body"><div class="form-grid">${dateField}<div class="field"><label>Nou responsable</label><select name="toMemberId" required>${guardMemberOptions(selectedTarget, Boolean(guard), [...occupiedMemberIds, guard?.memberId].filter(Boolean))}</select></div></div>${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2" placeholder="Motiu o referència del canvi">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
 }
 function guardExchangeModal() {
   const first = activeGuards().find((item) => item.id === modal.guardId);
-  const others = activeGuards().filter((item) => item.id !== first?.id);
+  const allOthers = activeGuards().filter((item) => item.id !== first?.id);
+  const others = allOthers.filter((candidate) => candidate.date !== first?.date && !allOthers.some((item) => item.id !== candidate.id && ((item.date === candidate.date && item.memberId === first?.memberId) || (item.date === first?.date && item.memberId === candidate.memberId))));
   const selected = modal.secondRef || '';
   const second = others.find((item) => item.id === selected);
   const exchangeSummary = second ? `<div class="guard-exchange-summary"><span>${fmtDate(first?.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(first?.memberId)?.name || '—')}</b><i>⇄</i><span>${fmtDate(second.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(second.memberId)?.name || '—')}</b></div>` : '';
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div>${exchangeSummary}${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
+  const secondaryAction = modal.returnToGuardAction
+    ? '<button type="button" class="button ghost" data-action="return-guard-action">Enrere</button>'
+    : '<button type="button" class="button ghost" data-action="close-modal">Cancel·la</button>';
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div>${exchangeSummary}${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
 }
 function colorControl(kind, color) { const assigned = Boolean(color); return `<div class="automatic-color"><span class="color-swatch" data-color-swatch style="--automatic-color:${color || '#39413c'}"></span><div><b>Color automàtic</b><span>${assigned ? (kind === 'member' ? 'Pastel per distingir persones' : 'Saturat per distingir agendes') : 'El backend l’assignarà en desar'}</span></div>${assigned ? `<button type="button" class="button ghost small" data-action="random-color" data-color-kind="${kind}">Nou color aleatori</button>` : ''}</div>`; }
 function coverageFields(item) { return `<div class="coverage-block"><div><span class="label">Cobertura ordinària</span><span class="muted">Places necessàries per dia</span></div><div class="coverage-fields">${[1, 2, 3, 4, 5].map((day) => `<label><span>${DAYS_SHORT[day - 1]}</span><input type="number" name="coverage-${day}" min="0" max="30" value="${item?.coverage ? Number(item.coverage[String(day)] || 0) : item ? state.coverage[day]?.[item.id] || 0 : 0}" /></label>`).join('')}</div></div>`; }
@@ -1849,6 +1861,7 @@ function modalView() {
   if (modal.type === 'recovery-code') return recoveryCodeModal();
   if (modal.type === 'generation') return generationModal();
   if (modal.type === 'guard-editor') return guardEditorModal();
+  if (modal.type === 'guard-picker') return guardPickerModal();
   if (modal.type === 'guard-action') return guardActionModal();
   if (modal.type === 'guard-cession') return guardCessionModal();
   if (modal.type === 'guard-exchange') return guardExchangeModal();
@@ -2033,39 +2046,28 @@ function guardImportRowsFromSheet(sheet) {
     names: splitGuardNames(spreadsheetValue(row, ['persones', 'personas', 'persona', 'metge', 'medico', 'médico', 'nombre', 'nom', 'names'])),
   }));
 }
-function guardImportCandidates(date) {
-  const rows = modal.guardImport?.rows || [];
-  const candidates = new Map();
-  rows.filter((row) => row.date === date).forEach((row) => row.items.forEach((item) => {
-    if (item.status === 'accepted') candidates.set(item.memberId, { memberId: item.memberId, name: item.memberName, score: item.score });
-    item.candidates?.forEach((candidate) => candidates.set(candidate.memberId, candidate));
-  }));
-  return [...candidates.values()].sort((left, right) => String(left.name).localeCompare(String(right.name)));
-}
-function guardImportChoice(date) {
+function guardImportChoice(rowIndex, itemIndex) {
   const choices = modal.guardImport?.choices || {};
-  if (choices[date]) return choices[date];
-  const candidates = guardImportCandidates(date);
-  const accepted = candidates.filter((candidate) => (modal.guardImport.rows || []).some((row) => row.date === date && row.items.some((item) => item.status === 'accepted' && item.memberId === candidate.memberId)));
-  return accepted.length === 1 && candidates.length === 1 ? accepted[0].memberId : '';
+  const item = modal.guardImport?.rows?.[rowIndex]?.items?.[itemIndex];
+  return item?.status === 'accepted' ? item.memberId : choices[`${rowIndex}:${itemIndex}`] || '';
 }
 function guardImportReady() {
   if (!modal.guardImport) return true;
-  const dates = [...new Set(modal.guardImport.rows.filter((row) => row.status === 'ready').map((row) => row.date))];
-  return dates.every((date) => {
-    const candidates = guardImportCandidates(date);
-    return candidates.length === 0 || Boolean(guardImportChoice(date));
-  });
+  return modal.guardImport.rows.every((row, rowIndex) => row.items.every((item, itemIndex) => item.status !== 'review' || Boolean(guardImportChoice(rowIndex, itemIndex))));
 }
 function applyGuardImportSelections() {
   if (!modal.guardImport) return;
   const manual = modal.guards.filter((item) => !item.imported);
   const imported = [];
-  const dates = [...new Set(modal.guardImport.rows.filter((row) => row.status === 'ready').map((row) => row.date))];
-  for (const date of dates) {
-    const memberId = guardImportChoice(date);
-    if (memberId && !imported.some((item) => item.date === date)) imported.push({ id: uid(), date, memberId, imported: true });
-  }
+  const assignments = new Set(manual.map((item) => `${item.date}:${item.memberId}`));
+  modal.guardImport.rows.forEach((row, rowIndex) => row.items.forEach((item, itemIndex) => {
+    const memberId = guardImportChoice(rowIndex, itemIndex);
+    const key = `${row.date}:${memberId}`;
+    if (memberId && !assignments.has(key)) {
+      imported.push({ id: uid(), date: row.date, memberId, imported: true });
+      assignments.add(key);
+    }
+  }));
   modal.guards = [...manual, ...imported];
 }
 function guardImportStatus(item) {
@@ -2077,15 +2079,12 @@ function guardImportReview() {
   const importState = modal.guardImport;
   if (!importState) return '';
   const rows = importState.rows.map((row, rowIndex) => {
-    const candidates = row.status === 'ready' ? guardImportCandidates(row.date) : [];
-    const choice = row.status === 'ready' ? guardImportChoice(row.date) : '';
-    const choiceField = candidates.length > 1 || candidates.some((candidate) => row.items.some((item) => item.status === 'review')) ? `<label class="guard-import-choice"><span>Adjunt per a aquesta data</span><select data-action="guard-import-choice" data-guard-import-date="${esc(row.date)}"><option value="">Selecciona una persona</option>${candidates.map((candidate) => `<option value="${esc(candidate.memberId)}" ${candidate.memberId === choice ? 'selected' : ''}>${esc(candidate.name)}${candidate.score ? ` · ${candidate.score}` : ''}</option>`).join('')}</select></label>` : '';
     const rowLabel = row.status === 'out_of_range' ? 'Fora del període' : row.status === 'invalid_date' ? 'Data no vàlida' : row.status === 'empty' ? 'Sense noms' : row.date;
-    return `<div class="guard-import-row"><div class="guard-import-row-head"><b>${esc(rowLabel)}</b><small>Fila ${row.rowNumber}</small></div><div class="guard-import-items">${row.items.map((item, itemIndex) => `<div class="guard-import-item"><span><b>${esc(item.rawName)}</b>${guardImportStatus(item)}</span>${item.status === 'review' && item.candidates?.length ? `<button type="button" class="button ghost tiny" data-action="save-import-alias" data-guard-import-row="${rowIndex}" data-guard-import-item="${itemIndex}">Guardar alias</button>` : ''}</div>`).join('') || '<span class="muted">Sin nombres procesables.</span>'}</div>${choiceField}</div>`;
+    return `<div class="guard-import-row"><div class="guard-import-row-head"><b>${esc(rowLabel)}</b><small>Fila ${row.rowNumber}</small></div><div class="guard-import-items">${row.items.map((item, itemIndex) => { const choice = guardImportChoice(rowIndex, itemIndex); const choiceField = item.status === 'review' ? `<label class="guard-import-choice"><span>Persona</span><select data-action="guard-import-choice" data-guard-import-row="${rowIndex}" data-guard-import-item="${itemIndex}"><option value="">Selecciona una persona</option>${(item.candidates || []).map((candidate) => `<option value="${esc(candidate.memberId)}" ${candidate.memberId === choice ? 'selected' : ''}>${esc(candidate.name)}${candidate.score ? ` · ${candidate.score}` : ''}</option>`).join('')}</select></label>` : ''; return `<div class="guard-import-item"><span><b>${esc(item.rawName)}</b>${guardImportStatus(item)}</span>${choiceField}${item.status === 'review' && item.candidates?.length ? `<button type="button" class="button ghost tiny" data-action="save-import-alias" data-guard-import-row="${rowIndex}" data-guard-import-item="${itemIndex}">Guardar alias</button>` : ''}</div>`; }).join('') || '<span class="muted">Sin nombres procesables.</span>'}</div></div>`;
   }).join('');
   const summary = importState.summary || {};
   const ready = guardImportReady();
-  return `<div class="guard-import-review"><div class="guard-import-summary"><b>Revisión del XLSX</b><span>${summary.accepted || 0} reconocidos · ${summary.ignored || 0} ignorados · ${summary.review || 0} pendientes${ready ? '' : ' · selecciona las fechas pendientes'}</span></div>${rows}</div>`;
+  return `<div class="guard-import-review"><div class="guard-import-summary"><b>Revisión del XLSX</b><span>${summary.accepted || 0} reconocidos · ${summary.ignored || 0} ignorados · ${summary.review || 0} pendientes${ready ? '' : ' · revisa cada nombre pendiente'}</span></div>${rows}</div>`;
 }
 async function previewGuardImportRows(inputRows) {
   const periodError = generationPeriodError();
@@ -2093,7 +2092,7 @@ async function previewGuardImportRows(inputRows) {
   const preview = await api.previewGuardImport({ ...generationPeriodPayload(), rows: inputRows });
   modal.guardImport = { ...preview, inputRows, choices: modal.guardImport?.choices || {} };
   applyGuardImportSelections();
-  modal.importNotice = `${preview.summary.accepted || 0} adjuntos reconocidos · ${preview.summary.ignored || 0} nombres ignorados${preview.conflicts?.length ? ` · ${preview.conflicts.length} fechas con más de un adjunto` : ''}.`;
+  modal.importNotice = `${preview.summary.accepted || 0} adjuntos reconocidos · ${preview.summary.ignored || 0} nombres ignorados.`;
   render();
 }
 async function importGuardSpreadsheet(file) {
@@ -2288,9 +2287,12 @@ document.addEventListener('click', async (event) => {
   if (action === 'open-generation') { const startMonth = nextGenerationMonth(); const startDate = `${startMonth}-01`; modal = { type: 'generation', periodMode: 'month', startMonth, endMonth: startMonth, startDate, endDate: endOfMonth(startDate), guards: [], absences: [], conflict: '' }; render(); return; }
   if (action === 'open-guard-editor') { const bounds = calendarBounds(); modal = { type: 'guard-editor', startMonth: projectionStartMonth(calendarProjection()), endMonth: projectionEndMonth(calendarProjection()), startDate: bounds.start, endDate: bounds.end, guards: structuredClone(calendarGuards()), conflict: '' }; render(); return; }
   if (action === 'open-incoming-guard') { modal = { type: 'guard-cession', guardId: null, date: '' }; render(); return; }
-  if (action === 'open-calendar-guard') { modal = { type: 'guard-action', guardId: button.dataset.guardId }; render(); return; }
-  if (action === 'open-guard-cession') { modal = { type: 'guard-cession', guardId: button.dataset.guardId }; render(); return; }
-  if (action === 'open-guard-exchange') { modal = { type: 'guard-exchange', guardId: button.dataset.guardId, secondRef: '' }; render(); return; }
+  if (action === 'open-calendar-guards') { modal = { type: 'guard-picker', date: button.dataset.guardDate }; render(); return; }
+  if (action === 'open-calendar-guard') { const returnGuardPickerDate = modal?.type === 'guard-picker' ? modal.date : ''; modal = { type: 'guard-action', guardId: button.dataset.guardId, returnGuardPickerDate }; render(); return; }
+  if (action === 'return-guard-picker') { modal = { type: 'guard-picker', date: modal.returnGuardPickerDate }; render(); return; }
+  if (action === 'open-guard-cession') { const returnToGuardAction = modal?.type === 'guard-action'; const returnGuardPickerDate = modal?.returnGuardPickerDate || ''; modal = { type: 'guard-cession', guardId: button.dataset.guardId, returnToGuardAction, returnGuardPickerDate }; render(); return; }
+  if (action === 'open-guard-exchange') { const returnToGuardAction = modal?.type === 'guard-action'; const returnGuardPickerDate = modal?.returnGuardPickerDate || ''; modal = { type: 'guard-exchange', guardId: button.dataset.guardId, secondRef: '', returnToGuardAction, returnGuardPickerDate }; render(); return; }
+  if (action === 'return-guard-action') { modal = { type: 'guard-action', guardId: modal.guardId, returnGuardPickerDate: modal.returnGuardPickerDate || '' }; render(); return; }
   if (action === 'add-generation-guard') { const formElement = button.closest('form'); const date = $('[name="guard-date"]', formElement).value; const memberId = $('[name="guard-member"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!date) return toast('Selecciona la data de la guàrdia'); if (date < bounds.start || date > bounds.end) return toast('La guàrdia ha d’estar dins del període seleccionat'); if (!modal.guards.some((item) => item.memberId === memberId && item.date === date)) modal.guards.push({ id: uid(), date, memberId }); modal.conflict = ''; render(); return; }
   if (action === 'add-generation-absence') { const formElement = button.closest('form'); const memberId = $('[name="absence-member"]', formElement).value; const start = $('[name="absence-start"]', formElement).value; const end = $('[name="absence-end"]', formElement).value; const bounds = generationDateBounds(); if (!memberId) return toast('Selecciona una persona'); if (!start || !end) return toast('Completa l’inici i el final de les vacances'); if (start < bounds.start || end > bounds.end) return toast('Les vacances han d’estar dins del període seleccionat'); if (end < start) return toast('La data final no pot ser anterior'); modal.absences.push({ id: uid(), memberId, start, end }); modal.conflict = ''; render(); return; }
   if (action === 'vacation-prev' || action === 'vacation-next') { modal.vacationMonth = monthKey(addMonths(`${modal.vacationMonth}-01`, action === 'vacation-prev' ? -1 : 1)); modal.tab = 'vacations'; render(); return; }
@@ -2298,9 +2300,10 @@ document.addEventListener('click', async (event) => {
   if (action === 'export-guards-template') { conditionTemplate('guards'); return; }
   if (action === 'export-absences-template') { conditionTemplate('absences'); return; }
   if (action === 'save-import-alias') {
-    const row = modal.guardImport?.rows?.[Number(button.dataset.guardImportRow)];
-    const item = row?.items?.[Number(button.dataset.guardImportItem)];
-    const memberId = guardImportChoice(row?.date) || item?.candidates?.[0]?.memberId;
+    const rowIndex = Number(button.dataset.guardImportRow);
+    const itemIndex = Number(button.dataset.guardImportItem);
+    const item = modal.guardImport?.rows?.[rowIndex]?.items?.[itemIndex];
+    const memberId = guardImportChoice(rowIndex, itemIndex) || item?.candidates?.[0]?.memberId;
     if (!item || !memberId) return toast('Selecciona primero un candidato');
     try {
       await api.saveMemberAlias({ memberId, alias: item.rawName });
@@ -2341,7 +2344,7 @@ document.addEventListener('click', (event) => {
 document.addEventListener('change', async (event) => {
   if (event.target.dataset.action === 'import-guards-file') { await importGuardSpreadsheet(event.target.files?.[0]); return; }
   if (event.target.dataset.action === 'import-absences-file') { await importAbsenceSpreadsheet(event.target.files?.[0]); return; }
-  if (event.target.dataset.action === 'guard-import-choice') { const date = event.target.dataset.guardImportDate; if (date) { modal.guardImport.choices[date] = event.target.value; applyGuardImportSelections(); render(); } return; }
+  if (event.target.dataset.action === 'guard-import-choice') { const key = `${event.target.dataset.guardImportRow}:${event.target.dataset.guardImportItem}`; modal.guardImport.choices[key] = event.target.value; applyGuardImportSelections(); render(); return; }
   if (modal?.type === 'guard-cession' && ['toMemberId', 'date'].includes(event.target.name)) { await refreshGuardOperationPreview(event.target.closest('form')); return; }
   if (modal?.type === 'guard-exchange' && event.target.name === 'secondRef') { await refreshGuardOperationPreview(event.target.closest('form')); return; }
   if (modal?.type === 'extra-assignment' && modal.manual && event.target.name === 'memberId') {
@@ -2407,7 +2410,7 @@ async function handleForm(formElement) {
       const bounds = generationDateBounds(); const periodError = generationPeriodError(bounds);
       if (periodError) { modal.conflict = periodError; render(); return; }
       const { startMonth, endMonth, startDate, endDate } = generationPeriodPayload();
-      if (!guardImportReady()) { modal.conflict = 'Revisa les coincidències de l’XLSX i selecciona una sola persona per data.'; render(); return; }
+      if (!guardImportReady()) { modal.conflict = 'Revisa les coincidències de l’XLSX i selecciona una persona per cada nom pendent.'; render(); return; }
       if (modal.guards.some((item) => item.date < bounds.start || item.date > bounds.end) || modal.absences.some((item) => item.start < bounds.start || item.end > bounds.end || item.end < item.start)) { modal.conflict = 'Hi ha guàrdies o vacances fora del període seleccionat. Elimina-les o ajusta el període.'; render(); return; }
       modal.busy = true; modal.conflict = ''; modal.loadingPhrase = nextGenerationLoadingMessage(); render();
       const loadingTimer = startGenerationLoadingAnimation();

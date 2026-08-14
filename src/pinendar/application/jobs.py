@@ -107,13 +107,7 @@ def validate_generation_request(session: Session, payload: dict[str, Any]) -> No
     active_member_ids = set(
         session.scalars(select(Member.id).where(Member.archived_at.is_(None), Member.is_active.is_(True)))
     )
-    persisted_guards = {
-        item.date.isoformat(): item.member_id
-        for item in session.scalars(
-            select(Guard).where(Guard.date >= start_date, Guard.date <= end_date)
-        )
-    }
-    guard_dates: set[str] = set()
+    guard_assignments: set[tuple[str, str]] = set()
     for guard in payload.get("guards", []):
         if guard["memberId"] not in active_member_ids:
             raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada", field="guards")
@@ -121,21 +115,15 @@ def validate_generation_request(session: Session, payload: dict[str, Any]) -> No
             raise DomainError(
                 "GUARD_OUTSIDE_PERIOD", "Les guàrdies han d’estar dins del període del calendari", field="guards"
             )
-        if guard["date"] in guard_dates:
+        guard_assignment = (guard["date"], guard["memberId"])
+        if guard_assignment in guard_assignments:
             raise DomainError(
-                "DUPLICATE_GUARD_DATE", f"Només hi pot haver una persona de guàrdia el {guard['date']}", field="guards"
-            )
-        if (
-            guard["date"] in persisted_guards
-            and persisted_guards[guard["date"]] != guard["memberId"]
-        ):
-            raise DomainError(
-                "DUPLICATE_GUARD_DATE",
-                f"Ja hi ha una guàrdia registrada el {guard['date']}",
+                "DUPLICATE_GUARD_ASSIGNMENT",
+                f"La persona ja té una guàrdia registrada el {guard['date']}",
                 field="guards",
-                details={"date": guard["date"]},
+                details={"date": guard["date"], "memberId": guard["memberId"]},
             )
-        guard_dates.add(guard["date"])
+        guard_assignments.add(guard_assignment)
     for absence in payload.get("absences", []):
         if absence["memberId"] not in active_member_ids:
             raise DomainError("MEMBER_NOT_FOUND", "Persona no trobada", field="absences")
@@ -561,7 +549,12 @@ class JobDispatcher:
                 )
             for item in snapshot["conditions"].get("guards", []):
                 guard_date = date.fromisoformat(item["date"])
-                existing_guard = session.scalar(select(Guard).where(Guard.date == guard_date))
+                existing_guard = session.scalar(
+                    select(Guard).where(
+                        Guard.date == guard_date,
+                        Guard.member_id == item["memberId"],
+                    )
+                )
                 if existing_guard is None:
                     session.add(
                         Guard(
