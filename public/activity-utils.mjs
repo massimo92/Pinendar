@@ -102,6 +102,20 @@ export function historicalActivityCounts(members, activities, records) {
   return counts;
 }
 
+function normalizedDistributionEquity(references, ownLoadFor) {
+  const ownComparableTotal = references.reduce((sum, item) => sum + ownLoadFor(item.agenda), 0);
+  const referenceTotal = references.reduce((sum, item) => sum + item.peerShare, 0);
+  if (!references.length || !ownComparableTotal || !referenceTotal) return null;
+  const cells = references.map((item) => {
+    const actualShare = ownLoadFor(item.agenda) / ownComparableTotal;
+    const expectedShare = item.peerShare / referenceTotal;
+    const deviation = actualShare - expectedShare;
+    return { ...item, actualShare, expectedShare, deviation, absoluteDeviation: Math.abs(deviation) };
+  });
+  const distance = Math.min(1, cells.reduce((sum, item) => sum + item.absoluteDeviation, 0) / 2);
+  return { cells, distance, score: Math.round((1 - distance) * 100) };
+}
+
 
 export function historicalEquityAnalysis({ members, activities, assignments, scoredMemberIds = null, cutoff = null }) {
   const activityCandidates = activities.filter((item) => !['management', 'gestio', 'no_assignment'].includes(item.id));
@@ -132,38 +146,42 @@ export function historicalEquityAnalysis({ members, activities, assignments, sco
     const windowCounts = Object.fromEntries(windowPeople.map((candidate) => [candidate.id, Object.fromEntries(clinicalActivities.map((item) => [item.id, 0]))]));
     windowAssignments.forEach((item) => { windowCounts[item.memberId][item.type] += item.load; });
     const windowTotals = Object.fromEntries(windowPeople.map((candidate) => [candidate.id, clinicalActivities.reduce((sum, item) => sum + windowCounts[candidate.id][item.id], 0)]));
-    const ownTotal = windowTotals[member.id] || 0;
     const comparators = windowPeople.filter((candidate) => candidate.id !== member.id && windowTotals[candidate.id] > 0);
     const teamTotal = windowAssignments.reduce((sum, item) => sum + item.load, 0);
-    let weightedDeviation = 0;
-    const ownCells = clinicalActivities.map((agenda) => {
-      const actualShare = ownTotal ? windowCounts[member.id][agenda.id] / ownTotal : 0;
-      const expectedShare = comparators.length
-        ? comparators.reduce((sum, candidate) => sum + windowCounts[candidate.id][agenda.id] / windowTotals[candidate.id], 0) / comparators.length
-        : null;
+    const references = comparators.length ? clinicalActivities.map((agenda) => ({
+      agenda,
+      peerShare: comparators.reduce(
+        (sum, candidate) => sum + windowCounts[candidate.id][agenda.id] / windowTotals[candidate.id],
+        0,
+      ) / comparators.length,
+      peerCount: comparators.length,
+    })) : [];
+    const distribution = normalizedDistributionEquity(
+      references,
+      (agenda) => windowCounts[member.id][agenda.id],
+    );
+    const ownCells = (distribution?.cells || []).map((item) => {
+      const { agenda, absoluteDeviation, ...cell } = item;
       const agendaLoad = windowAssignments.filter((item) => item.type === agenda.id).reduce((sum, item) => sum + item.load, 0);
       const historicalWeight = teamTotal ? agendaLoad / teamTotal : 0;
-      const deviation = expectedShare === null ? null : actualShare - expectedShare;
-      const relativeDeviation = expectedShare === null || Math.max(actualShare, expectedShare) === 0
-        ? null
-        : Math.abs(deviation) / Math.max(actualShare, expectedShare);
-      if (relativeDeviation !== null) weightedDeviation += historicalWeight * relativeDeviation;
-      const cell = {
+      const result = {
+        ...cell,
         member,
         agenda,
-        actualShare,
-        expectedShare,
-        deviation,
-        relativeDeviation,
+        relativeDeviation: absoluteDeviation,
         historicalWeight,
         value: windowCounts[member.id][agenda.id],
       };
-      cells.push(cell);
-      return cell;
+      cells.push(result);
+      return result;
     });
-    const score = comparators.length ? Math.round(Math.max(0, 1 - Math.min(weightedDeviation, 1)) * 100) : null;
-    memberScores[member.id] = score;
-    memberDetails[member.id] = { startDate, endDate: cutoff || clinicalAssignments.at(-1)?.date || startDate, weightedDeviation, cells: ownCells };
+    memberScores[member.id] = distribution?.score ?? null;
+    memberDetails[member.id] = {
+      startDate,
+      endDate: cutoff || clinicalAssignments.at(-1)?.date || startDate,
+      distance: distribution?.distance ?? null,
+      cells: ownCells,
+    };
   }
   const measuredScores = Object.values(memberScores).filter((value) => value !== null);
   const globalScore = measuredScores.length ? Math.round(measuredScores.reduce((sum, value) => sum + value, 0) / measuredScores.length) : null;
@@ -205,18 +223,22 @@ export function operationalEquityAnalysis({ members, activities, assignments, sc
       const peerShare = peers.reduce((sum, candidate) => sum + windowCounts[candidate.id][agenda.id] / windowTotals[candidate.id], 0) / peers.length;
       return [{ agenda, peerShare, peerCount: peers.length }];
     });
-    const ownComparableTotal = references.reduce((sum, item) => sum + windowCounts[member.id][item.agenda.id], 0);
-    const referenceTotal = references.reduce((sum, item) => sum + item.peerShare, 0);
-    if (!references.length || !ownComparableTotal || !referenceTotal) { memberScores[member.id] = null; continue; }
-    const cells = references.map((item) => {
-      const actualShare = windowCounts[member.id][item.agenda.id] / ownComparableTotal;
-      const expectedShare = item.peerShare / referenceTotal;
-      return { ...item, actualShare, expectedShare, deviation: Math.abs(actualShare - expectedShare) };
-    });
-    const distance = Math.min(1, cells.reduce((sum, item) => sum + item.deviation, 0) / 2);
-    const score = Math.round((1 - distance) * 100);
-    memberScores[member.id] = score;
-    memberDetails[member.id] = { startDate, endDate: cutoff || clinicalAssignments.at(-1)?.date || startDate, distance, cells };
+    const distribution = normalizedDistributionEquity(
+      references,
+      (agenda) => windowCounts[member.id][agenda.id],
+    );
+    if (!distribution) { memberScores[member.id] = null; continue; }
+    const cells = distribution.cells.map(({ absoluteDeviation, ...item }) => ({
+      ...item,
+      deviation: absoluteDeviation,
+    }));
+    memberScores[member.id] = distribution.score;
+    memberDetails[member.id] = {
+      startDate,
+      endDate: cutoff || clinicalAssignments.at(-1)?.date || startDate,
+      distance: distribution.distance,
+      cells,
+    };
   }
 
   const measuredScores = Object.values(memberScores).filter((value) => value !== null);
@@ -251,17 +273,18 @@ export function historicalEquityTimeline({ members, activities, assignments, res
     const totals = Object.fromEntries(people.map((member) => [member.id, clinicalActivities.reduce((sum, item) => sum + windowCounts[member.id][item.id], 0)]));
     const ownTotal = totals[memberId] || 0;
     const comparators = people.filter((member) => member.id !== memberId && totals[member.id] > 0);
-    const teamTotal = Object.values(totals).reduce((sum, value) => sum + value, 0);
-    if (!ownTotal || !comparators.length || !teamTotal) return null;
-    const weightedDeviation = clinicalActivities.reduce((sum, agenda) => {
-      const actualShare = windowCounts[memberId][agenda.id] / ownTotal;
-      const expectedShare = comparators.reduce((total, member) => total + windowCounts[member.id][agenda.id] / totals[member.id], 0) / comparators.length;
-      const agendaLoad = people.reduce((total, member) => total + windowCounts[member.id][agenda.id], 0);
-      const denominator = Math.max(actualShare, expectedShare);
-      const relativeDeviation = denominator ? Math.abs(actualShare - expectedShare) / denominator : 0;
-      return sum + agendaLoad / teamTotal * relativeDeviation;
-    }, 0);
-    return Math.round(Math.max(0, 1 - Math.min(weightedDeviation, 1)) * 100);
+    if (!ownTotal || !comparators.length) return null;
+    const references = clinicalActivities.map((agenda) => ({
+      agenda,
+      peerShare: comparators.reduce(
+        (sum, member) => sum + windowCounts[member.id][agenda.id] / totals[member.id],
+        0,
+      ) / comparators.length,
+    }));
+    return normalizedDistributionEquity(
+      references,
+      (agenda) => windowCounts[memberId][agenda.id],
+    )?.score ?? null;
   };
   for (const date of allDates) {
     const dailyAssignments = assignmentsByDate.get(date) || [];

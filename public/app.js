@@ -1,6 +1,6 @@
 import { api, waitForGeneration } from './api.js?v=14';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
-import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
+import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=9';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
@@ -852,10 +852,9 @@ function heatCell(cell) {
   const strength = magnitude >= 0.5 ? 'strong' : magnitude >= 0.25 ? 'medium' : 'soft';
   const actual = Math.round(cell.actualShare * 100);
   const expected = Math.round(cell.expectedShare * 100);
-  const weight = Math.round(cell.historicalWeight * 100);
   const detail = state.language === 'es'
-    ? `Real ${actual}% · media ${expected}% · diferencia ${roundedDeviation}% · peso histórico ${weight}%`
-    : `Real ${actual}% · mitjana ${expected}% · diferència ${roundedDeviation}% · pes històric ${weight}%`;
+    ? `Real ${actual}% · media ${expected}% · diferencia ${roundedDeviation}%`
+    : `Real ${actual}% · mitjana ${expected}% · diferència ${roundedDeviation}%`;
   return `<div class="heat-cell ${direction} ${strength}" title="${detail}" aria-label="${detail}">${roundedDeviation}%</div>`;
 }
 
@@ -1145,7 +1144,7 @@ function historyPage() {
     ? (state.language === 'es' ? 'Evolución de la equidad' : 'Evolució de l’equitat')
     : (state.language === 'es' ? 'Evolución de la felicidad' : 'Evolució de la felicitat');
   const chartDescription = historyMetric === 'equity'
-    ? (state.language === 'es' ? 'Índice acumulado: compara el reparto recibido con la media del equipo y pondera cada agenda por su peso histórico.' : 'Índex acumulat: compara el repartiment rebut amb la mitjana de l’equip i pondera cada agenda pel seu pes històric.')
+    ? (state.language === 'es' ? 'Índice acumulado: compara la distribución recibida con la distribución media del equipo.' : 'Índex acumulat: compara la distribució rebuda amb la distribució mitjana de l’equip.')
     : (state.language === 'es' ? 'Índice acumulado ponderado por carga: ♥ suma, 👎 resta y sin reacción no modifica el resultado.' : 'Índex acumulat ponderat per càrrega: ♥ suma, 👎 resta i sense reacció no modifica el resultat.');
   const chartFootnote = historyMetric === 'equity'
     ? (state.language === 'es' ? 'Cada punto utiliza todo el histórico disponible hasta esa fecha. La media del equipo está resaltada.' : 'Cada punt utilitza tot l’històric disponible fins aquella data. La mitjana de l’equip està ressaltada.')

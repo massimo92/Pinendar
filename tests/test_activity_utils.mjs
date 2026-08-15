@@ -102,8 +102,6 @@ const equity = historicalEquityAnalysis({
 assert.deepEqual(equity.activities.map((item) => item.id), ['general', 'olot']);
 assert.equal(equity.memberDetails.old.startDate, '2024-01-08');
 assert.equal(equity.memberDetails.new.startDate, '2026-01-08');
-assert.equal(equity.memberDetails.old.cells.find((cell) => cell.agenda.id === 'olot').historicalWeight, 0.25);
-assert.equal(equity.memberDetails.new.cells.find((cell) => cell.agenda.id === 'olot').historicalWeight, 0.5);
 assert.equal(equity.memberScores.old, 0, 'Un reparto concentrado no se excusa por capacidades o reglas');
 assert.equal(equity.memberScores.new, 0, 'La persona evaluada debe excluirse de la media del equipo');
 
@@ -121,28 +119,80 @@ assert.equal(balancedEquity.memberScores.old, 100);
 assert.equal(balancedEquity.memberScores.new, 100);
 assert.equal(balancedEquity.globalScore, 100);
 
+const universalMembers = [
+  { id: 'person-a', allowedTypes: ['general', 'olot', 'remote'] },
+  { id: 'person-b', allowedTypes: ['general', 'olot', 'remote'] },
+];
+const universalActivities = [
+  { id: 'general', name: 'General', loadPercentage: 100 },
+  { id: 'olot', name: 'Olot', loadPercentage: 100 },
+  { id: 'remote', name: 'Remota', loadPercentage: 100 },
+];
+const universalAssignments = [
+  ...Array.from({ length: 8 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-a', type: 'general' })),
+  ...Array.from({ length: 2 }, (_, index) => ({ date: `2026-01-${String(index + 9).padStart(2, '0')}`, memberId: 'person-a', type: 'olot' })),
+  ...Array.from({ length: 6 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-b', type: 'general' })),
+  ...Array.from({ length: 3 }, (_, index) => ({ date: `2026-01-${String(index + 7).padStart(2, '0')}`, memberId: 'person-b', type: 'olot' })),
+  { date: '2026-01-10', memberId: 'person-b', type: 'remote' },
+];
 const operationalEquity = operationalEquityAnalysis({
-  members: [
-    { id: 'person-a', allowedTypes: ['general', 'olot', 'remote'] },
-    { id: 'person-b', allowedTypes: ['general', 'olot', 'remote'] },
-  ],
-  activities: [
-    { id: 'general', name: 'General', loadPercentage: 100 },
-    { id: 'olot', name: 'Olot', loadPercentage: 100 },
-    { id: 'remote', name: 'Remota', loadPercentage: 100 },
-  ],
-  assignments: [
-    ...Array.from({ length: 8 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-a', type: 'general' })),
-    ...Array.from({ length: 2 }, (_, index) => ({ date: `2026-01-${String(index + 9).padStart(2, '0')}`, memberId: 'person-a', type: 'olot' })),
-    ...Array.from({ length: 6 }, (_, index) => ({ date: `2026-01-${String(index + 1).padStart(2, '0')}`, memberId: 'person-b', type: 'general' })),
-    ...Array.from({ length: 3 }, (_, index) => ({ date: `2026-01-${String(index + 7).padStart(2, '0')}`, memberId: 'person-b', type: 'olot' })),
-    { date: '2026-01-10', memberId: 'person-b', type: 'remote' },
-  ],
+  members: universalMembers,
+  activities: universalActivities,
+  assignments: universalAssignments,
 });
 assert.equal(operationalEquity.memberScores['person-a'], 80, 'La referencia operativa debe excluir a la persona evaluada');
 assert.equal(operationalEquity.memberScores['person-b'], 80);
 assert.equal(operationalEquity.globalScore, 80);
 assert.equal(operationalEquity.worstScore, 80);
+
+const structuralWithUniversalCapabilities = historicalEquityAnalysis({
+  members: universalMembers,
+  activities: universalActivities,
+  assignments: universalAssignments,
+});
+assert.deepEqual(
+  structuralWithUniversalCapabilities.memberScores,
+  operationalEquity.memberScores,
+  'Las equidades deben coincidir por persona cuando todos pueden hacer todas las agendas',
+);
+assert.equal(structuralWithUniversalCapabilities.globalScore, operationalEquity.globalScore);
+const universalTimeline = historicalEquityTimeline({
+  members: universalMembers,
+  activities: universalActivities,
+  assignments: universalAssignments,
+});
+assert.equal(universalTimeline.series['person-a'].at(-1).value, 0.8);
+assert.equal(universalTimeline.series['person-b'].at(-1).value, 0.8);
+
+const singleCapableMembers = [
+  { id: 'specialist', allowedTypes: ['general', 'exclusive'] },
+  { id: 'peer', allowedTypes: ['general'] },
+];
+const singleCapableActivities = [
+  { id: 'general', name: 'General', loadPercentage: 100 },
+  { id: 'exclusive', name: 'Exclusiva', loadPercentage: 100 },
+];
+const singleCapableAssignments = [
+  { date: '2026-02-01', memberId: 'specialist', type: 'general' },
+  { date: '2026-02-01', memberId: 'specialist', type: 'exclusive' },
+  { date: '2026-02-01', memberId: 'peer', type: 'general' },
+];
+const singleCapableStructural = historicalEquityAnalysis({
+  members: singleCapableMembers,
+  activities: singleCapableActivities,
+  assignments: singleCapableAssignments,
+});
+const singleCapableOperational = operationalEquityAnalysis({
+  members: singleCapableMembers,
+  activities: singleCapableActivities,
+  assignments: singleCapableAssignments,
+});
+assert.deepEqual(singleCapableStructural.memberScores, { specialist: 50, peer: 50 });
+assert.deepEqual(
+  singleCapableOperational.memberScores,
+  { specialist: 100, peer: 100 },
+  'Una agenda sin otro compañero capacitado no debe desviar la equidad operativa',
+);
 
 const equityTimeline = historicalEquityTimeline({
   members: equityMembers,
