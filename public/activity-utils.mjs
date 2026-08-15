@@ -102,6 +102,29 @@ export function historicalActivityCounts(members, activities, records) {
   return counts;
 }
 
+export function fixedRuleActivityAnalysis({ activities, assignments, cutoff = null }) {
+  const clinicalById = Object.fromEntries(
+    activities
+      .filter((item) => !['management', 'gestio', 'no_assignment'].includes(item.id))
+      .map((item) => [item.id, item]),
+  );
+  let fixedLoad = 0;
+  let totalLoad = 0;
+  assignments.forEach((assignment) => {
+    const activity = clinicalById[assignment.type];
+    if (!activity || (cutoff && assignment.date > cutoff)) return;
+    const load = Number(assignment.loadPercentage ?? activity.loadPercentage ?? 100) / 100;
+    totalLoad += load;
+    if (assignment.fixed) fixedLoad += load;
+  });
+  return {
+    fixedLoad,
+    totalLoad,
+    share: totalLoad ? fixedLoad / totalLoad : null,
+    percentage: totalLoad ? Math.round(fixedLoad / totalLoad * 100) : null,
+  };
+}
+
 function normalizedDistributionEquity(references, ownLoadFor) {
   const ownComparableTotal = references.reduce((sum, item) => sum + ownLoadFor(item.agenda), 0);
   const referenceTotal = references.reduce((sum, item) => sum + item.peerShare, 0);

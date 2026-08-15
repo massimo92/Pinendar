@@ -96,7 +96,7 @@ Si un periodo ya contiene eventos o vacantes, la aplicación muestra las cantida
 - **Equipo**: perfiles, estado activo auditado, patrones de trabajo semanales o alternantes, capacidades, gestión, reglas, vacaciones y archivo.
 - **Agendas**: hospital, modalidad, prioridad, cobertura semanal y reglas especiales recurrentes.
 - **Guardias y festivos**: formularios simples y listado.
-- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, señal prudente de capacidad de plantilla y gráfico acumulado con selector entre equidad/felicidad y resolución diaria/mensual.
+- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, porcentaje de carga clínica asignada directamente por reglas fijas, señal prudente de capacidad de plantilla y gráfico acumulado con selector entre equidad/felicidad y resolución diaria/mensual. El porcentaje pondera la carga de cada agenda y excluye Gestión y los días sin asignación.
 - **Ajustes**: idioma, hospitales y festivos.
 - **Guía de uso**: explicación no técnica del flujo, las reglas, los criterios de reparto, los avisos y los cambios manuales.
 

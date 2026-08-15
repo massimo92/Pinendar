@@ -5,6 +5,7 @@ import {
   assignmentExchangePreviewLabels,
   compactActivityMeta,
   compactHospitalName,
+  fixedRuleActivityAnalysis,
   historicalActivityCounts,
   historicalEquityAnalysis,
   historicalEquityTimeline,
@@ -64,6 +65,27 @@ const counts = historicalActivityCounts(
 
 assert.deepEqual(counts['person-a'], { full: 1, half: 0.5, management: 1 });
 assert.deepEqual(counts['person-b'], { full: 0, half: 0, management: 1 });
+
+const fixedRuleActivity = fixedRuleActivityAnalysis({
+  activities,
+  assignments: [
+    { date: '2026-01-01', type: 'full', fixed: true },
+    { date: '2026-01-02', type: 'half', fixed: true },
+    { date: '2026-01-03', type: 'full', fixed: false },
+    { date: '2026-01-04', type: 'management', fixed: true },
+    { date: '2026-01-05', type: 'no_assignment', fixed: true },
+  ],
+});
+assert.deepEqual(fixedRuleActivity, {
+  fixedLoad: 1.5,
+  totalLoad: 2.5,
+  share: 0.6,
+  percentage: 60,
+});
+assert.equal(
+  fixedRuleActivityAnalysis({ activities, assignments: [] }).percentage,
+  null,
+);
 
 assert.deepEqual(sortByName([{ name: 'Zulu' }, { name: 'Àgata' }]).map((item) => item.name), ['Àgata', 'Zulu']);
 const grouped = planningActivityGroups({
