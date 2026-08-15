@@ -823,6 +823,7 @@ def job_payload(job: GenerationJob) -> dict[str, Any]:
         "endDate": (job.end_date or month_end(job.end_month)).isoformat(),
         "inputRevision": job.input_revision,
         "optimizationMode": snapshot_config.get("optimizationMode", "fairness"),
+        "timeLimitSeconds": float(snapshot_config.get("timeLimitSeconds", 120)),
         "error": {
             "code": job.error_code,
             "message": job.error_message,

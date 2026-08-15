@@ -4,12 +4,21 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from multiprocessing import get_context
+from time import monotonic
 from typing import Any
 
 import pytest
 
 from pinendar.domain.scheduler import ScheduleProblem
-from pinendar.infrastructure.cp_sat_scheduler import CpSatScheduler, solve_snapshot, validate_solution
+from pinendar.infrastructure.cp_sat_scheduler import (
+    CpSatScheduler,
+    _Phase,
+    _phase_time_budget,
+    _polish_solution,
+    _polishing_reserve,
+    solve_snapshot,
+    validate_solution,
+)
 
 
 def agenda(
@@ -69,6 +78,8 @@ def problem(
     schema_version: int = 2,
     start_month: str = "2027-01",
     end_month: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     first_generation_member_ids: list[str] | None = None,
 ) -> ScheduleProblem:
     return ScheduleProblem(
@@ -86,6 +97,8 @@ def problem(
         or {item["id"]: {entry["id"]: 0 for entry in agendas} for item in team},
         locked_assignments=[],
         first_generation_member_ids=first_generation_member_ids or [],
+        start_date=start_date,
+        end_date=end_date,
         solver_config={
             "timeLimitSeconds": 5,
             "workers": 1,
@@ -95,15 +108,66 @@ def problem(
     )
 
 
-def test_scheduler_covers_higher_priority_agenda_first() -> None:
-    agendas = [agenda("lower", priority=4), agenda("higher", priority=1)]
+def test_solver_prioritizes_time_for_fairness_phases() -> None:
+    phases = [
+        _Phase("worst-historical-distance", 0, False),
+        _Phase("total-historical-distance", 0, False),
+        _Phase("consecutive-clinical-agendas", 0, False),
+        _Phase("management-fridays", 0, False),
+    ]
+
+    assert _phase_time_budget(phases, 0, 120) == pytest.approx(72)
+    assert _phase_time_budget(phases, 1, 48) == pytest.approx(36)
+    assert _phase_time_budget(phases, 2, 12) == pytest.approx(10.8)
+    assert _phase_time_budget(phases, 3, 1.2) == pytest.approx(1.2)
+
+
+def test_final_phase_share_is_split_between_all_final_adjustments() -> None:
+    phases = [
+        _Phase("worst-historical-distance", 0, False),
+        _Phase("total-historical-distance", 0, False),
+        _Phase("consecutive-clinical-agendas", 0, False),
+        _Phase("management-low-vacancy-days", 0, False),
+        _Phase("management-fridays", 0, False),
+        _Phase("management-mondays", 0, False),
+    ]
+
+    assert _phase_time_budget(phases, 0, 900) == pytest.approx(540)
+    assert _phase_time_budget(phases, 1, 360) == pytest.approx(270)
+    assert _phase_time_budget(phases, 2, 90) == pytest.approx(81)
+    assert _phase_time_budget(phases, 3, 9) == pytest.approx(3)
+
+
+@pytest.mark.parametrize(
+    ("time_limit", "expected"),
+    [(60, 3), (120, 6), (300, 15), (900, 45), (1800, 90)],
+)
+def test_polishing_reserves_five_percent_of_generation_time(
+    time_limit: float,
+    expected: float,
+) -> None:
+    assert _polishing_reserve(time_limit) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("telematic", "modality"),
+    [(False, "onsite"), (True, "telematic")],
+)
+def test_scheduler_covers_higher_priority_agenda_first(
+    telematic: bool,
+    modality: str,
+) -> None:
+    agendas = [
+        agenda("lower", priority=4, telematic=telematic),
+        agenda("higher", priority=1, telematic=telematic),
+    ]
     team = [member("member-1", ["lower", "higher"])]
     result = CpSatScheduler().solve(problem(agendas, team, {"1": {"lower": 1, "higher": 1}}))
 
     assert result.outcome == "solution"
     assert [phase["name"] for phase in result.metrics["phases"][:2]] == [
-        "priority-1-vacancies",
-        "priority-1-uncovered-agenda-days",
+        f"{modality}-priority-1-vacancies",
+        f"{modality}-priority-1-uncovered-agenda-days",
     ]
     monday_assignments = [
         item for item in result.assignments
@@ -114,6 +178,31 @@ def test_scheduler_covers_higher_priority_agenda_first() -> None:
     ]
     assert [item["type"] for item in monday_assignments] == ["higher"]
     assert [item["type"] for item in monday_vacancies] == ["lower"]
+
+
+def test_scheduler_covers_onsite_before_higher_priority_telematic() -> None:
+    agendas = [
+        agenda("onsite", priority=4),
+        agenda("remote", priority=1, telematic=True),
+    ]
+    team = [member("member-1", ["onsite", "remote"])]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"onsite": 1, "remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-04",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert [phase["name"] for phase in result.metrics["phases"][:2]] == [
+        "onsite-priority-4-vacancies",
+        "onsite-priority-4-uncovered-agenda-days",
+    ]
+    assert [item["type"] for item in result.assignments] == ["onsite"]
+    assert result.vacancies == [{"date": "2027-01-04", "type": "remote"}]
 
 
 def test_locked_deferred_assignment_covers_its_origin_demand() -> None:
@@ -229,6 +318,183 @@ def test_each_guard_on_the_same_date_creates_its_own_post_guard_absence() -> Non
         {"date": "2027-01-04", "type": "clinical"},
         {"date": "2027-01-04", "type": "clinical"},
     ]
+
+
+def test_guard_prefers_onsite_agenda_even_on_configured_telework_day() -> None:
+    agendas = [agenda("onsite", priority=1), agenda("remote", priority=1, telematic=True)]
+    team = [
+        member("guarded", ["onsite", "remote"], tele=[1]),
+        member("peer", ["onsite", "remote"]),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"onsite": 1, "remote": 1}},
+            guards=[{"memberId": "guarded", "date": "2027-01-04"}],
+        )
+    )
+
+    guarded = [item for item in result.assignments if item["memberId"] == "guarded"]
+    assert result.outcome == "solution"
+    assert [item["type"] for item in guarded if item["date"] == "2027-01-04"] == ["onsite"]
+    assert next(
+        phase for phase in result.metrics["phases"] if phase["name"] == "guard-onsite-days"
+    )["value"] == 0
+
+
+def test_guard_falls_back_to_telematic_when_no_onsite_agenda_is_possible() -> None:
+    agendas = [agenda("remote", priority=1, telematic=True)]
+    team = [member("guarded", ["remote"], tele=[1])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"remote": 1}},
+            guards=[{"memberId": "guarded", "date": "2027-01-04"}],
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert any(item["type"] == "remote" for item in result.assignments)
+    assert next(
+        phase for phase in result.metrics["phases"] if phase["name"] == "guard-onsite-days"
+    )["value"] == 1
+
+
+def test_telematic_days_are_spread_evenly_between_members() -> None:
+    agendas = [agenda("onsite", priority=1), agenda("remote", priority=1, telematic=True)]
+    team = [
+        member("person-1", ["onsite", "remote"]),
+        member("person-2", ["onsite", "remote"]),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"onsite": 1, "remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-11",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["telematicBalance"]["telematicAssignmentsByMember"] == {
+        "person-1": 1.0,
+        "person-2": 1.0,
+    }
+    assert result.metrics["telematicBalance"]["percentageByMember"] == {
+        "person-1": 50.0,
+        "person-2": 50.0,
+    }
+    assert result.metrics["telematicBalance"]["rangePercentagePoints"] == 0.0
+    phase_names = [phase["name"] for phase in result.metrics["phases"]]
+    assert phase_names.index("telematic-percentage-range") < phase_names.index(
+        "worst-historical-distance"
+    )
+    assert phase_names[-2:] == [
+        "operational-fairness-polishing",
+        "telematic-percentage-polishing",
+    ]
+
+
+def test_telematic_balance_uses_percentages_not_absolute_assignment_counts() -> None:
+    agendas = [
+        agenda("onsite", priority=1),
+        agenda("remote", priority=1, telematic=True),
+    ]
+    team = [
+        member("short-week", ["onsite", "remote"], available=[1]),
+        member("long-week", ["onsite", "remote"], available=[1, 2]),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {
+                "1": {"onsite": 1, "remote": 1},
+                "2": {"onsite": 1},
+            },
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    assert result.outcome == "solution"
+    remote = next(item for item in result.assignments if item["type"] == "remote")
+    assert remote["memberId"] == "long-week"
+    assert result.metrics["telematicBalance"]["percentageByMember"] == {
+        "short-week": 0.0,
+        "long-week": 50.0,
+    }
+    assert result.metrics["telematicBalance"]["rangePercentagePoints"] == 50.0
+
+
+def test_onsite_half_day_makes_the_whole_assigned_day_onsite() -> None:
+    agendas = [
+        agenda("onsite-half", priority=1, load_percentage=50),
+        agenda("remote-half", priority=1, telematic=True, load_percentage=50),
+    ]
+    team = [
+        member("mixed", ["onsite-half", "remote-half"]),
+        member("remote", ["remote-half"]),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"onsite-half": 1, "remote-half": 3}},
+            start_date="2027-01-04",
+            end_date="2027-01-04",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["telematicBalance"]["telematicAssignmentsByMember"] == {
+        "mixed": 0,
+        "remote": 1,
+    }
+    assert result.metrics["telematicBalance"]["telematicDaysByMember"] == {
+        "mixed": 0,
+        "remote": 1,
+    }
+    assert result.metrics["telematicBalance"]["totalAssignedDaysByMember"] == {
+        "mixed": 1,
+        "remote": 1,
+    }
+    assert result.metrics["telematicBalance"]["percentageByMember"] == {
+        "mixed": 0.0,
+        "remote": 100.0,
+    }
+
+
+def test_management_counts_as_a_full_telematic_day() -> None:
+    team = [member("manager", [], quota=1), member("peer", [])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            [],
+            team,
+            {},
+            start_date="2027-01-04",
+            end_date="2027-01-04",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["telematicBalance"]["telematicAssignmentsByMember"] == {
+        "manager": 1,
+        "peer": 0,
+    }
+    assert result.metrics["telematicBalance"]["percentageByMember"] == {
+        "manager": 100.0,
+        "peer": None,
+    }
 
 
 def test_scheduler_repeats_member_work_pattern_weeks() -> None:
@@ -669,6 +935,95 @@ def test_personal_telework_days_only_allow_telematic_agendas() -> None:
     }
 
 
+def test_scheduler_avoids_repeating_clinical_agendas_on_consecutive_dates() -> None:
+    agendas = [agenda("a", priority=1), agenda("b", priority=1)]
+    team = [
+        member("member-1", ["a", "b"], available=[1, 2, 3]),
+        member("member-2", ["a", "b"], available=[1, 2, 3]),
+    ]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {
+                "1": {"a": 1, "b": 1},
+                "2": {"a": 1, "b": 1},
+                "3": {"a": 1, "b": 1},
+            },
+            start_date="2027-01-04",
+            end_date="2027-01-06",
+        )
+    )
+
+    clinical_by_member = {
+        member_id: sorted(
+            (item for item in result.assignments if item["memberId"] == member_id),
+            key=lambda item: item["date"],
+        )
+        for member_id in {"member-1", "member-2"}
+    }
+    phase_names = [phase["name"] for phase in result.metrics["phases"]]
+    repetition = next(
+        phase for phase in result.metrics["phases"]
+        if phase["name"] == "consecutive-clinical-agendas"
+    )
+    assert result.outcome == "solution"
+    assert all(len(clinical) == 3 for clinical in clinical_by_member.values())
+    assert all(
+        left["type"] != right["type"]
+        for clinical in clinical_by_member.values()
+        for left, right in zip(clinical, clinical[1:], strict=False)
+    )
+    assert phase_names.index("total-historical-distance") < phase_names.index(
+        "consecutive-clinical-agendas"
+    )
+    assert repetition["value"] == 0
+
+
+def test_scheduler_does_not_treat_friday_and_monday_as_consecutive() -> None:
+    agendas = [agenda("clinical", priority=1)]
+    team = [member("member-1", ["clinical"], available=[1, 5])]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"clinical": 1}, "5": {"clinical": 1}},
+            start_date="2027-01-08",
+            end_date="2027-01-11",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert [item["type"] for item in result.assignments] == ["clinical", "clinical"]
+    assert "consecutive-clinical-agendas" not in {
+        phase["name"] for phase in result.metrics["phases"]
+    }
+
+
+def test_scheduler_counts_each_repeated_partial_agenda() -> None:
+    agendas = [
+        agenda("half-a", priority=1, load_percentage=50),
+        agenda("half-b", priority=1, load_percentage=50),
+    ]
+    team = [member("member-1", ["half-a", "half-b"], available=[1, 2])]
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"half-a": 1, "half-b": 1}, "2": {"half-a": 1, "half-b": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    repetition = next(
+        phase for phase in result.metrics["phases"]
+        if phase["name"] == "consecutive-clinical-agendas"
+    )
+    assert result.outcome == "solution"
+    assert repetition["value"] == 2
+
+
 def test_coverage_assigns_the_only_capable_person_before_fairness() -> None:
     agendas = [
         agenda("committee", priority=3, load_percentage=50),
@@ -764,8 +1119,9 @@ def test_management_is_distributed_in_rounds_before_anyone_accumulates_days() ->
     assert sorted(management.values()) == [1, 1, 2]
 
 
-def test_management_never_displaces_very_high_priority_coverage() -> None:
-    agendas = [agenda("clinical", priority=1)]
+@pytest.mark.parametrize("priority", [1, 2, 3, 4])
+def test_management_never_displaces_onsite_coverage(priority: int) -> None:
+    agendas = [agenda("clinical", priority=priority)]
     team = [member("member-1", ["clinical"], quota=5)]
     result = CpSatScheduler().solve(
         problem(agendas, team, {"1": {"clinical": 1}})
@@ -776,9 +1132,9 @@ def test_management_never_displaces_very_high_priority_coverage() -> None:
     assert not result.vacancies
 
 
-@pytest.mark.parametrize("priority", [2, 3, 4])
-def test_management_can_displace_non_very_high_priority_coverage(priority: int) -> None:
-    agendas = [agenda("clinical", priority=priority)]
+@pytest.mark.parametrize("priority", [1, 2, 3, 4])
+def test_management_can_displace_telematic_coverage(priority: int) -> None:
+    agendas = [agenda("clinical", priority=priority, telematic=True)]
     team = [member("member-1", ["clinical"], quota=1)]
     result = CpSatScheduler().solve(
         problem(
@@ -858,8 +1214,8 @@ def test_management_can_consolidate_half_agendas_to_free_a_full_day() -> None:
     } == {"colleague"}
 
 
-def test_management_can_displace_a_low_priority_half_day() -> None:
-    agendas = [agenda("half", priority=4, load_percentage=50)]
+def test_management_can_displace_a_telematic_half_day() -> None:
+    agendas = [agenda("half", priority=4, telematic=True, load_percentage=50)]
     team = [member("manager", ["half"], quota=1)]
     result = CpSatScheduler().solve(
         problem(
@@ -946,7 +1302,7 @@ def test_management_prefers_a_slack_day_before_the_preferred_weekday() -> None:
 
 def test_management_prefers_the_day_with_less_existing_vacancy_pressure() -> None:
     agendas = [
-        agenda("manager-work", priority=4),
+        agenda("manager-work", priority=4, telematic=True),
         agenda("unfillable", priority=4),
     ]
     team = [
@@ -1154,6 +1510,185 @@ def test_generation_fairness_uses_total_variation_across_shared_agendas() -> Non
         "profile-a": 4000,
         "profile-b": 4000,
     }
+
+
+def test_polishing_swaps_two_people_when_operational_fairness_improves() -> None:
+    agendas = [agenda("a"), agenda("b")]
+    team = [member("person-1", ["a", "b"]), member("person-2", ["a", "b"])]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"a": 1, "b": 1}},
+        historical={
+            "person-1": {"a": 10, "b": 0},
+            "person-2": {"a": 0, "b": 10},
+        },
+        start_date="2027-01-04",
+        end_date="2027-01-04",
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {"id": "one", "date": "2027-01-04", "memberId": "person-1", "type": "a"},
+            {"id": "two", "date": "2027-01-04", "memberId": "person-2", "type": "b"},
+        ],
+        "vacancies": [],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+    )
+
+    assert {(item["memberId"], item["type"]) for item in polished["assignments"]} == {
+        ("person-1", "b"),
+        ("person-2", "a"),
+    }
+    assert metrics["acceptedMoves"] == 1
+    assert metrics["remainingImprovingMoves"] == 0
+
+
+def test_final_polishing_swaps_people_to_improve_telematic_percentage() -> None:
+    agendas = [agenda("onsite"), agenda("remote", telematic=True)]
+    team = [
+        member("short-week", ["onsite", "remote"], available=[1]),
+        member("long-week", ["onsite", "remote"], available=[1, 2]),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {
+            "1": {"onsite": 1, "remote": 1},
+            "2": {"onsite": 1},
+        },
+        start_date="2027-01-04",
+        end_date="2027-01-05",
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {
+                "id": "short-remote",
+                "date": "2027-01-04",
+                "memberId": "short-week",
+                "type": "remote",
+            },
+            {
+                "id": "long-onsite-monday",
+                "date": "2027-01-04",
+                "memberId": "long-week",
+                "type": "onsite",
+            },
+            {
+                "id": "long-onsite-tuesday",
+                "date": "2027-01-05",
+                "memberId": "long-week",
+                "type": "onsite",
+            },
+        ],
+        "vacancies": [],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+        objective="telematic-percentage",
+        allow_vacancies=False,
+    )
+
+    remote = next(item for item in polished["assignments"] if item["type"] == "remote")
+    assert remote["memberId"] == "long-week"
+    assert metrics["acceptedMoves"] == 1
+    assert metrics["remainingImprovingMoves"] == 0
+
+
+def test_polishing_can_exchange_an_assignment_with_same_modality_vacancy() -> None:
+    agendas = [agenda("a"), agenda("b")]
+    team = [
+        member("person-1", ["a", "b"]),
+        member(
+            "peer",
+            ["a", "b"],
+            absences=[{"start": "2027-01-04", "end": "2027-01-04"}],
+        ),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"a": 1, "b": 1}},
+        historical={
+            "person-1": {"a": 10, "b": 0},
+            "peer": {"a": 0, "b": 10},
+        },
+        start_date="2027-01-04",
+        end_date="2027-01-04",
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {"id": "one", "date": "2027-01-04", "memberId": "person-1", "type": "a"},
+        ],
+        "vacancies": [{"date": "2027-01-04", "type": "b"}],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+    )
+
+    assert polished["assignments"][0]["type"] == "b"
+    assert polished["vacancies"] == [{"date": "2027-01-04", "type": "a"}]
+    assert metrics["acceptedMoves"] == 1
+
+
+def test_polishing_never_replaces_onsite_coverage_with_telematic_coverage() -> None:
+    agendas = [agenda("onsite"), agenda("remote", telematic=True)]
+    team = [
+        member("person-1", ["onsite", "remote"]),
+        member(
+            "peer",
+            ["onsite", "remote"],
+            absences=[{"start": "2027-01-04", "end": "2027-01-04"}],
+        ),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"onsite": 1, "remote": 1}},
+        historical={
+            "person-1": {"onsite": 10, "remote": 0},
+            "peer": {"onsite": 0, "remote": 10},
+        },
+        start_date="2027-01-04",
+        end_date="2027-01-04",
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {"id": "one", "date": "2027-01-04", "memberId": "person-1", "type": "onsite"},
+        ],
+        "vacancies": [{"date": "2027-01-04", "type": "remote"}],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+    )
+
+    assert polished == initial
+    assert metrics["acceptedMoves"] == 0
 
 
 def test_scheduler_rejects_happiness_optimization_mode() -> None:

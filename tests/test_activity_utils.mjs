@@ -108,13 +108,24 @@ const telework = teleworkByWeekdayAnalysis({
   ],
   selectedMemberId: 'person-a',
 });
-assert.equal(telework.person, 0.5);
-assert.equal(telework.team, 0.5);
+assert.equal(telework.person, 1 / 3);
+assert.equal(telework.team, 1 / 3);
 assert.deepEqual(
   telework.weekdays.map((item) => [item.weekday, item.person, item.team]),
-  [[1, 1, 0.5], [2, 0, 0.5], [3, 0.5, 0.5], [4, null, null], [5, null, null]],
-  'Cada día debe comparar días-equivalentes de teletrabajo con la media personal del equipo',
+  [[1, 1, 0.5], [2, 0, 0.5], [3, 0, 0], [4, null, null], [5, null, null]],
+  'Cualquier agenda presencial debe hacer que el día completo cuente como presencial',
 );
+
+const teleworkWithManagement = teleworkByWeekdayAnalysis({
+  members: [{ id: 'person-a' }],
+  activities: [{ id: 'onsite', telematic: false, loadPercentage: 100 }],
+  assignments: [
+    { date: '2026-01-05', memberId: 'person-a', type: 'management' },
+    { date: '2026-01-06', memberId: 'person-a', type: 'onsite' },
+  ],
+  selectedMemberId: 'person-a',
+});
+assert.equal(teleworkWithManagement.person, 0.5, 'Gestión debe contar como un día telemático');
 
 assert.deepEqual(sortByName([{ name: 'Zulu' }, { name: 'Àgata' }]).map((item) => item.name), ['Àgata', 'Zulu']);
 const grouped = planningActivityGroups({

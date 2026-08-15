@@ -144,23 +144,21 @@ export function teleworkByWeekdayAnalysis({
 
   assignments.forEach((assignment) => {
     const activity = activityById[assignment.type];
-    if (!activity || !memberIds.has(assignment.memberId) || !/^\d{4}-\d{2}-\d{2}$/.test(assignment.date || '')) return;
+    const management = assignment.type === MANAGEMENT_ACTIVITY.id;
+    if ((!activity && !management) || !memberIds.has(assignment.memberId) || !/^\d{4}-\d{2}-\d{2}$/.test(assignment.date || '')) return;
     const weekday = new Date(`${assignment.date}T00:00:00Z`).getUTCDay();
     if (weekday < 1 || weekday > 5) return;
-    const load = Number(assignment.loadPercentage ?? activity.loadPercentage ?? 100) / 100;
-    const current = daysByMember[assignment.memberId].get(assignment.date) || { weekday, total: 0, telematic: 0 };
-    current.total += load;
-    if (activity.telematic) current.telematic += load;
-    daysByMember[assignment.memberId].set(assignment.date, current);
+    const days = daysByMember[assignment.memberId];
+    const current = days.get(assignment.date) || { weekday, telematic: true };
+    current.telematic = current.telematic && (management || Boolean(activity?.telematic));
+    days.set(assignment.date, current);
   });
 
   const memberShares = Object.fromEntries(people.map((member) => {
-    const days = [...daysByMember[member.id].values()]
-      .filter((day) => day.total > 0)
-      .map((day) => ({ ...day, share: day.telematic / day.total }));
+    const days = [...daysByMember[member.id].values()];
     const shareFor = (weekday = null) => {
       const matching = weekday === null ? days : days.filter((day) => day.weekday === weekday);
-      return matching.length ? matching.reduce((sum, day) => sum + day.share, 0) / matching.length : null;
+      return matching.length ? matching.filter((day) => day.telematic).length / matching.length : null;
     };
     return [member.id, {
       overall: shareFor(),

@@ -173,6 +173,10 @@ _Avoid_: Agenda, cuando también se incluye gestión
 Objetivo protegido, entre uno y cinco días, declarado únicamente para una persona habilitada para gestión. Se reparte equitativamente y solo queda subordinado a la cobertura de prioridad muy alta.
 _Avoid_: Agenda de gestión
 
+**Equilibrio telemático porcentual**:
+Proximidad entre los porcentajes de días asignados que son telemáticos para cada persona. Un día solo es telemático si todas sus asignaciones lo son: cualquier agenda presencial prevalece. Gestión sola cuenta como día telemático y la carga sin asignar queda excluida.
+_Avoid_: Porcentaje de eventos, igualdad de días telemáticos absolutos
+
 **Perfil estadístico**:
 Vector de porcentajes de las asignaciones de una persona entre las agendas activas, calculado dentro de su propia ventana histórica.
 _Avoid_: Conteos por agenda, carga total

@@ -440,6 +440,7 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
 
     assert response.status_code == 202
     assert response.json()["optimizationMode"] == "fairness"
+    assert response.json()["timeLimitSeconds"] == 20
     database = authenticated_client.app.state.database
     with database.session_factory() as session:
         stored = session.get(GenerationJob, response.json()["id"])
@@ -457,6 +458,42 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
         },
     )
     assert invalid.status_code == 422
+
+
+def test_generation_job_accepts_a_user_time_limit_between_one_and_thirty_minutes(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={
+            "startMonth": "2029-04",
+            "endMonth": "2029-04",
+            "guards": [],
+            "absences": [],
+            "timeLimitMinutes": 30,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["timeLimitSeconds"] == 1800
+    database = authenticated_client.app.state.database
+    with database.session_factory() as session:
+        stored = session.get(GenerationJob, response.json()["id"])
+        snapshot = json.loads(stored.input_snapshot)
+    assert snapshot["solver_config"]["timeLimitSeconds"] == 1800
+
+    for invalid_minutes in (0, 31):
+        invalid = authenticated_client.post(
+            "/api/v1/generation-jobs",
+            json={
+                "startMonth": "2029-05",
+                "endMonth": "2029-05",
+                "guards": [],
+                "absences": [],
+                "timeLimitMinutes": invalid_minutes,
+            },
+        )
+        assert invalid.status_code == 422
 
 
 def test_successful_first_generation_consumes_new_member_equity_exception(

@@ -269,6 +269,7 @@ class GenerationRequest(BaseModel):
     locked_assignments: list[dict[str, Any]] = Field(default=[], alias="lockedAssignments")
     replace_existing: bool = Field(default=False, alias="replaceExisting")
     optimization_mode: Literal["fairness"] = Field(default="fairness", alias="optimizationMode")
+    time_limit_minutes: int | None = Field(default=None, alias="timeLimitMinutes", ge=1, le=30)
 
 
 class GuardImportRowRequest(BaseModel):
@@ -1023,12 +1024,17 @@ def get_fairness(request: Request) -> dict[str, Any]:
 @router.post("/api/v1/generation-jobs", dependencies=[Depends(require_auth)], status_code=status.HTTP_202_ACCEPTED)
 def create_generation_job(payload: GenerationRequest, request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
+    time_limit_seconds = (
+        payload.time_limit_minutes * 60
+        if payload.time_limit_minutes is not None
+        else settings.scheduler_time_limit_seconds
+    )
     job = enqueue_job(
         request.state.database,
         request.app.state.catalog,
         command_payload(payload),
         {
-            "timeLimitSeconds": settings.scheduler_time_limit_seconds,
+            "timeLimitSeconds": time_limit_seconds,
             "workers": settings.scheduler_workers,
             "randomSeed": settings.scheduler_random_seed,
             "optimizationMode": payload.optimization_mode,
