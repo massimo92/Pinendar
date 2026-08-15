@@ -28,5 +28,19 @@ assert.match(
   /\.view-switch\{[^}]*gap:6px/,
   'Día, semana y mes deben tener separación visual',
 );
+const calendarCellSource = appSource.slice(
+  appSource.indexOf('function calendarCell'),
+  appSource.indexOf('function alphabetically'),
+);
+assert.doesNotMatch(
+  calendarCellSource,
+  /badge\('(vacancy|unassigned)'/,
+  'Ninguna celda diaria debe repetir los filtros superiores de vacantes o personas sin agenda',
+);
+assert.match(
+  calendarCellSource,
+  /badge\('partial'/,
+  'La incidencia parcial debe conservar su indicador porque no tiene filtro superior',
+);
 
 console.log('calendar toolbar layout regression: ok');

@@ -663,20 +663,10 @@ function calendarCell(key) {
   const badge = (kind, count, shortLabel, longLabel) => count
     ? `<button type="button" class="calendar-incident-badge ${kind} ${selectedCalendarIssueFilters.has(kind) ? 'active' : ''}" data-calendar-issue-filter="${kind}" title="${count} ${longLabel}" aria-label="${count} ${longLabel}" aria-pressed="${selectedCalendarIssueFilters.has(kind)}"><span>${shortLabel}</span><b>${count}</b></button>`
     : '';
-  const vacancyNoun = incidents.vacancies.length === 1
-    ? (state.language === 'es' ? 'agenda sin cubrir' : 'agenda sense cobrir')
-    : (state.language === 'es' ? 'agendas sin cubrir' : 'agendes sense cobrir');
-  const unassignedNoun = incidents.unassignedMemberIds.size === 1
-    ? (state.language === 'es' ? 'persona sin agenda' : 'persona sense agenda')
-    : (state.language === 'es' ? 'personas sin agenda' : 'persones sense agenda');
   const partialNoun = incidents.partialMemberIds.size === 1
     ? (state.language === 'es' ? 'persona con agenda parcial' : 'persona amb agenda parcial')
     : (state.language === 'es' ? 'personas con agenda parcial' : 'persones amb agenda parcial');
-  const incidentBadges = [
-    badge('vacancy', incidents.vacancies.length, 'A!', vacancyNoun),
-    badge('unassigned', incidents.unassignedMemberIds.size, 'P−', unassignedNoun),
-    badge('partial', incidents.partialMemberIds.size, '~', partialNoun),
-  ].join('');
+  const incidentBadges = badge('partial', incidents.partialMemberIds.size, '~', partialNoun);
   const unassignedEvents = [...inferredUnassignedEvents, ...persistedUnassignedEvents];
   const issueEvents = [...vacancyEvents, ...unassignedEvents, ...partialEvents];
   const allEvents = selectedCalendarIssueFilters.size
