@@ -97,7 +97,7 @@
 .calendar-guard-tooltip{position:absolute;top:calc(100% + 8px);left:-5px;z-index:30;width:max-content;max-width:230px;padding:7px 9px;border:1px solid rgba(245,214,109,.32);border-radius:8px;background:#272b25;box-shadow:0 9px 25px rgba(0,0,0,.42);color:#fff8dc;font-size:10px;font-weight:700;line-height:1.35;opacity:0;pointer-events:none;transform:translateY(3px);transition:opacity .14s ease,transform .14s ease;white-space:normal}
 .calendar-guard-tooltip:after{position:absolute;top:-4px;left:11px;width:7px;height:7px;background:#272b25;content:"";transform:rotate(45deg)}
 .calendar-guard-hover:hover .calendar-guard-tooltip,.calendar-guard-hover:focus-visible .calendar-guard-tooltip{opacity:1;transform:translateY(0)}
-.calendar-guard-banners{display:grid;gap:4px;margin:3px 5px 8px}.calendar-guard-banner{display:flex;align-items:center;gap:8px;width:100%;padding:9px 11px;border:1px solid color-mix(in srgb,var(--member-color) 48%,rgba(245,214,109,.28));border-left:4px solid var(--member-color);border-radius:9px;background:linear-gradient(100deg,color-mix(in srgb,var(--member-color) 25%,rgba(17,23,23,.92)),rgba(17,23,23,.8));color:#fff5c7;font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer}.calendar-guard-banner:hover,.calendar-guard-banner:focus-visible{border-color:#f7d66d;outline:none}
+.calendar-guard-banners{display:grid;gap:4px;margin:3px 5px 8px}.calendar-guard-banner{min-width:0;display:flex;align-items:center;gap:8px;width:100%;overflow:hidden;padding:9px 11px;border:1px solid color-mix(in srgb,var(--member-color) 48%,rgba(245,214,109,.28));border-left:4px solid var(--member-color);border-radius:9px;background:linear-gradient(100deg,color-mix(in srgb,var(--member-color) 25%,rgba(17,23,23,.92)),rgba(17,23,23,.8));color:#fff5c7;font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer}.calendar-guard-banner:hover,.calendar-guard-banner:focus-visible{border-color:#f7d66d;outline:none}
 .calendar-guard-banner span{color:#f7d66d;font-size:9px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
 .calendar-guard-banner b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fffbed}
 .calendar-holiday{display:inline-flex;margin:0 0 5px;padding:2px 6px;border-radius:5px;background:rgba(255,197,102,.14);color:#ffd98f;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}
@@ -147,6 +147,8 @@ button.calendar-event:hover{filter:brightness(1.25)}
 .calendar-shell.view-week .calendar-hospital-block{padding:4px}
 .calendar-shell.view-week .calendar-event{display:grid;padding:5px 6px;font-size:10px}
 .calendar-shell.view-week .calendar-event b,.calendar-shell.view-week .calendar-event span{max-width:100%}
+.calendar-shell.view-week .calendar-guard-banner{display:grid;gap:2px;padding:5px 6px;font-size:10px}
+.calendar-shell.view-week .calendar-guard-banner span,.calendar-shell.view-week .calendar-guard-banner b{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .calendar-shell.view-day .calendar-grid{grid-template-columns:1fr}
 .calendar-shell.view-day .calendar-day{min-height:590px;border-right:0}
 .calendar-shell.view-day .calendar-day-header{min-height:55px;padding:0 10px}

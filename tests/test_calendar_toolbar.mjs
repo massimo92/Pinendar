@@ -42,5 +42,20 @@ assert.match(
   /badge\('partial'/,
   'La incidencia parcial debe conservar su indicador porque no tiene filtro superior',
 );
+assert.match(
+  calendarCss,
+  /\.calendar-guard-banner\{[^}]*min-width:0[^}]*overflow:hidden/,
+  'La guardia semanal debe encogerse y recortar su contenido dentro de la celda',
+);
+assert.match(
+  calendarCss,
+  /\.calendar-shell\.view-week \.calendar-guard-banner\{display:grid;gap:2px;padding:5px 6px;font-size:10px\}/,
+  'La guardia semanal debe usar las mismas dimensiones que los demás eventos',
+);
+assert.match(
+  calendarCss,
+  /\.calendar-shell\.view-week \.calendar-guard-banner span,\.calendar-shell\.view-week \.calendar-guard-banner b\{[^}]*max-width:100%[^}]*text-overflow:ellipsis/,
+  'Cada línea de la guardia semanal debe truncarse como el resto de eventos',
+);
 
 console.log('calendar toolbar layout regression: ok');
