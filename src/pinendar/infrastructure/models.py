@@ -109,6 +109,9 @@ class Member(Base):
     color: Mapped[str] = mapped_column(String, nullable=False)
     management_quota: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    has_completed_generation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     work_pattern_weeks: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     archived_at: Mapped[date | None] = mapped_column(Date)
 

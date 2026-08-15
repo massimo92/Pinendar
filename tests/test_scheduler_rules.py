@@ -69,6 +69,7 @@ def problem(
     schema_version: int = 2,
     start_month: str = "2027-01",
     end_month: str | None = None,
+    first_generation_member_ids: list[str] | None = None,
 ) -> ScheduleProblem:
     return ScheduleProblem(
         schema_version=schema_version,
@@ -84,6 +85,7 @@ def problem(
         historical_counts=historical
         or {item["id"]: {entry["id"]: 0 for entry in agendas} for item in team},
         locked_assignments=[],
+        first_generation_member_ids=first_generation_member_ids or [],
         solver_config={
             "timeLimitSeconds": 5,
             "workers": 1,
@@ -1018,6 +1020,67 @@ def test_historical_fairness_uses_equal_weight_person_profiles() -> None:
     assert result.outcome == "solution"
     assert monday == {"veteran": "b", "newcomer": "a"}
     assert "no_assignment" not in monday.values()
+
+
+def test_first_generation_empty_history_has_maximum_distance() -> None:
+    agendas = [agenda("a"), agenda("b")]
+    team = [
+        member("veteran", ["a", "b"]),
+        member("newcomer", ["a", "b"]),
+    ]
+    historical = {
+        "veteran": {"a": 5, "b": 5},
+        "newcomer": {"a": 0, "b": 0},
+    }
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {}},
+            historical=historical,
+            first_generation_member_ids=["newcomer"],
+            schema_version=9,
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["fairness"]["personDistanceBasisPoints"] == {
+        "veteran": 5_000,
+        "newcomer": 10_000,
+    }
+
+
+def test_first_generation_proposals_reduce_newcomer_distance_normally() -> None:
+    agendas = [agenda("a", priority=1), agenda("b", priority=1)]
+    team = [
+        member("veteran", ["a", "b"]),
+        member("newcomer", ["a", "b"]),
+    ]
+    historical = {
+        "veteran": {"a": 4, "b": 4},
+        "newcomer": {"a": 0, "b": 0},
+    }
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"a": 1, "b": 1}},
+            historical=historical,
+            first_generation_member_ids=["newcomer"],
+            schema_version=9,
+        )
+    )
+
+    newcomer_assignments = [
+        item["type"]
+        for item in result.assignments
+        if item["memberId"] == "newcomer" and item["type"] != "no_assignment"
+    ]
+    assert result.outcome == "solution"
+    assert Counter(newcomer_assignments) == {"a": 2, "b": 2}
+    assert result.metrics["fairness"]["personDistanceBasisPoints"]["newcomer"] == 0
 
 
 def test_historical_fairness_excludes_each_person_from_their_reference() -> None:

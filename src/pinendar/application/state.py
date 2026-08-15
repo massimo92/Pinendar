@@ -234,6 +234,7 @@ def seed_initial_state(session: Session, catalog: HospitalCatalog) -> None:
                 normalized_email=normalized(email),
                 color=automatic_color(email, "member"),
                 management_quota=0,
+                has_completed_generation=True,
             )
         )
         session.flush()
@@ -365,6 +366,7 @@ def import_legacy_state(session: Session, state: dict[str, Any], catalog: Hospit
                 color=item.get("color") or automatic_color(email, "member"),
                 management_quota=min(5, max(0, int(item.get("managementQuota", 0)))),
                 is_active=bool(item.get("active", True)),
+                has_completed_generation=True,
                 work_pattern_weeks=len(pattern_weeks),
                 archived_at=parse_date(item["archivedAt"]) if item.get("archivedAt") else None,
             )

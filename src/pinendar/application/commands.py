@@ -288,6 +288,7 @@ def save_member(session: Session, payload: dict[str, Any], member_id: str | None
             color=distinct_color(session, "member"),
             management_quota=int(payload.get("managementQuota", 0)),
             is_active=bool(payload.get("active", True)),
+            has_completed_generation=False,
             work_pattern_weeks=len(pattern_weeks),
         )
         session.add(member)

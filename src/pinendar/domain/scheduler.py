@@ -19,6 +19,7 @@ class ScheduleProblem:
     conditions: dict[str, list[dict[str, Any]]]
     historical_counts: dict[str, dict[str, int]]
     locked_assignments: list[dict[str, Any]]
+    first_generation_member_ids: list[str] = field(default_factory=list)
     start_date: str | None = None
     end_date: str | None = None
     solver_config: dict[str, Any] = field(default_factory=dict)
@@ -28,7 +29,14 @@ class ScheduleProblem:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ScheduleProblem:
-        return cls(**{"start_date": None, "end_date": None, **value})
+        return cls(
+            **{
+                "first_generation_member_ids": [],
+                "start_date": None,
+                "end_date": None,
+                **value,
+            }
+        )
 
 
 @dataclass(frozen=True)

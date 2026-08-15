@@ -12,7 +12,13 @@ from sqlalchemy import func, select
 import pinendar.application.jobs as jobs_module
 from pinendar.application.jobs import JobDispatcher, enqueue_job
 from pinendar.application.state import DomainError, job_payload
-from pinendar.infrastructure.models import AppSettings, Assignment, GenerationJob, Guard
+from pinendar.infrastructure.models import (
+    AppSettings,
+    Assignment,
+    GenerationJob,
+    Guard,
+    Member,
+)
 
 
 def wait_for_job(client: TestClient, job_id: str) -> dict:
@@ -451,6 +457,91 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
         },
     )
     assert invalid.status_code == 422
+
+
+def test_successful_first_generation_consumes_new_member_equity_exception(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    template = state["team"][0]
+    created = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "New Generation Member",
+            "email": "new-generation@hospital.test",
+            "workPattern": template["workPattern"],
+            "allowedTypes": template["allowedTypes"],
+            "managementQuota": 0,
+            "fixedRules": [],
+        },
+    )
+    assert created.status_code == 201
+    member_id = created.json()["id"]
+    database = authenticated_client.app.state.database
+    with database.session_factory() as session:
+        member_row = session.get(Member, member_id)
+        assert member_row is not None
+        assert member_row.has_completed_generation is False
+
+    authenticated_client.app.state.job_dispatcher.start()
+    queued = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={
+            "startMonth": "2027-01",
+            "endMonth": "2027-01",
+            "startDate": "2027-01-02",
+            "endDate": "2027-01-02",
+            "guards": [],
+            "absences": [],
+        },
+    )
+    assert queued.status_code == 202
+    with database.session_factory() as session:
+        stored = session.get(GenerationJob, queued.json()["id"])
+        assert stored is not None
+        snapshot = json.loads(stored.input_snapshot)
+        assert snapshot["first_generation_member_ids"] == [member_id]
+
+    completed = wait_for_job(authenticated_client, queued.json()["id"])
+
+    assert completed["status"] == "succeeded"
+    with database.session_factory() as session:
+        member_row = session.get(Member, member_id)
+        assert member_row is not None
+        assert member_row.has_completed_generation is True
+
+
+def test_failed_generation_does_not_consume_new_member_equity_exception(
+    client: TestClient,
+) -> None:
+    database = client.app.state.database
+    with database.session_factory.begin() as session:
+        member_row = session.scalar(select(Member).limit(1))
+        assert member_row is not None
+        member_row.has_completed_generation = False
+    job = enqueue_job(
+        database,
+        client.app.state.catalog,
+        {
+            "startMonth": "2029-05",
+            "endMonth": "2029-05",
+            "guards": [],
+            "absences": [],
+        },
+    )
+
+    JobDispatcher(database, process_pool=False)._complete(
+        job["id"],
+        {
+            "outcome": "infeasible",
+            "error": {"code": "TEST_FAILURE", "message": "expected"},
+        },
+    )
+
+    with database.session_factory() as session:
+        member_row = session.scalar(select(Member).limit(1))
+        assert member_row is not None
+        assert member_row.has_completed_generation is False
 
 
 def test_guard_before_period_creates_post_guard_absence(authenticated_client: TestClient) -> None:

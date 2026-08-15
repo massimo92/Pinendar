@@ -198,6 +198,15 @@ def build_problem(
 ) -> ScheduleProblem:
     state = bootstrap(session, catalog)
     planning_team = [member for member in state["team"] if member.get("active", True)]
+    planning_member_ids = {member["id"] for member in planning_team}
+    first_generation_member_ids = sorted(
+        session.scalars(
+            select(Member.id).where(
+                Member.id.in_(planning_member_ids),
+                Member.has_completed_generation.is_(False),
+            )
+        )
+    )
     calendar = state["calendar"]
     historical_guards = list(calendar["guards"])
     requested_start, requested_end = period_bounds(
@@ -236,7 +245,7 @@ def build_problem(
             absences.append(item)
             known_absences.add(key)
     return ScheduleProblem(
-        schema_version=8,
+        schema_version=9,
         planning_revision=state["planningRevision"],
         start_month=payload["startMonth"],
         end_month=payload["endMonth"],
@@ -248,6 +257,7 @@ def build_problem(
         conditions={"guards": payload.get("guards", []), "absences": absences},
         historical_counts=historical_counts,
         locked_assignments=payload.get("lockedAssignments", []),
+        first_generation_member_ids=first_generation_member_ids,
         start_date=payload.get("startDate"),
         end_date=payload.get("endDate"),
         solver_config=solver_config or {},
@@ -588,6 +598,15 @@ class JobDispatcher:
                             notes="",
                         )
                     )
+            first_generation_member_ids = snapshot.get(
+                "first_generation_member_ids", []
+            )
+            if first_generation_member_ids:
+                session.execute(
+                    update(Member)
+                    .where(Member.id.in_(first_generation_member_ids))
+                    .values(has_completed_generation=True)
+                )
             settings.planning_revision += 1
             job.status = "succeeded"
             job.result_json = json.dumps(

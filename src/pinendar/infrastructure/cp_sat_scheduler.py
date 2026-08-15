@@ -19,7 +19,7 @@ from pinendar.domain.scheduler import (
 )
 from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 
-MODEL_VERSION = "19"
+MODEL_VERSION = "20"
 ORTOOLS_VERSION = version("ortools")
 
 
@@ -147,7 +147,7 @@ def _daily_demand(
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -665,6 +665,7 @@ class CpSatScheduler:
             maximum_totals=maximum_profile_totals,
             member_order=member_order,
             agenda_order=agenda_order,
+            maximum_distance_when_empty=set(problem.first_generation_member_ids),
         )
         person_distances = fairness.person_distances
         worst_fairness = fairness.worst_distance

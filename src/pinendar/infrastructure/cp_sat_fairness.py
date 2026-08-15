@@ -25,6 +25,7 @@ def add_operational_fairness(
     maximum_totals: Mapping[str, int],
     member_order: Mapping[str, int],
     agenda_order: Mapping[str, int],
+    maximum_distance_when_empty: Set[str] = frozenset(),
     prefix: str = "fairness",
 ) -> CpSatFairness:
     safe_profile_totals: dict[str, cp_model.IntVar] = {}
@@ -152,12 +153,33 @@ def add_operational_fairness(
             model.add_abs_equality(deviation, actual_shares[agenda_id] - expected)
             deviations.append(deviation)
 
-        distance = model.new_int_var(
+        normal_distance = model.new_int_var(
             0,
             PERCENT_SCALE,
-            f"{prefix}_distance_p{member_order[member_id]}",
+            f"{prefix}_normal_distance_p{member_order[member_id]}",
         )
-        model.add_division_equality(distance, sum(deviations), 2)
+        model.add_division_equality(normal_distance, sum(deviations), 2)
+        if member_id in maximum_distance_when_empty:
+            has_comparable_load = model.new_bool_var(
+                f"{prefix}_has_comparable_load_p{member_order[member_id]}"
+            )
+            model.add(comparable_total >= 1).only_enforce_if(has_comparable_load)
+            model.add(comparable_total == 0).only_enforce_if(
+                has_comparable_load.negated()
+            )
+            distance = model.new_int_var(
+                0,
+                PERCENT_SCALE,
+                f"{prefix}_distance_p{member_order[member_id]}",
+            )
+            model.add(distance == normal_distance).only_enforce_if(
+                has_comparable_load
+            )
+            model.add(distance == PERCENT_SCALE).only_enforce_if(
+                has_comparable_load.negated()
+            )
+        else:
+            distance = normal_distance
         person_distances[member_id] = distance
 
     worst_distance: cp_model.IntVar | None = None
