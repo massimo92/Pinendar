@@ -1047,6 +1047,52 @@ def test_historical_fairness_excludes_each_person_from_their_reference() -> None
     assert result.metrics["fairness"]["worstDistanceBasisPoints"] == 4500
 
 
+def test_generation_fairness_renormalizes_shared_agendas_around_exclusive_work() -> None:
+    agendas = [agenda("exclusive"), agenda("shared-a"), agenda("shared-b")]
+    absence = [{"start": "2027-01-01", "end": "2027-01-31"}]
+    team = [
+        member("specialist", ["exclusive", "shared-a", "shared-b"], absences=absence),
+        member("peer", ["shared-a", "shared-b"], absences=absence),
+    ]
+    historical = {
+        "specialist": {"exclusive": 10, "shared-a": 8, "shared-b": 2},
+        "peer": {"exclusive": 0, "shared-a": 16, "shared-b": 4},
+    }
+
+    result = CpSatScheduler().solve(
+        problem(agendas, team, {"1": {}}, historical=historical)
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["fairness"]["personDistanceBasisPoints"] == {
+        "specialist": 0,
+        "peer": 0,
+    }
+
+
+def test_generation_fairness_uses_total_variation_across_shared_agendas() -> None:
+    agendas = [agenda("a"), agenda("b"), agenda("c")]
+    absence = [{"start": "2027-01-01", "end": "2027-01-31"}]
+    team = [
+        member("profile-a", ["a", "b", "c"], absences=absence),
+        member("profile-b", ["a", "b", "c"], absences=absence),
+    ]
+    historical = {
+        "profile-a": {"a": 8, "b": 1, "c": 1},
+        "profile-b": {"a": 4, "b": 3, "c": 3},
+    }
+
+    result = CpSatScheduler().solve(
+        problem(agendas, team, {"1": {}}, historical=historical)
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["fairness"]["personDistanceBasisPoints"] == {
+        "profile-a": 4000,
+        "profile-b": 4000,
+    }
+
+
 def test_scheduler_rejects_happiness_optimization_mode() -> None:
     agendas = [agenda("a", priority=1), agenda("b", priority=1)]
     team = [

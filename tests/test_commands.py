@@ -100,6 +100,24 @@ def test_exchange_fairness_excludes_each_person_from_their_reference() -> None:
     assert _fairness_result(baseline, projected)["fairnessEffect"] == "improves"
 
 
+def test_change_fairness_renormalizes_shared_agendas_around_exclusive_work() -> None:
+    context = {
+        "memberIds": ["specialist", "peer"],
+        "agendaIds": ["exclusive", "shared-a", "shared-b"],
+        "loads": {"exclusive": 1.0, "shared-a": 1.0, "shared-b": 1.0},
+        "counts": {
+            "specialist": {"exclusive": 10.0, "shared-a": 8.0, "shared-b": 2.0},
+            "peer": {"exclusive": 0.0, "shared-a": 16.0, "shared-b": 4.0},
+        },
+        "capabilities": {
+            "specialist": {"exclusive", "shared-a", "shared-b"},
+            "peer": {"shared-a", "shared-b"},
+        },
+    }
+
+    assert _projected_fairness_score(context, []) == (0, 0)
+
+
 def same_load_agendas(state: dict) -> tuple[dict, dict]:
     for index, agenda in enumerate(state["agendas"]):
         for candidate in state["agendas"][index + 1 :]:

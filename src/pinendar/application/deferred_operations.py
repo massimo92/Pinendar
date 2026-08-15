@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from pinendar.application.guard_operations import _planifiable, _telework
 from pinendar.application.state import DomainError, bump_revision, month_end, uid
+from pinendar.domain.fairness import operational_fairness_score
+from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 from pinendar.infrastructure.models import (
     Agenda,
     AppSettings,
@@ -129,35 +131,12 @@ def _fairness_score(
             counts[member_id][old_agenda_id] -= loads[old_agenda_id]
         if new_agenda_id in loads:
             counts[member_id][new_agenda_id] += loads[new_agenda_id]
-    totals = {member_id: sum(values.values()) for member_id, values in counts.items()}
-    distances: list[float] = []
-    for member_id in context["memberIds"]:
-        if not totals[member_id]:
-            continue
-        measured: list[float] = []
-        for agenda_id in context["agendaIds"]:
-            if agenda_id not in context["capabilities"][member_id]:
-                continue
-            peers = [
-                peer_id
-                for peer_id in context["memberIds"]
-                if peer_id != member_id
-                and totals[peer_id]
-                and agenda_id in context["capabilities"][peer_id]
-            ]
-            if not peers:
-                continue
-            peer_mean = sum(
-                counts[peer_id][agenda_id] / totals[peer_id]
-                for peer_id in peers
-            ) / len(peers)
-            measured.append(
-                abs(counts[member_id][agenda_id] / totals[member_id] - peer_mean)
-            )
-        if measured:
-            distances.append(sum(measured) / len(measured))
-    return round(max(distances, default=0) * PERCENT_SCALE), round(
-        sum(distances) * PERCENT_SCALE
+    return operational_fairness_score(
+        context["memberIds"],
+        context["agendaIds"],
+        counts,
+        context["capabilities"],
+        scale=PERCENT_SCALE,
     )
 
 
@@ -386,80 +365,42 @@ def _solve_target(
     for row in session.scalars(select(Assignment).where(Assignment.agenda_id.is_not(None))):
         if row.id not in modifiable_ids and row.member_id in base_counts and row.agenda_id:
             base_counts[row.member_id][row.agenda_id] += row.load_percentage // 50
-    share: dict[tuple[str, str], cp_model.IntVar] = {}
-    safe_totals: dict[str, cp_model.IntVar] = {}
     member_order = {member.id: index for index, member in enumerate(active_members)}
     agenda_order = {agenda_id: index for index, agenda_id in enumerate(agendas)}
+    profile_counts: dict[tuple[str, str], Any] = {}
+    maximum_totals: dict[str, int] = {}
     for member in active_members:
         member_id = member.id
-        profile_additions = [
-            variable * (agendas[agenda_id].load_percentage // 50)
-            for (person_id, agenda_id), variable in ordinary.items()
-            if person_id == member_id
-        ]
-        if member_id in deferred:
-            profile_additions.append(deferred[member_id] * (source_agenda.load_percentage // 50))
         base_total = sum(base_counts[member_id].values())
         maximum = base_total + sum(
             agendas[agenda_id].load_percentage // 50
             for person_id, agenda_id in ordinary
             if person_id == member_id
         ) + (source_agenda.load_percentage // 50 if member_id in deferred else 0)
-        total = model.new_int_var(base_total, max(base_total, maximum), f"total_{member_order[member_id]}")
-        model.add(total == base_total + sum(profile_additions, 0))
-        safe = model.new_int_var(1, max(maximum, 1), f"safe_total_{member_order[member_id]}")
-        model.add_max_equality(safe, [total, 1])
-        safe_totals[member_id] = safe
-    comparable = {
-        agenda_id: [
-            member.id
-            for member in active_members
-            if agenda_id in all_capabilities[member.id]
-            and (sum(base_counts[member.id].values()) > 0 or member.id in members)
-        ]
-        for agenda_id in agendas
-    }
-    for agenda_id, cohort in comparable.items():
-        if len(cohort) < 2:
-            continue
-        for member_id in cohort:
+        maximum_totals[member_id] = maximum
+        for agenda_id in agendas:
             agenda_additions: list[Any] = []
             agenda_variable = ordinary.get((member_id, agenda_id))
             if agenda_variable is not None:
                 agenda_additions.append(agenda_variable * (agendas[agenda_id].load_percentage // 50))
             if agenda_id == source_agenda.id and member_id in deferred:
                 agenda_additions.append(deferred[member_id] * (source_agenda.load_percentage // 50))
-            value = model.new_int_var(0, PERCENT_SCALE, f"share_{member_order[member_id]}_{agenda_order[agenda_id]}")
-            model.add_division_equality(
-                value,
-                PERCENT_SCALE * (base_counts[member_id][agenda_id] + sum(agenda_additions, 0)),
-                safe_totals[member_id],
+            profile_counts[(member_id, agenda_id)] = (
+                base_counts[member_id][agenda_id] + sum(agenda_additions, 0)
             )
-            share[(member_id, agenda_id)] = value
-    person_distances: dict[str, cp_model.IntVar] = {}
-    for member in active_members:
-        member_id = member.id
-        deviations: list[cp_model.IntVar] = []
-        for agenda_id, cohort in comparable.items():
-            if member_id not in cohort or len(cohort) < 2:
-                continue
-            peer_mean = model.new_int_var(0, PERCENT_SCALE, f"peer_{member_order[member_id]}_{agenda_order[agenda_id]}")
-            model.add_division_equality(
-                peer_mean,
-                sum(share[(peer_id, agenda_id)] for peer_id in cohort if peer_id != member_id),
-                len(cohort) - 1,
-            )
-            deviation = model.new_int_var(0, PERCENT_SCALE, f"deviation_{member_order[member_id]}_{agenda_order[agenda_id]}")
-            model.add_abs_equality(deviation, share[(member_id, agenda_id)] - peer_mean)
-            deviations.append(deviation)
-        if deviations:
-            distance = model.new_int_var(0, PERCENT_SCALE, f"distance_{member_order[member_id]}")
-            model.add_division_equality(distance, sum(deviations), len(deviations))
-            person_distances[member_id] = distance
-    if person_distances:
-        worst = model.new_int_var(0, PERCENT_SCALE, "worst_distance")
-        model.add_max_equality(worst, list(person_distances.values()))
-        phases.extend([worst, sum(person_distances.values())])
+    fairness = add_operational_fairness(
+        model,
+        member_ids=[member.id for member in active_members],
+        agenda_ids=list(agendas),
+        capabilities=all_capabilities,
+        counts=profile_counts,
+        maximum_totals=maximum_totals,
+        member_order=member_order,
+        agenda_order=agenda_order,
+        prefix="deferred_fairness",
+    )
+    if fairness.worst_distance is not None:
+        phases.extend([fairness.worst_distance, sum(fairness.person_distances.values())])
 
     phases.append(
         sum(

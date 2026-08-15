@@ -17,9 +17,9 @@ from pinendar.domain.scheduler import (
     matches_recurrence,
     period_dates,
 )
+from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 
-MODEL_VERSION = "18"
-PERCENT_SCALE = 10_000
+MODEL_VERSION = "19"
 ORTOOLS_VERSION = version("ortools")
 
 
@@ -211,7 +211,6 @@ class CpSatScheduler:
         management_assignments: dict[tuple[str, date], cp_model.IntVar] = {}
         unassigned: dict[tuple[str, date], cp_model.IntVar] = {}
         partial_days: dict[tuple[str, date], cp_model.IntVar] = {}
-        assigned_load_units: dict[tuple[str, date], Any] = {}
         daily_load_units: dict[tuple[str, date], Any] = {}
         vacancies: dict[tuple[date, str], cp_model.IntVar] = {}
         fixed_assignments: set[tuple[str, date, str]] = set()
@@ -286,7 +285,6 @@ class CpSatScheduler:
                     * agenda_load_units[agenda_id]
                     for agenda_id in candidates
                 )
-                assigned_load_units[(member_id, value)] = assigned_units
                 daily_units = assigned_units + (2 * management if management is not None else 0)
                 daily_load_units[(member_id, value)] = daily_units
                 model.add(no_assignment + partial_day <= 1)
@@ -631,8 +629,6 @@ class CpSatScheduler:
                 )
             )
 
-        share_variables: dict[tuple[str, str], cp_model.IntVar] = {}
-        comparable_by_agenda: dict[str, list[str]] = {}
         historical_totals = {
             member_id: sum(int(value) for value in problem.historical_counts.get(member_id, {}).values())
             for member_id in members
@@ -642,44 +638,9 @@ class CpSatScheduler:
             + historical_totals[member_id]
             for member_id in members
         }
-        safe_profile_totals: dict[str, cp_model.IntVar] = {}
+        profile_counts: dict[tuple[str, str], Any] = {}
         for member_id in members:
-            maximum = maximum_profile_totals[member_id]
-            total = model.new_int_var(
-                historical_totals[member_id],
-                maximum,
-                f"profile_total_p{member_order[member_id]}",
-            )
-            model.add(
-                total
-                == historical_totals[member_id]
-                + sum(
-                    (
-                        assigned_load_units[(member_id, value)]
-                        for value in planning_dates
-                        if (member_id, value) in assigned_load_units
-                    ),
-                    0,
-                )
-            )
-            safe_total = model.new_int_var(
-                1,
-                max(maximum, 1),
-                f"safe_profile_total_p{member_order[member_id]}",
-            )
-            model.add_max_equality(safe_total, [total, 1])
-            safe_profile_totals[member_id] = safe_total
-        for agenda_id in agendas:
-            cohort = [
-                member_id
-                for member_id, member in members.items()
-                if agenda_id in member.get("allowedTypes", [])
-                and maximum_profile_totals[member_id] > 0
-            ]
-            if len(cohort) >= 2:
-                comparable_by_agenda[agenda_id] = cohort
-        for agenda_id, cohort in comparable_by_agenda.items():
-            for member_id in cohort:
+            for agenda_id in agendas:
                 new_count = sum(
                     (
                         assignments[(member_id, value, agenda_id)] * agenda_load_units[agenda_id]
@@ -688,59 +649,25 @@ class CpSatScheduler:
                     ),
                     0,
                 )
-                historical = int(problem.historical_counts.get(member_id, {}).get(agenda_id, 0))
-                share = model.new_int_var(
-                    0,
-                    PERCENT_SCALE,
-                    f"share_p{member_order[member_id]}_a{agenda_order[agenda_id]}",
+                profile_counts[(member_id, agenda_id)] = (
+                    int(problem.historical_counts.get(member_id, {}).get(agenda_id, 0))
+                    + new_count
                 )
-                model.add_division_equality(
-                    share,
-                    PERCENT_SCALE * (historical + new_count),
-                    safe_profile_totals[member_id],
-                )
-                share_variables[(member_id, agenda_id)] = share
-
-        deviations: dict[tuple[str, str], cp_model.IntVar] = {}
-        for agenda_id, cohort in comparable_by_agenda.items():
-            for member_id in cohort:
-                peer_mean = model.new_int_var(
-                    0,
-                    PERCENT_SCALE,
-                    f"peer_mean_p{member_order[member_id]}_a{agenda_order[agenda_id]}",
-                )
-                model.add_division_equality(
-                    peer_mean,
-                    sum(
-                        share_variables[(peer_id, agenda_id)]
-                        for peer_id in cohort
-                        if peer_id != member_id
-                    ),
-                    len(cohort) - 1,
-                )
-                deviation = model.new_int_var(
-                    0,
-                    PERCENT_SCALE,
-                    f"deviation_p{member_order[member_id]}_a{agenda_order[agenda_id]}",
-                )
-                model.add_abs_equality(
-                    deviation,
-                    share_variables[(member_id, agenda_id)] - peer_mean,
-                )
-                deviations[(member_id, agenda_id)] = deviation
-
-        person_distances: dict[str, cp_model.IntVar] = {}
-        for member_id in members:
-            own = [value for (person_id, _agenda_id), value in deviations.items() if person_id == member_id]
-            if not own:
-                continue
-            distance = model.new_int_var(0, PERCENT_SCALE, f"distance_p{member_order[member_id]}")
-            model.add_division_equality(distance, sum(own), len(own))
-            person_distances[member_id] = distance
-        worst_fairness: cp_model.IntVar | None = None
-        if person_distances:
-            worst_fairness = model.new_int_var(0, PERCENT_SCALE, "worst_fairness_distance")
-            model.add_max_equality(worst_fairness, list(person_distances.values()))
+        fairness = add_operational_fairness(
+            model,
+            member_ids=list(members),
+            agenda_ids=list(agendas),
+            capabilities={
+                member_id: set(member.get("allowedTypes", []))
+                for member_id, member in members.items()
+            },
+            counts=profile_counts,
+            maximum_totals=maximum_profile_totals,
+            member_order=member_order,
+            agenda_order=agenda_order,
+        )
+        person_distances = fairness.person_distances
+        worst_fairness = fairness.worst_distance
         if worst_fairness is not None:
             phases.extend(
                 [
