@@ -125,6 +125,64 @@ export function fixedRuleActivityAnalysis({ activities, assignments, cutoff = nu
   };
 }
 
+export function teleworkByWeekdayAnalysis({
+  members,
+  activities,
+  assignments,
+  selectedMemberId = null,
+}) {
+  const people = members.filter((member, index, items) => (
+    member?.id && items.findIndex((candidate) => candidate.id === member.id) === index
+  ));
+  const memberIds = new Set(people.map((member) => member.id));
+  const activityById = Object.fromEntries(
+    activities
+      .filter((item) => !['management', 'gestio', 'no_assignment'].includes(item.id))
+      .map((item) => [item.id, item]),
+  );
+  const daysByMember = Object.fromEntries(people.map((member) => [member.id, new Map()]));
+
+  assignments.forEach((assignment) => {
+    const activity = activityById[assignment.type];
+    if (!activity || !memberIds.has(assignment.memberId) || !/^\d{4}-\d{2}-\d{2}$/.test(assignment.date || '')) return;
+    const weekday = new Date(`${assignment.date}T00:00:00Z`).getUTCDay();
+    if (weekday < 1 || weekday > 5) return;
+    const load = Number(assignment.loadPercentage ?? activity.loadPercentage ?? 100) / 100;
+    const current = daysByMember[assignment.memberId].get(assignment.date) || { weekday, total: 0, telematic: 0 };
+    current.total += load;
+    if (activity.telematic) current.telematic += load;
+    daysByMember[assignment.memberId].set(assignment.date, current);
+  });
+
+  const memberShares = Object.fromEntries(people.map((member) => {
+    const days = [...daysByMember[member.id].values()]
+      .filter((day) => day.total > 0)
+      .map((day) => ({ ...day, share: day.telematic / day.total }));
+    const shareFor = (weekday = null) => {
+      const matching = weekday === null ? days : days.filter((day) => day.weekday === weekday);
+      return matching.length ? matching.reduce((sum, day) => sum + day.share, 0) / matching.length : null;
+    };
+    return [member.id, {
+      overall: shareFor(),
+      weekdays: Object.fromEntries([1, 2, 3, 4, 5].map((weekday) => [weekday, shareFor(weekday)])),
+    }];
+  }));
+  const teamMean = (values) => {
+    const comparable = values.filter((value) => value !== null);
+    return comparable.length ? comparable.reduce((sum, value) => sum + value, 0) / comparable.length : null;
+  };
+
+  return {
+    person: memberShares[selectedMemberId]?.overall ?? null,
+    team: teamMean(people.map((member) => memberShares[member.id].overall)),
+    weekdays: [1, 2, 3, 4, 5].map((weekday) => ({
+      weekday,
+      person: memberShares[selectedMemberId]?.weekdays[weekday] ?? null,
+      team: teamMean(people.map((member) => memberShares[member.id].weekdays[weekday])),
+    })),
+  };
+}
+
 function normalizedDistributionEquity(references, ownLoadFor) {
   const ownComparableTotal = references.reduce((sum, item) => sum + ownLoadFor(item.agenda), 0);
   const referenceTotal = references.reduce((sum, item) => sum + item.peerShare, 0);

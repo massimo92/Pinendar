@@ -1,6 +1,6 @@
 import { api, waitForGeneration } from './api.js?v=14';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
-import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=10';
+import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=11';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
@@ -56,7 +56,7 @@ const ES_TEXT = {
   'Sense festius afegits.': 'Sin festivos añadidos.', 'Es mostraran directament al calendari principal.': 'Se mostrarán directamente en el calendario principal.',
   'Índex global d’equilibri': 'Índice global de equilibrio', 'Agenda més desviada': 'Agenda más desviada', 'Dins del marge ±20%': 'Dentro del margen ±20%',
   'Equilibri d’una persona': 'Equilibrio de una persona', 'Equilibri entre persones': 'Equilibrio entre personas', 'Per sota': 'Por debajo', 'Esperat': 'Esperado', 'Per sobre': 'Por encima',
-  'Teletreball': 'Teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
+  'Teletreball': 'Teletrabajo', '% de dies en teletreball': '% de días en teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
   'Períodes registrats': 'Períodos registrados', 'Calendari': 'Calendario', 'Històric': 'Histórico', 'Còpia JSON': 'Copia JSON',
   'Color automàtic': 'Color automático', 'Pastel per distingir persones': 'Pastel para distinguir personas', 'Saturat per distingir agendes': 'Saturado para distinguir agendas',
   'Nou color aleatori': 'Nuevo color aleatorio', 'Nom i cognoms': 'Nombre y apellidos', 'Correu': 'Correo', 'Dies disponibles': 'Días disponibles',
@@ -857,13 +857,13 @@ function orderedFairnessAgendas(analysis, members) {
     .sort((left, right) => right.valueCount - left.valueCount || left.agenda.name.localeCompare(right.agenda.name, state.language === 'es' ? 'es' : 'ca', { sensitivity: 'base' }))
     .map((entry) => entry.agenda);
 }
-function teleworkBalance(selected, analysis) {
-  const activities = activeActivities();
-  const telematicIds = new Set(activities.filter((item) => item.telematic).map((item) => item.id));
-  const summaryFor = (member) => activities.reduce((summary, item) => { const value = analysis.counts[member.id]?.[item.id] || 0; summary.total += value; if (telematicIds.has(item.id)) summary.telematic += value; return summary; }, { total: 0, telematic: 0 });
-  const teamShares = activeTeam().map(summaryFor).filter((summary) => summary.total).map((summary) => summary.telematic / summary.total);
-  const own = selected ? summaryFor(selected) : { total: 0, telematic: 0 };
-  return { person: own.total ? own.telematic / own.total : null, team: teamShares.length ? teamShares.reduce((sum, value) => sum + value, 0) / teamShares.length : null };
+function teleworkBalance(selected) {
+  return teleworkByWeekdayAnalysis({
+    members: activeTeam(),
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+    selectedMemberId: selected?.id || null,
+  });
 }
 
 function managementSummary() {
@@ -887,7 +887,13 @@ function managementRecipientLabel(summary) {
 }
 function teleworkBar(balance) {
   const personValue = balance.person === null ? null : Math.round(balance.person * 100); const teamValue = balance.team === null ? null : Math.round(balance.team * 100);
-  return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Equip = mitjana real de les persones.</small></section>`;
+  const weekdayLabels = state.language === 'es' ? ['L', 'M', 'X', 'J', 'V'] : DAYS_SHORT;
+  const weekdays = balance.weekdays.map((day, index) => {
+    const person = day.person === null ? null : Math.round(day.person * 100);
+    const team = day.team === null ? null : Math.round(day.team * 100);
+    return `<div class="telework-weekday"><b>${weekdayLabels[index]}</b><div class="telework-weekday-track" aria-label="Persona ${person ?? 0}%, equip ${team ?? 0}%"><i style="width:${person ?? 0}%"></i>${team === null ? '' : `<b class="team" style="left:${team}%" title="Equip ${team}%"></b>`}</div><span><b>${person === null ? '—' : `${person}%`}</b><small>${team === null ? '—' : `${team}%`}</small></span></div>`;
+  }).join('');
+  return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><div class="telework-weekdays"><div class="telework-weekdays-head"><span>% de dies en teletreball</span><span>Persona · Equip</span></div>${weekdays}</div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Equip = mitjana real de les persones.</small></section>`;
 }
 function happinessTimeline(resolution = historyResolution) {
   const people = [...state.team, ...(state.archivedTeam || [])];
@@ -1114,7 +1120,7 @@ function historyPage() {
   const composition = selected && memberTotal
     ? analysis.activities.map((item) => ({ item, share: (analysis.counts[selected.id]?.[item.id] || 0) / memberTotal })).filter((entry) => entry.share > 0).sort((left, right) => right.share - left.share || left.item.name.localeCompare(right.item.name, 'ca'))
     : [];
-  const telework = teleworkBalance(selected, analysis);
+  const telework = teleworkBalance(selected);
   const heatmapAgendas = orderedFairnessAgendas(analysis, members);
   const capacity = workforceCapacitySignal({
     assignments: calendarEvents(),

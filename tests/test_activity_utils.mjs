@@ -14,6 +14,7 @@ import {
   planningActivities,
   planningActivityGroups,
   sortByName,
+  teleworkByWeekdayAnalysis,
 } from '../public/activity-utils.mjs';
 
 const clinical = [
@@ -85,6 +86,34 @@ assert.deepEqual(fixedRuleActivity, {
 assert.equal(
   fixedRuleActivityAnalysis({ activities, assignments: [] }).percentage,
   null,
+);
+
+const telework = teleworkByWeekdayAnalysis({
+  members: [{ id: 'person-a' }, { id: 'person-b' }],
+  activities: [
+    { id: 'onsite', telematic: false, loadPercentage: 100 },
+    { id: 'remote', telematic: true, loadPercentage: 100 },
+    { id: 'onsite-half', telematic: false, loadPercentage: 50 },
+    { id: 'remote-half', telematic: true, loadPercentage: 50 },
+  ],
+  assignments: [
+    { date: '2026-01-05', memberId: 'person-a', type: 'remote' },
+    { date: '2026-01-06', memberId: 'person-a', type: 'onsite' },
+    { date: '2026-01-07', memberId: 'person-a', type: 'remote-half' },
+    { date: '2026-01-07', memberId: 'person-a', type: 'onsite-half' },
+    { date: '2026-01-05', memberId: 'person-b', type: 'onsite' },
+    { date: '2026-01-06', memberId: 'person-b', type: 'remote' },
+    { date: '2026-01-07', memberId: 'person-b', type: 'remote-half' },
+    { date: '2026-01-07', memberId: 'person-b', type: 'onsite-half' },
+  ],
+  selectedMemberId: 'person-a',
+});
+assert.equal(telework.person, 0.5);
+assert.equal(telework.team, 0.5);
+assert.deepEqual(
+  telework.weekdays.map((item) => [item.weekday, item.person, item.team]),
+  [[1, 1, 0.5], [2, 0, 0.5], [3, 0.5, 0.5], [4, null, null], [5, null, null]],
+  'Cada día debe comparar días-equivalentes de teletrabajo con la media personal del equipo',
 );
 
 assert.deepEqual(sortByName([{ name: 'Zulu' }, { name: 'Àgata' }]).map((item) => item.name), ['Àgata', 'Zulu']);

@@ -28,7 +28,7 @@ assert.match(
 assert.match(apiSource, /deferVacancy:[\s\S]*?\/defer/);
 assert.match(
   indexSource,
-  /calendar\.css\?v=81/,
+  /calendar\.css\?v=85/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 
