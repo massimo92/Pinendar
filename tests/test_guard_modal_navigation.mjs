@@ -176,6 +176,21 @@ assert.match(
   'Seleccionar una persona debe actualizar automáticamente el impacto',
 );
 
+const guardPreviewHandlerSource = appSource.slice(
+  appSource.indexOf('async function refreshGuardOperationPreview'),
+  appSource.indexOf('function guardImpactActivityName'),
+);
+assert.doesNotMatch(
+  guardPreviewHandlerSource,
+  /render\(\)/,
+  'Escribir la fecha de una guardia no debe reconstruir el modal ni interrumpir el año',
+);
+assert.match(
+  guardPreviewHandlerSource,
+  /select\.innerHTML = guardMemberOptions[\s\S]*?select\.value = selectedTarget[\s\S]*?select\.selectedIndex = 0[\s\S]*?rebuildEnhancedSelect\(select\)/,
+  'Actualizar la fecha debe conservar explícitamente la persona seleccionada',
+);
+
 assert.doesNotMatch(
   appSource,
   /modal = \{ type: 'guard-impact'/,

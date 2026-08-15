@@ -1290,14 +1290,27 @@ function guardOperationPayload(formElement, operation) {
   };
 }
 
-async function refreshGuardOperationPreview(formElement) {
+async function refreshGuardOperationPreview(formElement, changedField = '') {
   const operation = modal?.type === 'guard-cession' ? 'cession' : modal?.type === 'guard-exchange' ? 'exchange' : '';
   if (!operation) return;
-  const form = new FormData(formElement);
+  let form = new FormData(formElement);
   if (operation === 'cession') {
     const target = form.get('toMemberId');
     modal.date = form.get('date') || '';
     modal.toMemberId = target === 'external' ? null : target || undefined;
+    if (changedField === 'date') {
+      const guard = modal.guardId ? activeGuards().find((item) => item.id === modal.guardId) : null;
+      const occupiedMemberIds = activeGuards().filter((item) => item.date === modal.date && item.id !== guard?.id).map((item) => item.memberId);
+      const select = $('[name="toMemberId"]', formElement);
+      const selectedTarget = Object.hasOwn(modal, 'toMemberId') ? (modal.toMemberId ?? 'external') : '';
+      select.innerHTML = guardMemberOptions(selectedTarget, Boolean(guard), [...occupiedMemberIds, guard?.memberId].filter(Boolean));
+      select.value = selectedTarget;
+      if (!select.value) select.selectedIndex = 0;
+      rebuildEnhancedSelect(select);
+      form = new FormData(formElement);
+      const refreshedTarget = form.get('toMemberId');
+      modal.toMemberId = refreshedTarget === 'external' ? null : refreshedTarget || undefined;
+    }
   } else {
     modal.secondRef = form.get('secondRef') || '';
   }
@@ -1305,23 +1318,43 @@ async function refreshGuardOperationPreview(formElement) {
   modal.preview = null;
   modal.previewError = '';
   const payload = guardOperationPayload(formElement, operation);
-  if (!payload) { modal.previewLoading = false; render(); return; }
+  if (!payload) { modal.previewLoading = false; refreshGuardOperationView(formElement); return; }
   const requestKey = uid();
   const currentModal = modal;
   currentModal.previewRequestKey = requestKey;
   currentModal.previewLoading = true;
-  render();
+  refreshGuardOperationView(formElement);
   try {
     const preview = operation === 'cession' ? await api.previewGuardCession(payload) : await api.previewGuardExchange(payload);
     if (modal !== currentModal || modal.previewRequestKey !== requestKey) return;
     modal.preview = preview;
     modal.previewLoading = false;
-    render();
+    refreshGuardOperationView(formElement);
   } catch (error) {
     if (modal !== currentModal || modal.previewRequestKey !== requestKey) return;
     modal.previewError = error.message;
     modal.previewLoading = false;
-    render();
+    refreshGuardOperationView(formElement);
+  }
+}
+
+function refreshGuardOperationView(formElement) {
+  const impact = $('.guard-inline-impact', formElement);
+  if (impact) {
+    impact.outerHTML = guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError);
+    translateDom($('.guard-inline-impact', formElement));
+  }
+  const submit = $('[data-action="submit-modal"]', formElement);
+  if (submit) submit.disabled = !modal.preview || modal.previewLoading;
+  if (modal?.type === 'guard-exchange') {
+    const first = activeGuards().find((item) => item.id === modal.guardId);
+    const second = activeGuards().find((item) => item.id === modal.secondRef);
+    const summary = $('[data-guard-exchange-summary]', formElement);
+    if (summary) summary.innerHTML = second ? `<div class="guard-exchange-summary"><span>${fmtDate(first?.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(first?.memberId)?.name || '—')}</b><i>⇄</i><span>${fmtDate(second.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(second.memberId)?.name || '—')}</b></div>` : '';
+    const note = $('[data-guard-exchange-note]', formElement);
+    if (note) note.innerHTML = modal.secondRef === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : '';
+    translateDom(summary);
+    translateDom(note);
   }
 }
 
@@ -1378,7 +1411,7 @@ function guardExchangeModal() {
   const secondaryAction = modal.returnToGuardAction
     ? '<button type="button" class="button ghost" data-action="return-guard-action">Enrere</button>'
     : '<button type="button" class="button ghost" data-action="close-modal">Cancel·la</button>';
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div>${exchangeSummary}${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div><div data-guard-exchange-summary>${exchangeSummary}</div>${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}<div data-guard-exchange-note>${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}</div><div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
 }
 function colorControl(kind, color) { const assigned = Boolean(color); return `<div class="automatic-color"><span class="color-swatch" data-color-swatch style="--automatic-color:${color || '#39413c'}"></span><div><b>Color automàtic</b><span>${assigned ? (kind === 'member' ? 'Pastel per distingir persones' : 'Saturat per distingir agendes') : 'El backend l’assignarà en desar'}</span></div>${assigned ? `<button type="button" class="button ghost small" data-action="random-color" data-color-kind="${kind}">Nou color aleatori</button>` : ''}</div>`; }
 function coverageFields(item) { return `<div class="coverage-block"><div><span class="label">Cobertura ordinària</span><span class="muted">Places necessàries per dia</span></div><div class="coverage-fields">${[1, 2, 3, 4, 5].map((day) => `<label><span>${DAYS_SHORT[day - 1]}</span><input type="number" name="coverage-${day}" min="0" max="30" value="${item?.coverage ? Number(item.coverage[String(day)] || 0) : item ? state.coverage[day]?.[item.id] || 0 : 0}" /></label>`).join('')}</div></div>`; }
@@ -2348,7 +2381,7 @@ document.addEventListener('change', async (event) => {
   if (event.target.dataset.action === 'import-guards-file') { await importGuardSpreadsheet(event.target.files?.[0]); return; }
   if (event.target.dataset.action === 'import-absences-file') { await importAbsenceSpreadsheet(event.target.files?.[0]); return; }
   if (event.target.dataset.action === 'guard-import-choice') { const key = `${event.target.dataset.guardImportRow}:${event.target.dataset.guardImportItem}`; modal.guardImport.choices[key] = event.target.value; applyGuardImportSelections(); render(); return; }
-  if (modal?.type === 'guard-cession' && ['toMemberId', 'date'].includes(event.target.name)) { await refreshGuardOperationPreview(event.target.closest('form')); return; }
+  if (modal?.type === 'guard-cession' && ['toMemberId', 'date'].includes(event.target.name)) { await refreshGuardOperationPreview(event.target.closest('form'), event.target.name); return; }
   if (modal?.type === 'guard-exchange' && event.target.name === 'secondRef') { await refreshGuardOperationPreview(event.target.closest('form')); return; }
   if (modal?.type === 'extra-assignment' && modal.manual && event.target.name === 'memberId') {
     modal.memberId = event.target.value;
