@@ -39,6 +39,8 @@ from pinendar.application.commands import (
 )
 from pinendar.application.deferred_operations import (
     apply_deferred_vacancy,
+    apply_direct_deferred_vacancy,
+    deferred_member_options,
     deferred_vacancy_options,
 )
 from pinendar.application.guard_imports import (
@@ -218,6 +220,7 @@ class VacancyAssignmentRequest(BaseModel):
 
 class DeferredVacancyRequest(BaseModel):
     target_date: date = Field(alias="targetDate")
+    target_member_id: str | None = Field(default=None, alias="targetMemberId")
     expected_revision: int | None = Field(default=None, alias="expectedRevision")
 
 
@@ -848,6 +851,14 @@ def defer_calendar_vacancy(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
+        if payload.target_member_id:
+            return apply_direct_deferred_vacancy(
+                database_session,
+                vacancy_id,
+                payload.target_date,
+                payload.target_member_id,
+                expected_revision=payload.expected_revision,
+            )
         return apply_deferred_vacancy(
             database_session,
             vacancy_id,
@@ -917,7 +928,13 @@ def member_extra_assignment_options(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory() as database_session:
-        return extra_assignment_options(database_session, member_id, assignment_date)
+        result = extra_assignment_options(database_session, member_id, assignment_date)
+        deferred = deferred_member_options(database_session, member_id, assignment_date)
+        return {
+            **result,
+            "deferredOptions": deferred["options"],
+            "planningRevision": deferred["planningRevision"],
+        }
 
 
 @router.post(

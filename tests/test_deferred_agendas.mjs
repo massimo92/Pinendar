@@ -27,6 +27,16 @@ assert.match(
 );
 assert.match(apiSource, /deferVacancy:[\s\S]*?\/defer/);
 assert.match(
+  appSource,
+  /deferredOptions[\s\S]*?apply-member-deferred[\s\S]*?targetMemberId/,
+  'La persona sin asignación debe poder adoptar directamente una vacante telemática anterior',
+);
+assert.match(
+  appSource,
+  /No es mourà ni s’afegirà cap altra activitat/,
+  'El flujo inverso debe dejar claro que no reorganiza ninguna otra agenda',
+);
+assert.match(
   indexSource,
   /calendar\.css\?v=88/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',

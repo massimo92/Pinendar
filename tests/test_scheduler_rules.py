@@ -240,6 +240,106 @@ def test_locked_deferred_assignment_covers_its_origin_demand() -> None:
     )["deferredOriginDate"] == "2027-01-04"
 
 
+def test_scheduler_assigns_a_telematic_vacancy_as_deferred_on_a_later_free_day() -> None:
+    agendas = [agenda("remote", priority=1, telematic=True)]
+    team = [member("person", ["remote"], available=[2])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.vacancies == []
+    assert result.metrics["automaticDeferred"] == {
+        "assigned": 1,
+        "byMember": {"person": 1},
+        "remainingTelematicVacancies": 0,
+    }
+    assert result.assignments == [
+        {
+            "id": result.assignments[0]["id"],
+            "date": "2027-01-05",
+            "memberId": "person",
+            "type": "remote",
+            "deferredOriginDate": "2027-01-04",
+        }
+    ]
+    phase_names = [phase["name"] for phase in result.metrics["phases"]]
+    assert phase_names.index("automatic-deferred-telematic-coverage") < phase_names.index(
+        "operational-fairness-polishing"
+    )
+
+
+def test_scheduler_keeps_a_half_day_deferred_assignment_within_capacity() -> None:
+    agendas = [agenda("remote-half", priority=1, telematic=True, load_percentage=50)]
+    team = [member("person", ["remote-half"], available=[2])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"remote-half": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.vacancies == []
+    assert [item["deferredOriginDate"] for item in result.assignments] == ["2027-01-04"]
+    assert result.metrics["partial"]["count"] == 1
+
+
+def test_deferred_telematic_slot_keeps_a_guard_day_onsite_when_combined_with_half_day() -> None:
+    agendas = [
+        agenda("remote-half", priority=1, telematic=True, load_percentage=50),
+        agenda("onsite-half", priority=1, load_percentage=50),
+    ]
+    team = [member("guard", ["remote-half", "onsite-half"], available=[2])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"remote-half": 1}, "2": {"onsite-half": 1}},
+            guards=[{"memberId": "guard", "date": "2027-01-05"}],
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    assert result.outcome == "solution"
+    target_assignments = [item for item in result.assignments if item["date"] == "2027-01-05"]
+    assert {item["type"] for item in target_assignments} == {"remote-half", "onsite-half"}
+    assert next(item for item in target_assignments if item["type"] == "remote-half")["deferredOriginDate"] == "2027-01-04"
+    assert next(phase for phase in result.metrics["phases"] if phase["name"] == "guard-onsite-days")["value"] == 0
+
+
+def test_scheduler_does_not_defer_into_a_day_with_the_same_normal_demand() -> None:
+    agendas = [agenda("remote", priority=1, telematic=True)]
+    team = [member("person", ["remote"], available=[2])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"remote": 1}, "2": {"remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    assert result.outcome == "solution"
+    assert result.metrics["automaticDeferred"]["assigned"] == 0
+    assert len(result.vacancies) == 1
+
+
 def test_scheduler_adds_nth_working_weekday_recurrence() -> None:
     agendas = [agenda("periodic", priority=1, recurrences=[{"ordinal": 3, "weekday": 1, "slots": 1}])]
     result = CpSatScheduler().solve(problem(agendas, [], {}))

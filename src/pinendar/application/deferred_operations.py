@@ -510,6 +510,168 @@ def deferred_vacancy_options(session: Session, vacancy_id: int) -> dict[str, Any
     }
 
 
+def _direct_member_option(
+    session: Session,
+    vacancy: Vacancy,
+    target_date: date,
+    member_id: str,
+    *,
+    fairness_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    agenda = session.get(Agenda, vacancy.agenda_id)
+    member = session.get(Member, member_id)
+    if (
+        not agenda
+        or agenda.archived_at
+        or not agenda.telematic
+        or not member
+        or member.archived_at
+        or not member.is_active
+        or not vacancy.date < target_date <= vacancy.date + timedelta(days=DEFERRED_WINDOW_DAYS)
+        or target_date > _period_end(session, vacancy)
+    ):
+        return None
+    guard_specs = [
+        {"memberId": item.member_id, "date": item.date}
+        for item in session.scalars(select(Guard))
+    ]
+    if not _planifiable(session, member, target_date, guard_specs):
+        return None
+    capable = session.scalar(
+        select(MemberCapability.id).where(
+            MemberCapability.member_id == member_id,
+            MemberCapability.agenda_id == agenda.id,
+        )
+    )
+    if not capable or agenda.id in _forbidden_agendas(session, target_date)[member_id]:
+        return None
+    rows = list(
+        session.scalars(
+            select(Assignment).where(
+                Assignment.member_id == member_id,
+                Assignment.date == target_date,
+            )
+        )
+    )
+    if (
+        not rows
+        or any(row.kind != "no_assignment" for row in rows)
+        or any(row.locked or row.manually_modified for row in rows)
+    ):
+        return None
+    context = fairness_context or _fairness_context(session)
+    baseline = _fairness_score(context, [])
+    projected = _fairness_score(context, [(member_id, None, agenda.id)])
+    return {
+        "vacancyId": vacancy.id,
+        "agendaId": agenda.id,
+        "originDate": vacancy.date.isoformat(),
+        "targetDate": target_date.isoformat(),
+        "deferredMemberId": member_id,
+        "loadPercentage": agenda.load_percentage,
+        **_fairness_result(baseline, projected),
+    }
+
+
+def deferred_member_options(
+    session: Session,
+    member_id: str,
+    target_date: date,
+) -> dict[str, Any]:
+    settings = session.get(AppSettings, 1)
+    vacancies = list(
+        session.scalars(
+            select(Vacancy)
+            .join(Agenda, Agenda.id == Vacancy.agenda_id)
+            .where(
+                Vacancy.date >= target_date - timedelta(days=DEFERRED_WINDOW_DAYS),
+                Vacancy.date < target_date,
+                Agenda.archived_at.is_(None),
+                Agenda.telematic.is_(True),
+            )
+            .order_by(Vacancy.date, Agenda.name, Vacancy.id)
+        )
+    )
+    fairness_context = _fairness_context(session) if vacancies else None
+    options = [
+        option
+        for vacancy in vacancies
+        if (
+            option := _direct_member_option(
+                session,
+                vacancy,
+                target_date,
+                member_id,
+                fairness_context=fairness_context,
+            )
+        )
+    ]
+    return {
+        "memberId": member_id,
+        "targetDate": target_date.isoformat(),
+        "planningRevision": settings.planning_revision if settings else 0,
+        "options": options,
+    }
+
+
+def apply_direct_deferred_vacancy(
+    session: Session,
+    vacancy_id: int,
+    target_date: date,
+    member_id: str,
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    _assert_revision(session, expected_revision)
+    vacancy = session.get(Vacancy, vacancy_id)
+    if not vacancy:
+        raise DomainError("VACANCY_NOT_FOUND", "Vacant no trobada")
+    proposal = _direct_member_option(session, vacancy, target_date, member_id)
+    if proposal is None:
+        raise DomainError(
+            "DEFERRED_OPTION_STALE",
+            "La proposta diferida ja no està disponible",
+        )
+    agenda = session.get(Agenda, vacancy.agenda_id)
+    assert agenda is not None
+    rows = list(
+        session.scalars(
+            select(Assignment)
+            .where(
+                Assignment.member_id == member_id,
+                Assignment.date == target_date,
+                Assignment.kind == "no_assignment",
+            )
+            .order_by(Assignment.id)
+        )
+    )
+    assignment = rows[0]
+    for duplicate in rows[1:]:
+        session.delete(duplicate)
+    assignment.generation_job_id = assignment.generation_job_id or vacancy.generation_job_id
+    assignment.agenda_id = agenda.id
+    assignment.kind = "assigned"
+    assignment.load_percentage = agenda.load_percentage
+    assignment.locked = True
+    assignment.fixed = False
+    assignment.extra = False
+    assignment.peonada = False
+    assignment.deferred_origin_date = vacancy.date
+    assignment.manually_modified = True
+    assignment.management = False
+    session.delete(vacancy)
+    bump_revision(session)
+    return {
+        "id": assignment.id,
+        "date": target_date.isoformat(),
+        "originDate": vacancy.date.isoformat(),
+        "memberId": member_id,
+        "agendaId": agenda.id,
+        "movements": [],
+        "fairnessEffect": proposal["fairnessEffect"],
+    }
+
+
 def apply_deferred_vacancy(
     session: Session,
     vacancy_id: int,

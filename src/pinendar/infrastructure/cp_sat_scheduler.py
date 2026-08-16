@@ -21,7 +21,7 @@ from pinendar.domain.scheduler import (
 )
 from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 
-MODEL_VERSION = "25"
+MODEL_VERSION = "26"
 ORTOOLS_VERSION = version("ortools")
 
 
@@ -35,6 +35,8 @@ class _Phase:
 def _phase_time_weight(phase: _Phase, final_phase_count: int) -> float:
     if phase.name == "guard-onsite-days":
         return 10
+    if phase.name == "automatic-deferred-telematic-coverage":
+        return 12
     if phase.name == "telematic-percentage-range":
         return 15
     if phase.name == "telematic-percentage-dispersion":
@@ -56,6 +58,7 @@ def _phase_time_budget(phases: list[_Phase], phase_index: int, remaining: float)
         return remaining
     primary_names = {
         "guard-onsite-days",
+        "automatic-deferred-telematic-coverage",
         "telematic-percentage-range",
         "telematic-percentage-dispersion",
         "worst-historical-distance",
@@ -253,6 +256,7 @@ class CpSatScheduler:
         unassigned: dict[tuple[str, date], cp_model.IntVar] = {}
         partial_days: dict[tuple[str, date], cp_model.IntVar] = {}
         daily_load_units: dict[tuple[str, date], Any] = {}
+        base_daily_load_units: dict[tuple[str, date], Any] = {}
         vacancies: dict[tuple[date, str], cp_model.IntVar] = {}
         fixed_assignments: set[tuple[str, date, str]] = set()
         member_order = {member_id: index for index, member_id in enumerate(members)}
@@ -321,9 +325,9 @@ class CpSatScheduler:
                     for agenda_id in candidates
                 )
                 daily_units = assigned_units + (2 * management if management is not None else 0)
+                base_daily_load_units[(member_id, value)] = daily_units
                 daily_load_units[(member_id, value)] = daily_units
                 model.add(no_assignment + partial_day <= 1)
-                model.add(daily_units == 2 - (2 * no_assignment) - partial_day)
 
         for (member_id, value, event_type), item in locked_by_key.items():
             if value not in planning_dates or member_id not in planifiable.get(value, []):
@@ -498,7 +502,89 @@ class CpSatScheduler:
                     },
                 )
 
+        # A deferred assignment consumes free capacity on a later working day.
+        # It never moves an existing assignment: it only uses a still-uncovered
+        # telematic vacancy and a member/date that can accept the agenda.
+        deferred_assignments: dict[tuple[date, str, date, str], cp_model.IntVar] = {}
+        deferred_by_source: dict[tuple[date, str], list[cp_model.IntVar]] = defaultdict(list)
+        deferred_by_target: dict[tuple[str, date], list[tuple[cp_model.IntVar, str]]] = defaultdict(list)
+        deferred_by_target_agenda: dict[tuple[str, date, str], list[cp_model.IntVar]] = defaultdict(list)
+        for (origin, agenda_id), _vacancy in vacancies.items():
+            agenda = agendas[agenda_id]
+            if not bool(agenda.get("telematic", False)) or demand[(origin, agenda_id)] <= 0:
+                continue
+            for target in planning_dates:
+                if target <= origin or target > origin + timedelta(days=6):
+                    continue
+                # A deferred slot is only a spare telematic slot on a day
+                # without that same agenda in the normal demand. This avoids
+                # displacing an ordinary assignment to manufacture a deferment.
+                if demand[(target, agenda_id)] > 0:
+                    continue
+                for member_id in planifiable.get(target, []):
+                    if agenda_id not in members[member_id].get("allowedTypes", []):
+                        continue
+                    target_locked = [
+                        item
+                        for (locked_member, locked_date, _locked_type), item in locked_by_key.items()
+                        if locked_member == member_id and locked_date == target
+                    ]
+                    if any(
+                        item.get("type") in {"no_assignment", "management"}
+                        or item.get("deferredOriginDate")
+                        or item.get("extra")
+                        or item.get("manuallyModified")
+                        for item in target_locked
+                    ):
+                        continue
+                    deferred = model.new_bool_var(
+                        "deferred_"
+                        f"o{date_order[origin]}_a{agenda_order[agenda_id]}"
+                        f"_d{date_order[target]}_p{member_order[member_id]}"
+                    )
+                    key = (origin, agenda_id, target, member_id)
+                    deferred_assignments[key] = deferred
+                    deferred_by_source[(origin, agenda_id)].append(deferred)
+                    deferred_by_target[(member_id, target)].append((deferred, agenda_id))
+                    deferred_by_target_agenda[(member_id, target, agenda_id)].append(deferred)
+
+        for source, source_variables in deferred_by_source.items():
+            model.add(sum(source_variables) <= vacancies[source])
+
+        for target_day_key, target_variables in deferred_by_target.items():
+            member_id, target = target_day_key
+            deferred_load = sum(
+                variable * agenda_load_units[agenda_id]
+                for variable, agenda_id in target_variables
+            )
+            total_load = base_daily_load_units[target_day_key] + deferred_load
+            daily_load_units[target_day_key] = total_load
+            model.add(total_load == 2 - (2 * unassigned[target_day_key]) - partial_days[target_day_key])
+        for base_key, base_load in base_daily_load_units.items():
+            if base_key not in deferred_by_target:
+                model.add(base_load == 2 - (2 * unassigned[base_key]) - partial_days[base_key])
+
+        for target_agenda_key, target_agenda_variables in deferred_by_target_agenda.items():
+            ordinary_assignment = assignments.get(target_agenda_key)
+            if ordinary_assignment is not None:
+                model.add(ordinary_assignment + sum(target_agenda_variables) <= 1)
+
+        automatic_deferred_phase = (
+            _Phase(
+                "automatic-deferred-telematic-coverage",
+                sum(
+                    vacancy - sum(source_variables)
+                    for source, source_variables in deferred_by_source.items()
+                    for vacancy in [vacancies[source]]
+                ),
+                False,
+            )
+            if deferred_by_source
+            else None
+        )
+
         phases: list[_Phase] = []
+        capacity_phases: list[_Phase] = []
         vacancy_by_priority: dict[int, list[cp_model.IntVar]] = defaultdict(list)
         vacancy_by_group: dict[tuple[str, int], list[cp_model.IntVar]] = defaultdict(list)
         for (value, agenda_id), variable in vacancies.items():
@@ -626,7 +712,7 @@ class CpSatScheduler:
             append_coverage_phases("telematic", priority)
 
         if partial_days:
-            phases.append(
+            capacity_phases.append(
                 _Phase(
                     "partial-person-days",
                     sum(partial_days.values()),
@@ -648,7 +734,7 @@ class CpSatScheduler:
             priority_weight = 5 - int(agendas[agenda_id].get("priority", 3))
             priority_weighted_partial_assignments.append(partial_assignment * priority_weight)
         if priority_weighted_partial_assignments:
-            phases.append(
+            capacity_phases.append(
                 _Phase(
                     "priority-weighted-partial-person-days",
                     sum(priority_weighted_partial_assignments),
@@ -657,7 +743,7 @@ class CpSatScheduler:
             )
 
         if unassigned:
-            phases.append(
+            capacity_phases.append(
                 _Phase(
                     "unassigned-person-days",
                     sum(unassigned.values()),
@@ -949,6 +1035,11 @@ class CpSatScheduler:
                     ),
                     0,
                 )
+                new_count += sum(
+                    variable * agenda_load_units[agenda_id]
+                    for (origin, deferred_agenda_id, target, person_id), variable in deferred_assignments.items()
+                    if person_id == member_id and deferred_agenda_id == agenda_id
+                )
                 profile_counts[(member_id, agenda_id)] = (
                     int(problem.historical_counts.get(member_id, {}).get(agenda_id, 0)) + new_count
                 )
@@ -978,10 +1069,31 @@ class CpSatScheduler:
             for agenda_id in agendas:
                 for value in planning_dates:
                     following = value + timedelta(days=1)
-                    current = assignments.get((member_id, value, agenda_id))
-                    next_assignment = assignments.get((member_id, following, agenda_id))
-                    if current is None or next_assignment is None:
+                    current_variables = [assignments[(member_id, value, agenda_id)]] if (
+                        member_id, value, agenda_id
+                    ) in assignments else []
+                    current_variables.extend(
+                        deferred_by_target_agenda.get((member_id, value, agenda_id), [])
+                    )
+                    next_variables = [assignments[(member_id, following, agenda_id)]] if (
+                        member_id, following, agenda_id
+                    ) in assignments else []
+                    next_variables.extend(
+                        deferred_by_target_agenda.get((member_id, following, agenda_id), [])
+                    )
+                    if not current_variables or not next_variables:
                         continue
+                    current = model.new_bool_var(
+                        "agenda_day_"
+                        f"p{member_order[member_id]}_d{date_order[value]}_a{agenda_order[agenda_id]}"
+                    )
+                    next_assignment = model.new_bool_var(
+                        "agenda_day_"
+                        f"p{member_order[member_id]}_d{date_order.get(following, len(date_order))}"
+                        f"_a{agenda_order[agenda_id]}"
+                    )
+                    model.add_max_equality(current, current_variables)
+                    model.add_max_equality(next_assignment, next_variables)
                     repeated = model.new_bool_var(
                         "consecutive_clinical_"
                         f"p{member_order[member_id]}_d{date_order[value]}_a{agenda_order[agenda_id]}"
@@ -1067,6 +1179,9 @@ class CpSatScheduler:
         phases = []
         if guard_onsite_phase is not None:
             phases.append(guard_onsite_phase)
+        if automatic_deferred_phase is not None:
+            phases.append(automatic_deferred_phase)
+        phases.extend(capacity_phases)
         (
             telematic_assignment_counts,
             total_assignment_counts,
@@ -1115,6 +1230,22 @@ class CpSatScheduler:
                     **({"fixed": True} if (member_id, value, agenda_id) in fixed_assignments else {}),
                 }
             )
+        selected_deferred_by_source: Counter[tuple[date, str]] = Counter()
+        automatic_deferred_assignments: list[dict[str, Any]] = []
+        for (origin, agenda_id, target, member_id), variable in deferred_assignments.items():
+            if last_solver.value(variable) != 1:
+                continue
+            selected_deferred_by_source[(origin, agenda_id)] += 1
+            automatic_deferred_assignments.append(
+                {
+                    "id": uuid4().hex,
+                    "date": target.isoformat(),
+                    "memberId": member_id,
+                    "type": agenda_id,
+                    "deferredOriginDate": origin.isoformat(),
+                }
+            )
+        result_assignments.extend(automatic_deferred_assignments)
         for (member_id, value), variable in management_assignments.items():
             if last_solver.value(variable) != 1:
                 continue
@@ -1151,9 +1282,8 @@ class CpSatScheduler:
 
         result_vacancies: list[dict[str, Any]] = []
         for (value, agenda_id), variable in vacancies.items():
-            result_vacancies.extend(
-                {"date": value.isoformat(), "type": agenda_id} for _ in range(int(last_solver.value(variable)))
-            )
+            remaining = int(last_solver.value(variable)) - selected_deferred_by_source[(value, agenda_id)]
+            result_vacancies.extend({"date": value.isoformat(), "type": agenda_id} for _ in range(remaining))
         result_vacancies.sort(key=lambda item: (item["date"], agenda_order[item["type"]]))
         daily_unit_values = {key: int(last_solver.value(expression)) for key, expression in daily_load_units.items()}
         partial_keys = {key for key, units in daily_unit_values.items() if units == 1}
@@ -1169,8 +1299,21 @@ class CpSatScheduler:
             "optimizationMode": optimization_mode,
             "phases": phase_metrics,
             "vacanciesByPriority": {
-                str(priority): sum(int(last_solver.value(value)) for value in variables)
-                for priority, variables in vacancy_by_priority.items()
+                str(priority): sum(
+                    1
+                    for item in result_vacancies
+                    if int(agendas[item["type"]].get("priority", 3)) == priority
+                )
+                for priority in sorted(vacancy_by_priority)
+            },
+            "automaticDeferred": {
+                "assigned": len(automatic_deferred_assignments),
+                "byMember": dict(Counter(item["memberId"] for item in automatic_deferred_assignments)),
+                "remainingTelematicVacancies": sum(
+                    1
+                    for item in result_vacancies
+                    if bool(agendas.get(item["type"], {}).get("telematic", False))
+                ),
             },
             "management": {
                 f"{member_id}:{month}": {

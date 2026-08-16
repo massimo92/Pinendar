@@ -57,5 +57,10 @@ assert.match(
   /\.calendar-shell\.view-week \.calendar-guard-banner span,\.calendar-shell\.view-week \.calendar-guard-banner b\{[^}]*max-width:100%[^}]*text-overflow:ellipsis/,
   'Cada línea de la guardia semanal debe truncarse como el resto de eventos',
 );
+assert.match(
+  appSource,
+  /\$\$\('\.calendar-filter\[open\]'\)[\s\S]*?!filter\.contains\(event\.target\)[\s\S]*?removeAttribute\('open'\)/,
+  'Los filtros de personas y agendas deben cerrarse al pulsar fuera',
+);
 
 console.log('calendar toolbar layout regression: ok');

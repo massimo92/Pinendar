@@ -1824,6 +1824,14 @@ function assignmentModal() {
     const dateLabel = fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action modal-manual-extra" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">PLAÇA EXTRAORDINÀRIA</div><h2>Afegeix activitat manual</h2></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><input type="hidden" name="date" value="${esc(modal.date)}" /><div class="modal-body"><div class="manual-extra-fields"><div class="field manual-extra-date-field"><label>Data</label><div class="manual-extra-date-display" aria-label="Data seleccionada">${esc(dateLabel)}</div></div><div class="field"><label>Persona</label><select name="memberId" required><option value="">Selecciona una persona</option>${candidates.map((item) => `<option value="${esc(item.id)}" ${item.id === modal.memberId ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label>Agenda</label><select name="agendaId" required ${modal.memberId ? '' : 'disabled'}><option value="">${agendaPrompt}</option>${agendaOptions}</select></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
   }
+  const deferredRows = (modal.payload?.deferredOptions || []).map((option) => {
+    const item = agenda(option.agendaId);
+    const hospital = agendaHospital(item);
+    return `<article class="deferred-option"><div class="assignment-choice-head"><b>${esc(item?.name || '—')}</b>${fairnessBadge(option)}</div><p>Diferida del ${fmtDate(option.originDate, { weekday: 'long', day: 'numeric', month: 'long' })}</p><small>${esc(hospital?.name || 'Sense hospital')} · ${esc(activityMetaTitle(item))}</small><button type="button" class="button small" data-action="apply-member-deferred" data-vacancy-id="${esc(option.vacancyId)}">Adopta aquesta agenda</button></article>`;
+  }).join('');
+  const deferredSection = deferredRows
+    ? `<section class="vacancy-resolution-section"><h3>Agendes telemàtiques pendents</h3><p class="assignment-action-help">Pots adoptar directament una agenda dels sis dies anteriors. No es mourà ni s’afegirà cap altra activitat.</p><div class="deferred-option-list">${deferredRows}</div></section>`
+    : '';
   const manualControls = `<input type="hidden" name="memberId" value="${esc(modal.memberId)}" /><input type="hidden" name="date" value="${esc(modal.date)}" />`;
   const rows = options.map((option) => {
     const item = agenda(option.agendaId);
@@ -1835,7 +1843,7 @@ function assignmentModal() {
     return `<label class="assignment-choice"><input type="radio" name="agendaId" value="${esc(option.agendaId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(item?.name || '—')}</b>${fairnessBadge(option)}</span><small>${esc(hospital?.name || 'Sense hospital')} · ${esc(activityMetaTitle(item))}</small>${loadWarning}</span></label>`;
   }).join('');
   const emptyMessage = 'No hi ha cap agenda compatible amb les regles d’aquest dia.';
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">PLAÇA EXTRAORDINÀRIA</div><h2>${esc(member?.name || modal.payload?.memberName || '—')}</h2><div class="muted">${fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><div class="modal-body">${manualControls}<p class="assignment-action-help">Aquesta activitat s’afegirà fora de la demanda ordinària. Si la càrrega supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || `<div class="assignment-choice-empty">${emptyMessage}</div>`}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">SENSE ASSIGNACIÓ</div><h2>${esc(member?.name || modal.payload?.memberName || '—')}</h2><div class="muted">${fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><div class="modal-body">${manualControls}${deferredSection}<section class="vacancy-resolution-section"><h3>Afegeix una plaça extraordinària</h3><p class="assignment-action-help">Aquesta activitat s’afegirà fora de la demanda ordinària. Si la càrrega supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || `<div class="assignment-choice-empty">${emptyMessage}</div>`}</div></section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
 }
 
 function vacancyAssignmentModal() {
@@ -2275,6 +2283,17 @@ document.addEventListener('click', async (event) => {
     } catch (error) { showError(error); }
     return;
   }
+  if (action === 'apply-member-deferred') {
+    try {
+      await api.deferVacancy(button.dataset.vacancyId, {
+        targetDate: modal.date,
+        targetMemberId: modal.memberId,
+        expectedRevision: modal.payload?.planningRevision,
+      });
+      modal = null; await reloadState('Agenda diferida'); render();
+    } catch (error) { showError(error); }
+    return;
+  }
   if (action === 'confirm-generation-overwrite') { modal.replaceExisting = true; modal.overlap = null; modal.conflict = ''; await handleForm(button.closest('form')); return; }
   if (action === 'confirm-fixed-exchange') {
     const assignmentId = modal.id;
@@ -2437,6 +2456,7 @@ document.addEventListener('change', async (event) => {
 });
 document.addEventListener('click', (event) => {
   $$('.language-picker[open]').forEach((picker) => { if (!picker.contains(event.target)) picker.removeAttribute('open'); });
+  $$('.calendar-filter[open]').forEach((filter) => { if (!filter.contains(event.target)) filter.removeAttribute('open'); });
   if (!event.target.closest('[data-agenda-reaction]')) $$('[data-agenda-reaction].open').forEach((item) => { item.classList.remove('open'); $('[data-action="toggle-agenda-reaction"]', item)?.setAttribute('aria-expanded', 'false'); });
   if (!event.target.closest('.fixed-rule-warning')) $$('.fixed-rule-warning.open').forEach((warning) => { warning.classList.remove('open'); $('.fixed-rule-warning-trigger', warning)?.setAttribute('aria-expanded', 'false'); });
 });

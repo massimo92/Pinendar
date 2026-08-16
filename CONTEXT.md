@@ -135,6 +135,8 @@ _Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 
 **Asignación diferida**:
 Asignación de una plaza telemática que no pudo cubrirse en su fecha de origen y se realiza dentro de los seis días naturales posteriores usando capacidad que habría quedado sin asignar. Conserva su fecha de origen y cubre la vacante original.
+Al iniciarla desde una persona sin asignación, esa persona adopta directamente una única vacante compatible: no se mueve ni se añade ninguna otra agenda y una carga del 50% conserva la jornada parcial.
+Durante la generación, el optimizador puede crearla automáticamente para cubrir vacantes telemáticas usando solo capacidad libre; prioriza cubrir el mayor número posible y, después, mantener equilibrado el porcentaje telemático entre personas. Las asignaciones automáticas no desplazan agendas ordinarias y pueden recalcularse en una nueva generación.
 _Avoid_: Agenda nueva, peonada, cambio de fecha
 
 **Jornada parcial excepcional**:
