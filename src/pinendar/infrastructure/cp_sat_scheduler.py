@@ -657,6 +657,13 @@ class CpSatScheduler:
                     deferred_by_target[(member_id, target)].append((deferred, agenda_id))
                     deferred_by_target_agenda[(member_id, target, agenda_id)].append(deferred)
 
+        automatic_deferred_enabled: cp_model.IntVar | None = None
+        if deferred_assignments:
+            automatic_deferred_enabled = model.new_bool_var("automatic_deferred_enabled")
+            for deferred in deferred_assignments.values():
+                model.add(deferred <= automatic_deferred_enabled)
+            model.add_assumption(automatic_deferred_enabled.Not())
+
         for source, source_variables in deferred_by_source.items():
             model.add(sum(source_variables) <= vacancies[source])
 
@@ -883,11 +890,19 @@ class CpSatScheduler:
         all_phases_optimal = True
         diagnostics: list[str] = []
 
-        def retain_solution_as_hint(solver: cp_model.CpSolver) -> None:
+        def retain_solution_as_hint(
+            solver: cp_model.CpSolver,
+            overrides: dict[int, int] | None = None,
+        ) -> None:
             model.clear_hints()  # type: ignore[no-untyped-call]
             for variable_index in range(len(model.proto.variables)):
                 variable = model.get_int_var_from_proto_index(variable_index)
-                model.add_hint(variable, int(solver.value(variable)))
+                value = (
+                    overrides[variable_index]
+                    if overrides is not None and variable_index in overrides
+                    else int(solver.value(variable))
+                )
+                model.add_hint(variable, value)
 
         def run_phases(stage_phases: list[_Phase]) -> ScheduleResult | None:
             nonlocal last_solver, all_phases_optimal
@@ -1310,6 +1325,14 @@ class CpSatScheduler:
         hard_failure = run_phases(hard_phases)
         if hard_failure is not None:
             return hard_failure
+        if automatic_deferred_enabled is not None:
+            assert last_solver is not None
+            model.clear_assumptions()
+            model.add_assumption(automatic_deferred_enabled)
+            retain_solution_as_hint(
+                last_solver,
+                {automatic_deferred_enabled.index: 1},
+            )
         solver_deadline = max(monotonic(), deadline - polishing_reserve)
 
         phases = []
