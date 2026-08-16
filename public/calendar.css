@@ -7,7 +7,7 @@
 .danger-icon{color:var(--danger);border-color:rgba(255,123,114,.2)}
 
 .calendar-actions{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(330px,.7fr);gap:12px;margin-bottom:12px}
-.calendar-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.calendar-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .calendar-kpi{min-width:0;display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px!important;background:rgba(255,255,255,.018);color:#edf5f1;text-align:left;transition:border-color .16s ease,background .16s ease,transform .16s ease}
 .calendar-kpi:hover{transform:translateY(-1px)}
 .calendar-kpi>i{width:30px;height:30px;display:grid;place-items:center;flex:none;border-radius:9px;font-size:15px;font-style:normal;font-weight:950}
@@ -20,6 +20,12 @@
 .calendar-kpi.unassigned{border-color:rgba(201,122,255,.22);background:linear-gradient(110deg,rgba(201,122,255,.075),rgba(18,24,24,.72) 54%)}
 .calendar-kpi.unassigned>i{background:rgba(201,122,255,.16);color:#dba4ff}
 .calendar-kpi.unassigned.active{border-color:rgba(201,122,255,.7);background:rgba(80,42,105,.4);box-shadow:inset 0 0 0 1px rgba(201,122,255,.18)}
+.calendar-kpi.deferred{border-color:rgba(183,140,255,.28);background:linear-gradient(110deg,rgba(183,140,255,.1),rgba(18,24,24,.72) 54%)}
+.calendar-kpi.deferred>i{background:rgba(183,140,255,.18);color:#d7c2ff}
+.calendar-kpi.deferred.active{border-color:rgba(183,140,255,.78);background:rgba(76,54,111,.42);box-shadow:inset 0 0 0 1px rgba(183,140,255,.2)}
+.calendar-kpi.peonada{border-color:rgba(90,169,255,.28);background:linear-gradient(110deg,rgba(90,169,255,.1),rgba(18,24,24,.72) 54%)}
+.calendar-kpi.peonada>i{background:rgba(90,169,255,.18);color:#9bcfff}
+.calendar-kpi.peonada.active{border-color:rgba(90,169,255,.78);background:rgba(38,76,111,.42);box-shadow:inset 0 0 0 1px rgba(90,169,255,.2)}
 .calendar-generate,.calendar-export,.calendar-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 16px}
 .calendar-generate{border-color:rgba(200,244,76,.18);background:linear-gradient(110deg,rgba(200,244,76,.08),rgba(18,24,24,.74) 58%)}
 .calendar-generate>div,.calendar-export>div:first-child{display:grid;gap:3px}
@@ -129,6 +135,7 @@
 .calendar-event.deferred{position:relative;border-left-color:#b78cff;background:color-mix(in srgb,#b78cff 13%,rgba(15,22,21,.88));box-shadow:inset 0 0 0 1px rgba(183,140,255,.34)}
 .calendar-deferred-marker{width:12px;height:12px;display:inline-grid;margin-right:4px;border-radius:50%;background:#b78cff;color:#201133;font-size:8px;font-style:normal;font-weight:950;line-height:1;vertical-align:middle;place-items:center}
 .calendar-deferred-origin{color:#d7c2ff!important}
+.assignment-origin-detail{display:inline;color:#d7c2ff;font-size:.92em;font-weight:750}
 .calendar-event.vacancy{border:1px dashed rgba(255,95,105,.64);border-left:3px solid #ff5f69;background:rgba(128,30,39,.42);color:#ffe9eb}
 .calendar-event.vacancy b{color:#ff9fa6}
 .calendar-event.vacancy b:before{content:'!';width:12px;height:12px;display:inline-grid;place-items:center;border-radius:50%;background:#ff5f69;color:#fff;font-size:8px;font-weight:950}
@@ -259,12 +266,24 @@ button.calendar-event:hover{filter:brightness(1.25)}
 .vacancy-resolution-section+ .vacancy-resolution-section{padding-top:14px;border-top:1px solid rgba(205,232,223,.12)}
 .vacancy-resolution-section h3{margin:0;color:#edf4f1;font-size:13px}
 .deferred-option-list{display:grid;gap:8px}
-.deferred-option{display:grid;gap:8px;padding:12px;border:1px solid rgba(183,140,255,.28);border-radius:10px;background:rgba(183,140,255,.045)}
+.deferred-option{width:100%;display:grid;gap:9px;padding:13px 14px;border:1px solid rgba(183,140,255,.34);border-radius:12px;background:rgba(183,140,255,.055);color:#edf4f1;font:inherit;text-align:left;cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
+.deferred-option:hover{border-color:rgba(183,140,255,.62);background:rgba(183,140,255,.1);transform:translateY(-1px)}
+.deferred-option:focus-visible{outline:2px solid rgba(183,140,255,.72);outline-offset:2px}
 .deferred-option.preferred{border-color:rgba(183,140,255,.62);background:rgba(183,140,255,.09)}
+.deferred-option-title{min-width:0;display:flex;align-items:baseline;gap:5px;overflow:hidden}
+.deferred-option-title b{min-width:0;overflow:hidden;color:#edf4f1;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.deferred-option-title small{min-width:0;overflow:hidden;color:#d7c2ff;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.deferred-option>small{overflow:hidden;color:var(--muted);font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.deferred-option-target{color:#d7c2ff!important;font-size:10px!important}
+.deferred-option-destination{overflow:hidden;color:#edf4f1;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.deferred-option-movement-count{color:var(--muted);font-size:9px}
+.deferred-option-movements{overflow:hidden;color:var(--muted);font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.deferred-option-movement-list{display:grid;gap:2px;margin:0!important;padding:0 0 0 16px!important;color:var(--muted);font-size:9px}
+.deferred-option-movement-list li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .deferred-option p,.deferred-option details,.deferred-option ul{margin:0}
 .deferred-option summary{cursor:pointer;color:var(--muted);font-size:10px}
 .deferred-option ul{padding:7px 0 0 18px;color:var(--muted);font-size:10px}
-.deferred-option .button{justify-self:start}
+.deferred-option>.button{justify-self:start}
 .modal-head{display:flex;align-items:flex-start;justify-content:space-between;padding:22px 24px 17px;border-bottom:1px solid var(--line)}
 .modal-head h2{font-size:22px;margin:0}
 .modal-body{padding:20px 24px}

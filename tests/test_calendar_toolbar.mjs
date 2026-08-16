@@ -43,6 +43,11 @@ assert.match(
   'La incidencia parcial debe conservar su indicador porque no tiene filtro superior',
 );
 assert.match(
+  appSource,
+  /data-calendar-issue-filter="deferred"[\s\S]*?data-calendar-issue-filter="peonada"/,
+  'El calendario debe ofrecer filtros superiores para diferidos y peonadas',
+);
+assert.match(
   calendarCss,
   /\.calendar-guard-banner\{[^}]*min-width:0[^}]*overflow:hidden/,
   'La guardia semanal debe encogerse y recortar su contenido dentro de la celda',
