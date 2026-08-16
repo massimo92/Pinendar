@@ -7,14 +7,16 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 import pinendar.application.jobs as jobs_module
 from pinendar.application.jobs import JobDispatcher, enqueue_job
 from pinendar.application.state import DomainError, job_payload
 from pinendar.infrastructure.models import (
+    AgendaRecurrence,
     AppSettings,
     Assignment,
+    Coverage,
     GenerationJob,
     Guard,
     Member,
@@ -81,28 +83,27 @@ def test_generation_with_excess_people_succeeds_with_no_assignment_events(
     authenticated_client: TestClient,
 ) -> None:
     authenticated_client.app.state.job_dispatcher.start()
-    team = authenticated_client.get("/api/v1/bootstrap").json()["team"]
-    absences = [
-        {
-            "memberId": team[0]["id"],
-            "start": "2027-01-01",
-            "end": "2027-01-31",
-        },
-        *[
-            {
-                "memberId": team[1]["id"],
-                "start": value,
-                "end": value,
-            }
-            for value in ("2027-01-01", "2027-01-08", "2027-01-15", "2027-01-22", "2027-01-29")
-        ],
-    ]
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.execute(delete(AgendaRecurrence))
+        session.execute(delete(Coverage))
+        session.execute(update(Member).values(management_quota=0))
+        settings = session.get(AppSettings, 1)
+        assert settings is not None
+        settings.planning_revision += 1
     first = authenticated_client.post(
         "/api/v1/generation-jobs",
-        json={"startMonth": "2027-01", "endMonth": "2027-01", "guards": [], "absences": absences},
+        json={
+            "startMonth": "2027-01",
+            "endMonth": "2027-01",
+            "startDate": "2027-01-04",
+            "endDate": "2027-01-04",
+            "guards": [],
+            "absences": [],
+        },
     )
     first_job = wait_for_job(authenticated_client, first.json()["id"])
-    assert first_job["status"] == "succeeded", first_job
+    assert first_job["status"] == "succeeded", first_job.get("error")
     january = [
         item["id"]
         for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
@@ -110,7 +111,14 @@ def test_generation_with_excess_people_succeeds_with_no_assignment_events(
 
     second = authenticated_client.post(
         "/api/v1/generation-jobs",
-        json={"startMonth": "2027-02", "endMonth": "2027-02", "guards": [], "absences": []},
+        json={
+            "startMonth": "2027-02",
+            "endMonth": "2027-02",
+            "startDate": "2027-02-01",
+            "endDate": "2027-02-01",
+            "guards": [],
+            "absences": [],
+        },
     )
     completed = wait_for_job(authenticated_client, second.json()["id"])
     events = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
