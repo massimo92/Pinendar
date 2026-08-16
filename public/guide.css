@@ -252,7 +252,7 @@
 
 .guide-signal-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
 
@@ -289,6 +289,16 @@
 .guide-signal-grid .partial i {
   background: rgba(255, 177, 74, .16);
   color: #ffc776;
+}
+
+.guide-signal-grid .deferred i {
+  background: rgba(139, 112, 219, .18);
+  color: #bdaaf3;
+}
+
+.guide-signal-grid .peonada i {
+  background: rgba(75, 137, 224, .18);
+  color: #8db8f3;
 }
 
 .guide-footnote {
@@ -380,7 +390,41 @@
   }
 }
 
+@media (max-width: 900px) {
+  .guide-hero {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .guide-priority-list li {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .guide-priority-list span {
+    grid-column: 2;
+  }
+}
+
 @media (max-width: 640px) {
+  .guide-hero,
+  .guide-section {
+    padding: 20px;
+  }
+
+  .guide-step-list,
+  .guide-check-list,
+  .guide-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-step-list article {
+    min-height: auto;
+  }
+
+  .guide-step-list i {
+    margin-bottom: 12px;
+  }
+
   .guide-support {
     align-items: flex-start;
     gap: 14px;
