@@ -80,6 +80,7 @@ def test_empty_period_does_not_block_generation(authenticated_client: TestClient
 def test_generation_with_excess_people_succeeds_with_no_assignment_events(
     authenticated_client: TestClient,
 ) -> None:
+    authenticated_client.app.state.settings.scheduler_time_limit_seconds = 30
     authenticated_client.app.state.job_dispatcher.start()
     team = authenticated_client.get("/api/v1/bootstrap").json()["team"]
     absences = [
