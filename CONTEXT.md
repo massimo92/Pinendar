@@ -130,7 +130,7 @@ Actividad clínica añadida manualmente fuera de la demanda diaria ordinaria. Pu
 _Avoid_: Nueva agenda, cobertura extra, peonada
 
 **Peonada**:
-Marca de una asignación clínica demandada que identifica trabajo extraordinario por encima de la jornada ordinaria del 100%. Solo se aplica mediante edición manual posterior al generador y no convierte la asignación en una plaza extraordinaria. Si una reasignación cambia el reparto diario, las marcas afectadas se eliminan y se definen de nuevo solo para las personas que continúan por encima del 100%.
+Marca de una asignación clínica demandada que identifica trabajo extraordinario por encima de la jornada ordinaria del 100%. Puede definirse manualmente o en una regla fija «Debe hacer todas»; en este último caso el generador reserva la plaza y crea el evento automáticamente. No convierte la asignación en una plaza extraordinaria. Si una reasignación manual cambia el reparto diario, las marcas afectadas se eliminan y se definen de nuevo solo para las personas que continúan por encima del 100%.
 _Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 
 **Asignación diferida**:

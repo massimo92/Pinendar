@@ -265,7 +265,7 @@ def build_problem(
             absences.append(item)
             known_absences.add(key)
     return ScheduleProblem(
-        schema_version=10,
+        schema_version=11,
         planning_revision=state["planningRevision"],
         start_month=payload["startMonth"],
         end_month=payload["endMonth"],

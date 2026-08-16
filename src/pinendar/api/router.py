@@ -117,6 +117,7 @@ class FixedRuleRequest(BaseModel):
     required_mode: Literal["all", "one"] = Field(default="all", alias="requiredMode")
     required_agenda_ids: list[str] = Field(default_factory=list, alias="requiredAgendaIds")
     forbidden_agenda_ids: list[str] = Field(default_factory=list, alias="forbiddenAgendaIds")
+    peonada_agenda_ids: list[str] = Field(default_factory=list, alias="peonadaAgendaIds")
     legacy_type: str | None = Field(default=None, alias="type", exclude=True)
 
     @model_validator(mode="after")

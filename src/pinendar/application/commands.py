@@ -21,6 +21,7 @@ from pinendar.application.state import (
     uid,
 )
 from pinendar.domain.fairness import operational_fairness_score, operational_person_distances
+from pinendar.domain.fixed_rules import fixed_rule_load_error
 from pinendar.infrastructure.catalog import HospitalCatalog
 from pinendar.infrastructure.models import (
     Absence,
@@ -193,6 +194,7 @@ def validate_member_payload(session: Session, payload: dict[str, Any], member_id
         required_mode = rule.get("requiredMode", "all")
         required_ids = list(dict.fromkeys(rule.get("requiredAgendaIds", [])))
         forbidden_ids = list(dict.fromkeys(rule.get("forbiddenAgendaIds", [])))
+        peonada_ids = list(dict.fromkeys(rule.get("peonadaAgendaIds", [])))
         referenced_ids = set(required_ids) | set(forbidden_ids)
         if (
             required_mode not in {"all", "one"}
@@ -253,25 +255,26 @@ def validate_member_payload(session: Session, payload: dict[str, Any], member_id
             required_occurrences[agenda_id] = (
                 set(range(1, 6)) if coverage > 0 else recurrence_ordinals
             )
-        if required_mode == "all" and max(
-            (
-                sum(
-                    active_agendas[agenda_id].load_percentage
-                    for agenda_id in required_ids
-                    if ordinal in required_occurrences[agenda_id]
-                )
-                for ordinal in range(1, 6)
-            ),
-            default=0,
-        ) > 100:
+        load_error = fixed_rule_load_error(
+            required_mode=required_mode,
+            required_ids=required_ids,
+            peonada_ids=peonada_ids,
+            occurrences=required_occurrences,
+            loads={
+                agenda_id: active_agendas[agenda_id].load_percentage
+                for agenda_id in required_ids
+            },
+        )
+        if load_error:
             raise DomainError(
                 "FIXED_RULE_LOAD",
-                "Les agendes obligatòries superen el 100% de càrrega diària",
+                load_error,
                 field="fixedRules",
             )
         rule["requiredMode"] = required_mode
         rule["requiredAgendaIds"] = required_ids
         rule["forbiddenAgendaIds"] = forbidden_ids
+        rule["peonadaAgendaIds"] = peonada_ids
 def save_member(session: Session, payload: dict[str, Any], member_id: str | None = None) -> dict[str, Any]:
     validate_member_payload(session, payload, member_id)
     pattern_weeks = payload["workPattern"]["weeks"]
@@ -341,6 +344,7 @@ def save_member(session: Session, payload: dict[str, Any], member_id: str | None
                     rule_id=fixed_rule.id,
                     agenda_id=agenda_id,
                     effect="required",
+                    peonada=agenda_id in set(rule["peonadaAgendaIds"]),
                 )
             )
         for agenda_id in rule["forbiddenAgendaIds"]:
@@ -462,6 +466,15 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                     )
                 )
             )
+            peonada_ids = list(
+                session.scalars(
+                    select(FixedRuleAgenda.agenda_id).where(
+                        FixedRuleAgenda.rule_id == rule.id,
+                        FixedRuleAgenda.effect == "required",
+                        FixedRuleAgenda.peonada.is_(True),
+                    )
+                )
+            )
             demand_occurrences: list[set[int]] = []
             telematic_available: list[bool] = []
             required_loads: list[int] = []
@@ -509,22 +522,14 @@ def save_agenda(session: Session, payload: dict[str, Any], agenda_id: str | None
                 if rule.required_mode == "all"
                 else any(demand_occurrences)
             )
-            max_required_load = max(
-                (
-                    sum(
-                        load
-                        for occurrences, load in zip(
-                            demand_occurrences, required_loads, strict=True
-                        )
-                        if ordinal in occurrences
-                    )
-                    for ordinal in range(1, 6)
-                ),
-                default=0,
+            load_error = fixed_rule_load_error(
+                required_mode=rule.required_mode,
+                required_ids=required_ids,
+                peonada_ids=peonada_ids,
+                occurrences=dict(zip(required_ids, demand_occurrences, strict=True)),
+                loads=dict(zip(required_ids, required_loads, strict=True)),
             )
-            if not demand_valid or (
-                rule.required_mode == "all" and max_required_load > 100
-            ):
+            if not demand_valid or load_error:
                 conflicting_rules[rule.id] = (rule, member)
             tele_day = session.scalar(
                 select(MemberTeleDay.id)

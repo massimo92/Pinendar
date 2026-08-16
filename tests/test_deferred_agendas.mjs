@@ -82,7 +82,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=93/,
+  /calendar\.css\?v=96/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 

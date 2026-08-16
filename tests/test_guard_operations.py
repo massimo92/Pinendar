@@ -8,6 +8,8 @@ from pinendar.infrastructure.models import (
     AgendaRecurrence,
     Assignment,
     Coverage,
+    FixedRule,
+    FixedRuleAgenda,
     Guard,
     GuardTransfer,
     Member,
@@ -144,6 +146,62 @@ def test_external_guard_cession_repairs_base_before_extra_and_records_history(
         assert transfer
         assert transfer.from_member_id is None
         assert transfer.to_member_id == "guard-owner"
+
+
+def test_guard_repair_preserves_fixed_peonada_outside_ordinary_capacity(
+    authenticated_client: TestClient,
+) -> None:
+    fixture = _guard_fixture(authenticated_client)
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.add(Coverage(agenda_id="guard-extra", weekday=2, slots=1))
+        session.add(
+            FixedRule(
+                id="fixed-peonada-rule",
+                member_id="guard-backup",
+                weekday=2,
+                required_mode="all",
+            )
+        )
+        session.add_all(
+            [
+                FixedRuleAgenda(
+                    rule_id="fixed-peonada-rule",
+                    agenda_id="guard-base",
+                    effect="required",
+                ),
+                FixedRuleAgenda(
+                    rule_id="fixed-peonada-rule",
+                    agenda_id="guard-extra",
+                    effect="required",
+                    peonada=True,
+                ),
+            ]
+        )
+
+    response = authenticated_client.post(
+        "/api/v1/guard-cessions",
+        json={
+            "date": "2026-08-10",
+            "toMemberId": "guard-owner",
+            "expectedRevision": int(fixture["revision"]),
+        },
+    )
+
+    assert response.status_code == 201
+    with database.session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(Assignment).where(
+                    Assignment.date == date(2026, 8, 11),
+                    Assignment.member_id == "guard-backup",
+                )
+            )
+        )
+        assert {(row.agenda_id, row.peonada, row.fixed) for row in rows} == {
+            ("guard-base", False, True),
+            ("guard-extra", True, True),
+        }
 
 
 def test_exchange_with_exterior_removes_internal_guard_without_a_new_date(

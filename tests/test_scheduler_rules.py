@@ -957,6 +957,89 @@ def test_personal_fixed_all_requires_every_partial_agenda() -> None:
     assert all(item["fixed"] for item in monday)
 
 
+def test_fixed_peonada_reserves_demand_without_using_ordinary_capacity() -> None:
+    agendas = [
+        agenda("ordinary", priority=1, telematic=False),
+        agenda("extra", priority=1, telematic=True),
+    ]
+    team = [
+        member(
+            "member-1",
+            ["ordinary", "extra"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": ["ordinary", "extra"],
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": ["extra"],
+                }
+            ],
+        )
+    ]
+
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"ordinary": 1, "extra": 1}},
+        schema_version=11,
+    )
+    result = CpSatScheduler().solve(schedule_problem)
+
+    monday = [item for item in result.assignments if item["date"] == "2027-01-04"]
+    assert result.outcome == "solution"
+    assert {item["type"] for item in monday} == {"ordinary", "extra"}
+    assert next(item for item in monday if item["type"] == "ordinary").get("peonada") is None
+    assert next(item for item in monday if item["type"] == "extra")["peonada"] is True
+    assert all(item["fixed"] for item in monday)
+    assert not result.vacancies
+    assert validate_solution(schedule_problem, result.to_dict()) == []
+    assert result.metrics["telematicBalance"]["percentageByMember"]["member-1"] == 0
+
+
+def test_fixed_peonada_only_materializes_on_overloaded_recurrence() -> None:
+    agendas = [
+        agenda("ordinary", priority=1),
+        agenda(
+            "monthly-extra",
+            priority=1,
+            telematic=True,
+            recurrences=[{"ordinal": 1, "weekday": 1, "slots": 1}],
+        ),
+    ]
+    team = [
+        member(
+            "member-1",
+            ["ordinary", "monthly-extra"],
+            fixed=[
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": ["ordinary", "monthly-extra"],
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": ["monthly-extra"],
+                }
+            ],
+        )
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"ordinary": 1}},
+            schema_version=11,
+        )
+    )
+
+    monday_events = [item for item in result.assignments if item["date"].endswith(("04", "11", "18", "25"))]
+    extra_events = [item for item in monday_events if item["type"] == "monthly-extra"]
+    assert result.outcome == "solution"
+    assert len(extra_events) == 1
+    assert extra_events[0]["date"] == "2027-01-04"
+    assert extra_events[0]["peonada"] is True
+
+
 def test_personal_fixed_one_requires_exactly_one_alternative() -> None:
     agendas = [agenda("a", priority=1), agenda("b", priority=1)]
     team = [

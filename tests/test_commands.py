@@ -447,7 +447,7 @@ def test_generation_problem_collects_historical_telematic_days_without_double_co
             {"startMonth": "2099-01", "endMonth": "2099-01", "guards": [], "absences": []},
         )
 
-    assert schedule_problem.schema_version == 10
+    assert schedule_problem.schema_version == 11
     assert schedule_problem.historical_assigned_days[member_id] == 4
     assert schedule_problem.historical_telematic_days[member_id] == 2
 
@@ -522,6 +522,7 @@ def test_updating_a_profile_persists_a_valid_fixed_rule(authenticated_client: Te
             "requiredMode": "all",
             "requiredAgendaIds": [agenda_id],
             "forbiddenAgendaIds": [],
+            "peonadaAgendaIds": [],
         }
     ]
     reloaded = authenticated_client.get("/api/v1/bootstrap").json()
@@ -567,6 +568,7 @@ def test_fixed_rule_accepts_an_agenda_with_monthly_demand_on_that_weekday(
         "requiredMode": "all",
         "requiredAgendaIds": [agenda["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
 
 
@@ -613,6 +615,100 @@ def test_fixed_all_accepts_full_monthly_agendas_that_never_coincide(
     )
 
     assert response.status_code == 201
+
+
+def test_fixed_all_persists_explicit_peonada_above_full_ordinary_load(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    hospital_id = state["hospitals"][0]["catalogId"]
+    agenda_ids: list[str] = []
+    for suffix in ("ordinària", "peonada"):
+        response = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": f"Regla {suffix}",
+                "hospitalId": hospital_id,
+                "telematic": False,
+                "shift": "morning",
+                "priority": 3,
+                "loadPercentage": 100,
+                "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+                "recurrences": [],
+            },
+        )
+        assert response.status_code == 201
+        agenda_ids.append(response.json()["id"])
+
+    response = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Peonada fixa",
+            "email": "peonada-fixa@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": agenda_ids,
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": agenda_ids,
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": [agenda_ids[1]],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["fixedRules"][0]["peonadaAgendaIds"] == [agenda_ids[1]]
+
+
+def test_fixed_all_rejects_overload_without_an_exact_peonada_split(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    agenda_ids = []
+    for index in range(2):
+        agenda_response = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": f"Sobrecàrrega {index}",
+                "hospitalId": state["hospitals"][0]["catalogId"],
+                "telematic": False,
+                "shift": "morning",
+                "priority": 3,
+                "loadPercentage": 100,
+                "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+                "recurrences": [],
+            },
+        )
+        agenda_ids.append(agenda_response.json()["id"])
+
+    response = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Sobrecàrrega invàlida",
+            "email": "sobrecarga-invalida@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": agenda_ids,
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": agenda_ids,
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": [],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "FIXED_RULE_LOAD"
 
 
 def test_same_fixed_rule_is_a_personal_guarantee_for_each_member(
@@ -685,6 +781,7 @@ def test_fixed_personal_guarantees_can_be_saved_despite_shared_capacity(
         "requiredMode": "all",
         "requiredAgendaIds": [agenda["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
     first = authenticated_client.post(
         "/api/v1/members",
@@ -756,6 +853,7 @@ def test_member_persists_all_one_and_forbidden_fixed_conditions(
         "requiredMode": "one",
         "requiredAgendaIds": [half_a["id"], half_b["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
 
 

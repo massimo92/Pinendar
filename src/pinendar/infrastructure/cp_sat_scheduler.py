@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from ortools.sat.python import cp_model
 
+from pinendar.domain.fixed_rules import partition_fixed_rule_load
 from pinendar.domain.scheduler import (
     ScheduleProblem,
     ScheduleResult,
@@ -21,7 +22,7 @@ from pinendar.domain.scheduler import (
 )
 from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 
-MODEL_VERSION = "27"
+MODEL_VERSION = "28"
 ORTOOLS_VERSION = version("ortools")
 
 
@@ -193,7 +194,7 @@ def _daily_demand(problem: ScheduleProblem, planning_dates: list[date]) -> dict[
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -303,6 +304,83 @@ class CpSatScheduler:
             if item.get("deferredOriginDate") and item.get("type") not in {"management", "no_assignment"}
         )
         guard_keys = _guard_keys(problem)
+        fixed_peonada_reservations: set[tuple[str, date, str]] = set()
+        reserved_coverage: Counter[tuple[date, str]] = Counter()
+        for member_id, member in members.items():
+            allowed = set(member.get("allowedTypes", []))
+            for rule in member.get("fixedRules", []):
+                peonada_ids = set(rule.get("peonadaAgendaIds", []))
+                if not peonada_ids:
+                    continue
+                required_ids = list(dict.fromkeys(rule.get("requiredAgendaIds", [])))
+                if (
+                    rule.get("requiredMode", "all") != "all"
+                    or not peonada_ids.issubset(required_ids)
+                    or not set(required_ids).issubset(agendas)
+                    or not set(required_ids).issubset(allowed)
+                ):
+                    return _failure(
+                        "FIXED_RULE_CONFLICT",
+                        "Una regla fixa de peonada no és vàlida",
+                        details={"memberId": member_id, "weekday": rule.get("weekday")},
+                    )
+                for value in planning_dates:
+                    if (
+                        value.isoweekday() != int(rule["weekday"])
+                        or member_id not in planifiable.get(value, [])
+                    ):
+                        continue
+                    active_required = [
+                        agenda_id
+                        for agenda_id in required_ids
+                        if demand.get((value, agenda_id), 0) > 0
+                    ]
+                    partition = partition_fixed_rule_load(
+                        active_required,
+                        peonada_ids,
+                        agenda_load,
+                    )
+                    if partition.total_load <= 100:
+                        continue
+                    ordinary_load = sum(agenda_load[item] for item in partition.ordinary_ids)
+                    peonada_load = sum(agenda_load[item] for item in partition.peonada_ids)
+                    if (
+                        partition.total_load > 200
+                        or ordinary_load != 100
+                        or peonada_load != partition.total_load - 100
+                    ):
+                        return _failure(
+                            "FIXED_RULE_CONFLICT",
+                            "La distribució de càrrega ordinària i peonada no és vàlida",
+                            details={"memberId": member_id, "date": value.isoformat()},
+                        )
+                    for agenda_id in partition.peonada_ids:
+                        reservation_key = (member_id, value, agenda_id)
+                        locked_reservation = locked_by_key.get(reservation_key)
+                        if locked_reservation and not locked_reservation.get("peonada"):
+                            return _failure(
+                                "LOCKED_ASSIGNMENT_CONFLICT",
+                                "Una assignació manual coincideix amb una peonada fixa",
+                                details={
+                                    "memberId": member_id,
+                                    "date": value.isoformat(),
+                                    "agendaId": agenda_id,
+                                },
+                            )
+                        fixed_peonada_reservations.add(reservation_key)
+                        reserved_coverage[(value, agenda_id)] += 1
+        for (value, agenda_id), reserved_count in reserved_coverage.items():
+            if reserved_count > demand[(value, agenda_id)]:
+                return _failure(
+                    "FIXED_RULE_CAPACITY",
+                    "No hi ha prou places per complir les peonades fixes",
+                    details={
+                        "date": value.isoformat(),
+                        "agendaId": agenda_id,
+                        "required": reserved_count,
+                        "available": demand[(value, agenda_id)],
+                    },
+                )
 
         for value, member_ids in planifiable.items():
             for member_id in member_ids:
@@ -312,6 +390,7 @@ class CpSatScheduler:
                     agenda_id
                     for agenda_id in agendas
                     if agenda_id in allowed
+                    and (member_id, value, agenda_id) not in fixed_peonada_reservations
                     and (
                         demand[(value, agenda_id)] > 0
                         or agenda_id in locked_types_by_day.get((member_id, value), set())
@@ -353,6 +432,8 @@ class CpSatScheduler:
                     "Una assignació manual ja no és compatible amb la disponibilitat",
                     details={"id": item.get("id"), "memberId": member_id, "date": value.isoformat()},
                 )
+            if (member_id, value, event_type) in fixed_peonada_reservations:
+                continue
             locked_variable: cp_model.IntVar | None
             if event_type == "no_assignment":
                 locked_variable = unassigned.get((member_id, value))
@@ -388,7 +469,13 @@ class CpSatScheduler:
                         "deferredOriginDate"
                     )
                 ]
-                model.add(sum(covered) + variable + preserved_deferred[(value, agenda_id)] == amount)
+                model.add(
+                    sum(covered)
+                    + variable
+                    + preserved_deferred[(value, agenda_id)]
+                    + reserved_coverage[(value, agenda_id)]
+                    == amount
+                )
 
         legacy_rule_groups: dict[tuple[int, str], list[str]] = defaultdict(list)
         personal_rules: list[tuple[str, dict[str, Any]]] = []
@@ -462,12 +549,17 @@ class CpSatScheduler:
                 if value.isoweekday() != weekday or member_id not in planifiable.get(value, []):
                     continue
                 active_required = [agenda_id for agenda_id in required_ids if demand.get((value, agenda_id), 0) > 0]
+                ordinary_required = [
+                    agenda_id
+                    for agenda_id in active_required
+                    if (member_id, value, agenda_id) not in fixed_peonada_reservations
+                ]
                 required_variables = [
                     assignments[(member_id, value, agenda_id)]
-                    for agenda_id in active_required
+                    for agenda_id in ordinary_required
                     if (member_id, value, agenda_id) in assignments
                 ]
-                if required_mode == "all" and len(required_variables) != len(active_required):
+                if required_mode == "all" and len(required_variables) != len(ordinary_required):
                     return _failure(
                         "FIXED_RULE_CONFLICT",
                         "Una agenda obligatòria no és compatible amb la persona",
@@ -477,14 +569,14 @@ class CpSatScheduler:
                         },
                     )
                 if required_mode == "all":
-                    for agenda_id, variable in zip(active_required, required_variables, strict=True):
+                    for agenda_id, variable in zip(ordinary_required, required_variables, strict=True):
                         model.add(variable == 1)
                         fixed_assignments.add((member_id, value, agenda_id))
                 elif required_variables:
                     model.add(sum(required_variables) == 1)
                     fixed_assignments.update(
                         (member_id, value, agenda_id)
-                        for agenda_id in active_required
+                        for agenda_id in ordinary_required
                         if (member_id, value, agenda_id) in assignments
                     )
                 elif active_required:
@@ -662,6 +754,14 @@ class CpSatScheduler:
             key=lambda item: (item[1], member_order.get(item[0], -1)),
         ):
             if member_id not in members or member_id not in planifiable.get(value, []):
+                continue
+            if any(
+                person_id == member_id
+                and assignment_date == value
+                and not bool(agendas[agenda_id].get("telematic", False))
+                for person_id, assignment_date, agenda_id in fixed_peonada_reservations
+            ):
+                guard_without_onsite.append(0)
                 continue
             onsite_variables = [
                 variable
@@ -920,10 +1020,18 @@ class CpSatScheduler:
                         and assignment_date == value
                         and not bool(agendas[agenda_id].get("telematic", False))
                     ]
+                    reserved_onsite = any(
+                        person_id == member_id
+                        and assignment_date == value
+                        and not bool(agendas[agenda_id].get("telematic", False))
+                        for person_id, assignment_date, agenda_id in fixed_peonada_reservations
+                    )
                     onsite_day = model.new_bool_var(
                         f"onsite_day_p{member_order[member_id]}_d{date_order[value]}"
                     )
-                    if onsite_variables:
+                    if reserved_onsite:
+                        model.add(onsite_day == 1)
+                    elif onsite_variables:
                         model.add_max_equality(onsite_day, onsite_variables)
                     else:
                         model.add(onsite_day == 0)
@@ -1043,7 +1151,7 @@ class CpSatScheduler:
             for member_id in members
         }
         maximum_profile_totals = {
-            member_id: 2 * sum(member_id in planifiable[value] for value in planning_dates)
+            member_id: 4 * sum(member_id in planifiable[value] for value in planning_dates)
             + historical_totals[member_id]
             for member_id in members
         }
@@ -1062,6 +1170,11 @@ class CpSatScheduler:
                     variable * agenda_load_units[agenda_id]
                     for (origin, deferred_agenda_id, target, person_id), variable in deferred_assignments.items()
                     if person_id == member_id and deferred_agenda_id == agenda_id
+                )
+                new_count += sum(
+                    agenda_load_units[agenda_id]
+                    for person_id, _value, reserved_agenda_id in fixed_peonada_reservations
+                    if person_id == member_id and reserved_agenda_id == agenda_id
                 )
                 profile_counts[(member_id, agenda_id)] = (
                     int(problem.historical_counts.get(member_id, {}).get(agenda_id, 0)) + new_count
@@ -1224,6 +1337,22 @@ class CpSatScheduler:
             return _failure("SCHEDULER_ERROR", "El planificador no ha retornat cap solució", outcome="unknown")
 
         result_assignments: list[dict[str, Any]] = []
+        result_assignments.extend(
+            {
+                "id": locked_by_key.get((member_id, value, agenda_id), {}).get("id") or uuid4().hex,
+                "date": value.isoformat(),
+                "memberId": member_id,
+                "type": agenda_id,
+                "fixed": True,
+                "peonada": True,
+                **{
+                    key: locked_by_key[(member_id, value, agenda_id)][key]
+                    for key in ("locked", "extra", "deferredOriginDate", "manuallyModified")
+                    if key in locked_by_key.get((member_id, value, agenda_id), {})
+                },
+            }
+            for member_id, value, agenda_id in fixed_peonada_reservations
+        )
         for (member_id, value, agenda_id), variable in assignments.items():
             if last_solver.value(variable) != 1:
                 continue
@@ -2078,6 +2207,8 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
         if _is_planifiable(member, value, problem)
     }
     actual_load: Counter[tuple[str, str]] = Counter()
+    ordinary_load: Counter[tuple[str, str]] = Counter()
+    peonada_load: Counter[tuple[str, str]] = Counter()
     assigned_types: dict[tuple[str, str], set[str]] = defaultdict(set)
     assignment_keys: Counter[tuple[str, str, str]] = Counter()
     covered: Counter[tuple[str, str]] = Counter()
@@ -2093,13 +2224,20 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
             assignment_keys[(member_id, value, agenda_id)] += 1
             if agenda_id == "no_assignment":
                 actual_load[(member_id, value)] += 100
+                ordinary_load[(member_id, value)] += 100
             elif agenda_id == "management":
                 actual_load[(member_id, value)] += 100
+                ordinary_load[(member_id, value)] += 100
                 management_counts[(member_id, value[:7])] += 1
                 iso_year, iso_week, _ = date.fromisoformat(value).isocalendar()
                 management_week_counts[(member_id, value[:7], iso_year, iso_week)] += 1
             elif agenda_id in agendas:
-                actual_load[(member_id, value)] += int(agendas[agenda_id].get("loadPercentage", 100))
+                load = int(agendas[agenda_id].get("loadPercentage", 100))
+                actual_load[(member_id, value)] += load
+                if item.get("peonada"):
+                    peonada_load[(member_id, value)] += load
+                else:
+                    ordinary_load[(member_id, value)] += load
         if (member_id, value) not in expected:
             errors.append(f"unexpected assignment {member_id}:{value}")
         if agenda_id == "management" and int(members.get(member_id, {}).get("managementQuota", 0)) <= 0:
@@ -2120,8 +2258,14 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
         if agenda_id not in {"no_assignment", "management"}:
             coverage_date = item.get("deferredOriginDate") or value
             covered[(coverage_date, agenda_id)] += 1
-    if set(actual_load) != expected or any(value not in {50, 100} for value in actual_load.values()):
-        errors.append("daily assignment load is not 50 or 100 percent")
+    if set(actual_load) != expected:
+        errors.append("missing daily assignment load")
+    for load_key, total in actual_load.items():
+        extra = peonada_load[load_key]
+        if (extra and (ordinary_load[load_key] != 100 or total > 200)) or (
+            not extra and total not in {50, 100}
+        ):
+            errors.append(f"invalid ordinary/peonada load {load_key[0]}:{load_key[1]}")
     if any(value > 1 for value in assignment_keys.values()):
         errors.append("duplicate agenda assignment for person and date")
     for (member_id, month), count in management_counts.items():
@@ -2170,6 +2314,23 @@ def validate_solution(problem: ScheduleProblem, result: dict[str, Any]) -> list[
                 errors.append(f"personal fixed one mismatch {member_id}:{key}")
             if any(agenda_id in assigned for agenda_id in forbidden_ids):
                 errors.append(f"personal fixed forbidden mismatch {member_id}:{key}")
+            configured_peonada = set(rule.get("peonadaAgendaIds", []))
+            if configured_peonada and rule.get("requiredMode", "all") == "all":
+                active_load = sum(
+                    int(agendas[agenda_id].get("loadPercentage", 100))
+                    for agenda_id in active_required
+                )
+                for agenda_id in active_required:
+                    matching = [
+                        item
+                        for item in result.get("assignments", [])
+                        if item.get("memberId") == member_id
+                        and item.get("date") == key
+                        and item.get("type") == agenda_id
+                    ]
+                    expected_peonada = active_load > 100 and agenda_id in configured_peonada
+                    if matching and bool(matching[0].get("peonada")) != expected_peonada:
+                        errors.append(f"personal fixed peonada mismatch {member_id}:{key}:{agenda_id}")
     vacancy_counts = Counter((item.get("date"), item.get("type")) for item in result.get("vacancies", []))
     valid_demand_keys = {(value.isoformat(), agenda_id) for value, agenda_id in demand}
     for demand_key in set(covered) | set(vacancy_counts):

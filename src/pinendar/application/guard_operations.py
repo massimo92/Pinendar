@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pinendar.application.state import DomainError, bump_revision, uid
+from pinendar.domain.fixed_rules import partition_fixed_rule_load
 from pinendar.domain.scheduler import matches_recurrence
 from pinendar.infrastructure.models import (
     Absence,
@@ -382,6 +383,53 @@ def _repair_date(
         and (row.extra or row.deferred_origin_date)
     }
 
+    fixed_peonada: set[tuple[str, str]] = set()
+    reserved_coverage: Counter[str] = Counter()
+    applicable_rules = list(
+        session.scalars(
+            select(FixedRule).where(FixedRule.weekday == value.isoweekday())
+        )
+    )
+    rule_links: dict[str, list[FixedRuleAgenda]] = {
+        rule.id: list(
+            session.scalars(
+                select(FixedRuleAgenda).where(FixedRuleAgenda.rule_id == rule.id)
+            )
+        )
+        for rule in applicable_rules
+    }
+    for rule in applicable_rules:
+        if rule.member_id not in planifiable or rule.required_mode != "all":
+            continue
+        links = rule_links[rule.id]
+        required_ids = [
+            link.agenda_id
+            for link in links
+            if link.effect == "required" and demand.get(link.agenda_id, 0) > 0
+        ]
+        partition = partition_fixed_rule_load(
+            required_ids,
+            {link.agenda_id for link in links if link.peonada},
+            {agenda_id: agenda.load_percentage for agenda_id, agenda in agendas.items()},
+        )
+        if partition.total_load <= 100:
+            continue
+        ordinary_load = sum(agendas[item].load_percentage for item in partition.ordinary_ids)
+        peonada_load = sum(agendas[item].load_percentage for item in partition.peonada_ids)
+        if ordinary_load != 100 or peonada_load != partition.total_load - 100:
+            raise DomainError(
+                "FIXED_RULE_CONFLICT",
+                "La regla fixa de peonada no té una distribució de càrrega vàlida",
+            )
+        for agenda_id in partition.peonada_ids:
+            fixed_peonada.add((rule.member_id, agenda_id))
+            reserved_coverage[agenda_id] += 1
+    if any(reserved_coverage[agenda_id] > demand[agenda_id] for agenda_id in reserved_coverage):
+        raise DomainError(
+            "FIXED_RULE_CAPACITY",
+            "No hi ha prou places per complir les peonades fixes",
+        )
+
     model = cp_model.CpModel()
     ordinary: dict[tuple[str, str], cp_model.IntVar] = {}
     extra: dict[str, cp_model.IntVar] = {}
@@ -397,6 +445,7 @@ def _repair_date(
             for agenda_id, agenda in agendas.items()
             if demand[agenda_id] > 0
             and agenda_id in capabilities[member_id]
+            and (member_id, agenda_id) not in fixed_peonada
             and (not telework or agenda.telematic)
         ]
         for agenda_id in candidates:
@@ -452,6 +501,7 @@ def _repair_date(
                 if candidate_id == agenda_id
             )
             + vacancy[agenda_id]
+            + reserved_coverage[agenda_id]
             == amount
         )
         model.add(vacancy[agenda_id] == amount).only_enforce_if(uncovered[agenda_id])
@@ -460,23 +510,16 @@ def _repair_date(
         )
 
     fixed_keys: set[tuple[str, str]] = set()
-    for rule in session.scalars(
-        select(FixedRule).where(FixedRule.weekday == value.isoweekday())
-    ):
+    for rule in applicable_rules:
         if rule.member_id not in planifiable:
             continue
-        links = list(
-            session.scalars(
-                select(FixedRuleAgenda).where(
-                    FixedRuleAgenda.rule_id == rule.id
-                )
-            )
-        )
+        links = rule_links[rule.id]
         required_variables = [
             ordinary[(rule.member_id, link.agenda_id)]
             for link in links
             if link.effect == "required"
             and demand.get(link.agenda_id, 0) > 0
+            and (rule.member_id, link.agenda_id) not in fixed_peonada
             and (rule.member_id, link.agenda_id) in ordinary
         ]
         if rule.required_mode == "all":
@@ -489,6 +532,7 @@ def _repair_date(
             for link in links
             if link.effect == "required"
             and demand.get(link.agenda_id, 0) > 0
+            and (rule.member_id, link.agenda_id) not in fixed_peonada
             and (rule.member_id, link.agenda_id) in ordinary
         )
         for link in links:
@@ -554,6 +598,21 @@ def _repair_date(
     assert solver is not None
 
     output: list[dict[str, Any]] = []
+    for member_id, agenda_id in fixed_peonada:
+        previous = old_by_key.get((member_id, agenda_id))
+        output.append(
+            {
+                "id": previous.id if previous else uid(),
+                "memberId": member_id,
+                "agendaId": agenda_id,
+                "kind": "assigned",
+                "locked": previous.locked if previous else True,
+                "fixed": True,
+                "extra": False,
+                "peonada": True,
+                "management": False,
+            }
+        )
     for (member_id, agenda_id), variable in ordinary.items():
         if solver.value(variable) != 1:
             continue
@@ -568,6 +627,7 @@ def _repair_date(
                 "fixed": (previous.fixed if previous else False)
                 or (member_id, agenda_id) in fixed_keys,
                 "extra": False,
+                "peonada": False,
                 "management": False,
             }
         )
@@ -583,6 +643,7 @@ def _repair_date(
                     "locked": row.locked,
                     "fixed": False,
                     "extra": row.extra,
+                    "peonada": row.peonada,
                     "deferredOriginDate": (
                         row.deferred_origin_date.isoformat()
                         if row.deferred_origin_date
@@ -603,6 +664,7 @@ def _repair_date(
                     "locked": row.locked,
                     "fixed": False,
                     "extra": False,
+                    "peonada": False,
                     "management": True,
                 }
             )
@@ -618,6 +680,7 @@ def _repair_date(
                     "locked": previous.locked if previous else False,
                     "fixed": False,
                     "extra": False,
+                    "peonada": False,
                     "management": False,
                 }
             )
@@ -890,6 +953,7 @@ def apply_guard_operation(
             row.locked = item["locked"]
             row.fixed = item["fixed"]
             row.extra = item["extra"]
+            row.peonada = bool(item.get("peonada"))
             row.deferred_origin_date = (
                 date.fromisoformat(item["deferredOriginDate"])
                 if item.get("deferredOriginDate")
@@ -914,6 +978,7 @@ def apply_guard_operation(
         row.locked = True
         row.fixed = False
         row.extra = False
+        row.peonada = False
         row.management = True
 
     operation_id = uid()

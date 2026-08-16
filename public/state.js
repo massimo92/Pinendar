@@ -49,6 +49,9 @@ export function normalizeBootstrapState(payload) {
       forbiddenAgendaIds: Array.isArray(rule.forbiddenAgendaIds)
         ? [...rule.forbiddenAgendaIds]
         : [],
+      peonadaAgendaIds: Array.isArray(rule.peonadaAgendaIds)
+        ? [...rule.peonadaAgendaIds]
+        : [],
     }));
     member.agendaPreferences = member.agendaPreferences && typeof member.agendaPreferences === 'object' ? member.agendaPreferences : {};
     member.managementQuota = Math.min(5, Math.max(0, Number(member.managementQuota || 0)));

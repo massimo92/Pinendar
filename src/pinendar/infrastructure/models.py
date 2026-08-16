@@ -202,12 +202,14 @@ class FixedRuleAgenda(Base):
     __table_args__ = (
         UniqueConstraint("rule_id", "agenda_id"),
         CheckConstraint("effect IN ('required', 'forbidden')", name="ck_fixed_rule_agendas_effect"),
+        CheckConstraint("peonada = 0 OR effect = 'required'", name="ck_fixed_rule_agendas_peonada_required"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     rule_id: Mapped[str] = mapped_column(ForeignKey("fixed_rules.id", ondelete="CASCADE"), nullable=False)
     agenda_id: Mapped[str] = mapped_column(ForeignKey("agendas.id", ondelete="CASCADE"), nullable=False)
     effect: Mapped[str] = mapped_column(String(9), nullable=False)
+    peonada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Absence(Base):

@@ -1447,7 +1447,7 @@ function fixedRuleAgendaIds(allowed, weekdayValue) {
   });
 }
 function defaultFixedRule(allowed, available) {
-  return { weekday: available[0] || 1, requiredMode: 'all', requiredAgendaIds: [], forbiddenAgendaIds: [] };
+  return { weekday: available[0] || 1, requiredMode: 'all', requiredAgendaIds: [], forbiddenAgendaIds: [], peonadaAgendaIds: [] };
 }
 function fixedRuleAgendaChecks(ids, selected) {
   const selectedIds = new Set(selected);
@@ -1464,6 +1464,39 @@ function fixedRulePickerSummary(row) {
   const count = $$('[name="rule-agenda"]:checked', row).length;
   const summary = $('[data-rule-selection]', row);
   if (summary) summary.textContent = count ? `${count} agenda${count === 1 ? '' : 's'}` : 'Selecciona agendas';
+}
+function fixedRuleOccurrenceLoads(weekday, selected) {
+  return [1, 2, 3, 4, 5].map((ordinal) => {
+    const active = selected.filter((id) => Number(state.coverage[weekday]?.[id] || 0) > 0
+      || agenda(id)?.recurrences?.some((item) => Number(item.weekday) === Number(weekday) && Number(item.ordinal) === ordinal));
+    return { ordinal, active, load: active.reduce((total, id) => total + Number(agenda(id)?.loadPercentage || 100), 0) };
+  });
+}
+function fixedRulePeonadaError(weekday, selected, peonada) {
+  const peonadaIds = new Set(peonada);
+  const occurrenceLoads = fixedRuleOccurrenceLoads(weekday, selected);
+  if (occurrenceLoads.some((item) => item.load > 200)) return 'La càrrega no pot superar el 200%.';
+  for (const occurrence of occurrenceLoads.filter((item) => item.load > 100)) {
+    const ordinaryLoad = occurrence.active.filter((id) => !peonadaIds.has(id)).reduce((total, id) => total + Number(agenda(id)?.loadPercentage || 100), 0);
+    if (ordinaryLoad !== 100) return 'En cada coincidència, la càrrega ordinària ha de sumar exactament 100%.';
+  }
+  return '';
+}
+function fixedRulePeonadaMarkup(weekday, selected, action, peonada = []) {
+  const occurrenceLoads = fixedRuleOccurrenceLoads(weekday, selected);
+  const maxLoad = Math.max(0, ...occurrenceLoads.map((item) => item.load));
+  if (action !== 'all' || maxLoad <= 100) return '<div data-rule-peonada></div>';
+  const peonadaIds = new Set(peonada.filter((id) => selected.includes(id)));
+  const error = fixedRulePeonadaError(weekday, selected, [...peonadaIds]);
+  return `<div class="fixed-rule-peonada" data-rule-peonada><div><b>Càrrega màxima ${maxLoad}%</b><small>Marca les agendes que es facin com a peonada.</small></div><div class="fixed-rule-peonada-options">${selected.map((id) => `<label><input type="checkbox" name="rule-peonada-agenda" value="${esc(id)}" ${peonadaIds.has(id) ? 'checked' : ''}><span>${esc(agenda(id)?.name || id)}</span><div class="fixed-rule-peonada-meta"><small>${Number(agenda(id)?.loadPercentage || 100)}%</small>${peonadaIds.has(id) ? '<em>Peonada</em>' : ''}</div></label>`).join('')}</div>${error ? `<p>${esc(error)}</p>` : ''}</div>`;
+}
+function refreshFixedRulePeonada(row) {
+  const weekday = Number($('[name="rule-weekday"]', row)?.value || 1);
+  const action = $('[name="rule-action"]', row)?.value || 'all';
+  const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
+  const peonada = $$('[name="rule-peonada-agenda"]:checked', row).map((item) => item.value);
+  const container = $('[data-rule-peonada]', row);
+  if (container) container.outerHTML = fixedRulePeonadaMarkup(weekday, selected, action, peonada);
 }
 function refreshFixedRulePicker(row, formElement) {
   const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value);
@@ -1539,14 +1572,16 @@ function fixedRuleRow(rule, allowed, available) {
   const value = rule || defaultFixedRule(allowed, available);
   const action = fixedRuleAction(value);
   const selected = fixedRuleSelectedIds(value, action);
-  return `<article class="fixed-rule-row"><div class="fixed-rule-fields"><select name="rule-weekday" aria-label="Dia de la setmana">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${Number(value.weekday) === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-action" aria-label="Tipus de regla"><option value="all" ${action === 'all' ? 'selected' : ''}>Ha de fer totes</option><option value="one" ${action === 'one' ? 'selected' : ''}>Ha de fer una</option><option value="none" ${action === 'none' ? 'selected' : ''}>No pot fer</option></select><details class="fixed-rule-agenda-picker"><summary><span data-rule-selection>${selected.length ? `${selected.length} agenda${selected.length === 1 ? '' : 's'}` : 'Selecciona agendas'}</span><b>⌄</b></summary><div class="fixed-rule-agenda-menu" data-rule-agendas>${fixedRuleAgendaChecks(allowed, selected)}</div></details>${fixedRuleWarningMarkup(value.weekday, selected, action)}<button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div></article>`;
+  return `<article class="fixed-rule-row"><div class="fixed-rule-fields"><select name="rule-weekday" aria-label="Dia de la setmana">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${Number(value.weekday) === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-action" aria-label="Tipus de regla"><option value="all" ${action === 'all' ? 'selected' : ''}>Ha de fer totes</option><option value="one" ${action === 'one' ? 'selected' : ''}>Ha de fer una</option><option value="none" ${action === 'none' ? 'selected' : ''}>No pot fer</option></select><details class="fixed-rule-agenda-picker"><summary><span data-rule-selection>${selected.length ? `${selected.length} agenda${selected.length === 1 ? '' : 's'}` : 'Selecciona agendas'}</span><b>⌄</b></summary><div class="fixed-rule-agenda-menu" data-rule-agendas>${fixedRuleAgendaChecks(allowed, selected)}</div></details>${fixedRuleWarningMarkup(value.weekday, selected, action)}<button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div>${fixedRulePeonadaMarkup(value.weekday, selected, action, value.peonadaAgendaIds || [])}</article>`;
 }
 function refreshFixedRuleType(row, formElement) {
   refreshFixedRulePicker(row, formElement);
+  refreshFixedRulePeonada(row);
   refreshFixedRuleWarning(row);
 }
 function fixedRuleSummary(rule) {
-  const required = (rule.requiredAgendaIds || []).map((id) => agenda(id)?.name || id);
+  const peonada = new Set(rule.peonadaAgendaIds || []);
+  const required = (rule.requiredAgendaIds || []).map((id) => `${agenda(id)?.name || id}${peonada.has(id) ? ' (P)' : ''}`);
   const forbidden = (rule.forbiddenAgendaIds || []).map((id) => agenda(id)?.name || id);
   const requiredLabel = required.length ? `${rule.requiredMode === 'one' && required.length > 1 ? 'una de ' : ''}${required.join(rule.requiredMode === 'one' ? ' / ' : ' + ')}` : '';
   const forbiddenLabel = forbidden.length ? `no ${forbidden.join(' / ')}` : '';
@@ -2473,7 +2508,8 @@ document.addEventListener('change', async (event) => {
   if (modal?.type === 'member' && event.target.name === 'work-pattern-mode') { syncWorkPatternMode(event.target.closest('form')); return; }
   if (modal?.type === 'member' && (event.target.dataset.patternWorking !== undefined || event.target.dataset.patternTele !== undefined)) { refreshPatternDependentFields(event.target.closest('form')); return; }
   if (modal?.type === 'member' && ['rule-weekday', 'rule-action'].includes(event.target.name)) { const row = event.target.closest('.fixed-rule-row'); refreshFixedRuleType(row, event.target.closest('form')); return; }
-  if (modal?.type === 'member' && event.target.name === 'rule-agenda') { const row = event.target.closest('.fixed-rule-row'); fixedRulePickerSummary(row); refreshFixedRuleWarning(row); return; }
+  if (modal?.type === 'member' && event.target.name === 'rule-agenda') { const row = event.target.closest('.fixed-rule-row'); fixedRulePickerSummary(row); refreshFixedRulePeonada(row); refreshFixedRuleWarning(row); return; }
+  if (modal?.type === 'member' && event.target.name === 'rule-peonada-agenda') { refreshFixedRulePeonada(event.target.closest('.fixed-rule-row')); return; }
   if (modal?.type === 'generation' && event.target.name === 'periodMode') { modal.periodMode = event.target.value; modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
   if (modal?.type === 'generation' && event.target.name === 'generationTimeLimitMinutes') { modal.timeLimitMinutes = Number(event.target.value); return; }
   if (modal?.type === 'generation' && event.target.dataset.monthPart) { const picker = event.target.closest('[data-month-picker]'); const month = $('[data-month-part="month"]', picker).value; const year = $('[data-month-part="year"]', picker).value; const next = `${year}-${month}`; modal.startMonth = next; modal.endMonth = next; modal.startDate = `${next}-01`; modal.endDate = endOfMonth(modal.startDate); modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
@@ -2539,10 +2575,12 @@ async function handleForm(formElement) {
       const fixedRules = $$('.fixed-rule-row', formElement).map((row) => {
         const action = $('[name="rule-action"]', row).value;
         const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
-        return { weekday: Number($('[name="rule-weekday"]', row).value), requiredMode: action === 'one' ? 'one' : 'all', requiredAgendaIds: action === 'none' ? [] : selected, forbiddenAgendaIds: action === 'none' ? selected : [] };
+        return { weekday: Number($('[name="rule-weekday"]', row).value), requiredMode: action === 'one' ? 'one' : 'all', requiredAgendaIds: action === 'none' ? [] : selected, forbiddenAgendaIds: action === 'none' ? selected : [], peonadaAgendaIds: action === 'all' ? $$('[name="rule-peonada-agenda"]:checked', row).map((item) => item.value) : [] };
       });
       if (fixedRules.some((rule) => !rule.requiredAgendaIds.length && !rule.forbiddenAgendaIds.length)) return toast('Cada regla ha de contenir almenys una agenda');
       if (new Set(fixedRules.map((rule) => rule.weekday)).size !== fixedRules.length) return toast('Només hi pot haver una regla per dia');
+      const invalidPeonadaRule = fixedRules.find((rule) => rule.requiredMode === 'all' && fixedRulePeonadaError(rule.weekday, rule.requiredAgendaIds, rule.peonadaAgendaIds));
+      if (invalidPeonadaRule) return toast(fixedRulePeonadaError(invalidPeonadaRule.weekday, invalidPeonadaRule.requiredAgendaIds, invalidPeonadaRule.peonadaAgendaIds));
       const workPattern = collectWorkPattern(formElement); const availableDays = [...new Set(workPattern.weeks.flatMap((week) => week.workingDays))].sort((a, b) => a - b); if (!availableDays.length) return toast('Selecciona almenys un dia de treball');
       const teleDays = [...new Set(workPattern.weeks.flatMap((week) => week.teleDays))].sort((a, b) => a - b);
       const agendaPreferences = Object.fromEntries($$('[data-agenda-preference]', formElement).map((input) => [input.closest('.agenda-capability').querySelector('[name="allowed"]').value, Number(input.value)]).filter(([, value]) => value));

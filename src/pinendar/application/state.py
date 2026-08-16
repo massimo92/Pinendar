@@ -585,7 +585,7 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
     }
     rules = list(session.scalars(select(FixedRule).where(FixedRule.member_id == member.id).order_by(FixedRule.weekday)))
     rule_agendas: dict[str, dict[str, list[str]]] = {
-        rule.id: {"required": [], "forbidden": []} for rule in rules
+        rule.id: {"required": [], "forbidden": [], "peonada": []} for rule in rules
     }
     if rule_agendas:
         for item in session.scalars(
@@ -594,6 +594,8 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
             .order_by(FixedRuleAgenda.id)
         ):
             rule_agendas[item.rule_id][item.effect].append(item.agenda_id)
+            if item.peonada:
+                rule_agendas[item.rule_id]["peonada"].append(item.agenda_id)
     absences = list(session.scalars(select(Absence).where(Absence.member_id == member.id).order_by(Absence.start)))
     vacation_dates: list[str] = []
     for absence in absences:
@@ -629,6 +631,7 @@ def serialize_member(session: Session, member: Member) -> dict[str, Any]:
                 "requiredMode": item.required_mode,
                 "requiredAgendaIds": rule_agendas[item.id]["required"],
                 "forbiddenAgendaIds": rule_agendas[item.id]["forbidden"],
+                "peonadaAgendaIds": rule_agendas[item.id]["peonada"],
             }
             for item in rules
         ],
