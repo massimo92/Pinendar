@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -98,6 +98,24 @@ def test_exchange_fairness_excludes_each_person_from_their_reference() -> None:
     assert baseline == (4500, 9000)
     assert projected == (3000, 6000)
     assert _fairness_result(baseline, projected)["fairnessEffect"] == "improves"
+
+
+def test_change_fairness_renormalizes_shared_agendas_around_exclusive_work() -> None:
+    context = {
+        "memberIds": ["specialist", "peer"],
+        "agendaIds": ["exclusive", "shared-a", "shared-b"],
+        "loads": {"exclusive": 1.0, "shared-a": 1.0, "shared-b": 1.0},
+        "counts": {
+            "specialist": {"exclusive": 10.0, "shared-a": 8.0, "shared-b": 2.0},
+            "peer": {"exclusive": 0.0, "shared-a": 16.0, "shared-b": 4.0},
+        },
+        "capabilities": {
+            "specialist": {"exclusive", "shared-a", "shared-b"},
+            "peer": {"shared-a", "shared-b"},
+        },
+    }
+
+    assert _projected_fairness_score(context, []) == (0, 0)
 
 
 def same_load_agendas(state: dict) -> tuple[dict, dict]:
@@ -352,6 +370,88 @@ def test_member_status_is_tracked_and_inactive_member_is_not_planned(authenticat
     assert member["id"] not in {item["id"] for item in problem.team}
 
 
+def test_generation_problem_collects_historical_telematic_days_without_double_counting_range(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    member_id = state["team"][0]["id"]
+    telematic_agenda = next(item for item in state["agendas"] if item["telematic"])
+    onsite_agenda = next(item for item in state["agendas"] if not item["telematic"])
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="historical-tele",
+                    date=date(2098, 12, 1),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="historical-onsite",
+                    date=date(2098, 12, 2),
+                    member_id=member_id,
+                    agenda_id=onsite_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="historical-management",
+                    date=date(2098, 12, 3),
+                    member_id=member_id,
+                    agenda_id=None,
+                    kind="management",
+                    load_percentage=100,
+                    management=True,
+                ),
+                Assignment(
+                    id="historical-mixed-tele",
+                    date=date(2098, 12, 4),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=50,
+                ),
+                Assignment(
+                    id="historical-mixed-onsite",
+                    date=date(2098, 12, 4),
+                    member_id=member_id,
+                    agenda_id=onsite_agenda["id"],
+                    kind="assigned",
+                    load_percentage=50,
+                ),
+                Assignment(
+                    id="historical-unassigned",
+                    date=date(2098, 12, 5),
+                    member_id=member_id,
+                    agenda_id=None,
+                    kind="no_assignment",
+                    load_percentage=0,
+                ),
+                Assignment(
+                    id="replacement-range-tele",
+                    date=date(2099, 1, 4),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+            ]
+        )
+    with database.session_factory() as session:
+        schedule_problem = build_problem(
+            session,
+            authenticated_client.app.state.catalog,
+            {"startMonth": "2099-01", "endMonth": "2099-01", "guards": [], "absences": []},
+        )
+
+    assert schedule_problem.schema_version == 11
+    assert schedule_problem.historical_assigned_days[member_id] == 4
+    assert schedule_problem.historical_telematic_days[member_id] == 2
+
+
 def test_member_vacations_are_saved_and_past_days_are_immutable(authenticated_client: TestClient) -> None:
     member = authenticated_client.get("/api/v1/bootstrap").json()["team"][0]
     today = madrid_today()
@@ -422,6 +522,7 @@ def test_updating_a_profile_persists_a_valid_fixed_rule(authenticated_client: Te
             "requiredMode": "all",
             "requiredAgendaIds": [agenda_id],
             "forbiddenAgendaIds": [],
+            "peonadaAgendaIds": [],
         }
     ]
     reloaded = authenticated_client.get("/api/v1/bootstrap").json()
@@ -467,6 +568,7 @@ def test_fixed_rule_accepts_an_agenda_with_monthly_demand_on_that_weekday(
         "requiredMode": "all",
         "requiredAgendaIds": [agenda["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
 
 
@@ -513,6 +615,100 @@ def test_fixed_all_accepts_full_monthly_agendas_that_never_coincide(
     )
 
     assert response.status_code == 201
+
+
+def test_fixed_all_persists_explicit_peonada_above_full_ordinary_load(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    hospital_id = state["hospitals"][0]["catalogId"]
+    agenda_ids: list[str] = []
+    for suffix in ("ordinària", "peonada"):
+        response = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": f"Regla {suffix}",
+                "hospitalId": hospital_id,
+                "telematic": False,
+                "shift": "morning",
+                "priority": 3,
+                "loadPercentage": 100,
+                "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+                "recurrences": [],
+            },
+        )
+        assert response.status_code == 201
+        agenda_ids.append(response.json()["id"])
+
+    response = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Peonada fixa",
+            "email": "peonada-fixa@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": agenda_ids,
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": agenda_ids,
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": [agenda_ids[1]],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["fixedRules"][0]["peonadaAgendaIds"] == [agenda_ids[1]]
+
+
+def test_fixed_all_rejects_overload_without_an_exact_peonada_split(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    agenda_ids = []
+    for index in range(2):
+        agenda_response = authenticated_client.post(
+            "/api/v1/agendas",
+            json={
+                "name": f"Sobrecàrrega {index}",
+                "hospitalId": state["hospitals"][0]["catalogId"],
+                "telematic": False,
+                "shift": "morning",
+                "priority": 3,
+                "loadPercentage": 100,
+                "coverage": {"1": 1, "2": 0, "3": 0, "4": 0, "5": 0},
+                "recurrences": [],
+            },
+        )
+        agenda_ids.append(agenda_response.json()["id"])
+
+    response = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "Sobrecàrrega invàlida",
+            "email": "sobrecarga-invalida@hospital.test",
+            "availableDays": [1],
+            "teleDays": [],
+            "allowedTypes": agenda_ids,
+            "managementQuota": 0,
+            "fixedRules": [
+                {
+                    "weekday": 1,
+                    "requiredMode": "all",
+                    "requiredAgendaIds": agenda_ids,
+                    "forbiddenAgendaIds": [],
+                    "peonadaAgendaIds": [],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "FIXED_RULE_LOAD"
 
 
 def test_same_fixed_rule_is_a_personal_guarantee_for_each_member(
@@ -585,6 +781,7 @@ def test_fixed_personal_guarantees_can_be_saved_despite_shared_capacity(
         "requiredMode": "all",
         "requiredAgendaIds": [agenda["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
     first = authenticated_client.post(
         "/api/v1/members",
@@ -656,6 +853,7 @@ def test_member_persists_all_one_and_forbidden_fixed_conditions(
         "requiredMode": "one",
         "requiredAgendaIds": [half_a["id"], half_b["id"]],
         "forbiddenAgendaIds": [],
+        "peonadaAgendaIds": [],
     }
 
 

@@ -7,12 +7,20 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 import pinendar.application.jobs as jobs_module
 from pinendar.application.jobs import JobDispatcher, enqueue_job
 from pinendar.application.state import DomainError, job_payload
-from pinendar.infrastructure.models import AppSettings, Assignment, GenerationJob, Guard
+from pinendar.infrastructure.models import (
+    AgendaRecurrence,
+    AppSettings,
+    Assignment,
+    Coverage,
+    GenerationJob,
+    Guard,
+    Member,
+)
 
 
 def wait_for_job(client: TestClient, job_id: str) -> dict:
@@ -75,28 +83,27 @@ def test_generation_with_excess_people_succeeds_with_no_assignment_events(
     authenticated_client: TestClient,
 ) -> None:
     authenticated_client.app.state.job_dispatcher.start()
-    team = authenticated_client.get("/api/v1/bootstrap").json()["team"]
-    absences = [
-        {
-            "memberId": team[0]["id"],
-            "start": "2027-01-01",
-            "end": "2027-01-31",
-        },
-        *[
-            {
-                "memberId": team[1]["id"],
-                "start": value,
-                "end": value,
-            }
-            for value in ("2027-01-01", "2027-01-08", "2027-01-15", "2027-01-22", "2027-01-29")
-        ],
-    ]
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.execute(delete(AgendaRecurrence))
+        session.execute(delete(Coverage))
+        session.execute(update(Member).values(management_quota=0))
+        settings = session.get(AppSettings, 1)
+        assert settings is not None
+        settings.planning_revision += 1
     first = authenticated_client.post(
         "/api/v1/generation-jobs",
-        json={"startMonth": "2027-01", "endMonth": "2027-01", "guards": [], "absences": absences},
+        json={
+            "startMonth": "2027-01",
+            "endMonth": "2027-01",
+            "startDate": "2027-01-04",
+            "endDate": "2027-01-04",
+            "guards": [],
+            "absences": [],
+        },
     )
     first_job = wait_for_job(authenticated_client, first.json()["id"])
-    assert first_job["status"] == "succeeded", first_job
+    assert first_job["status"] == "succeeded", first_job.get("error")
     january = [
         item["id"]
         for item in authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
@@ -104,12 +111,19 @@ def test_generation_with_excess_people_succeeds_with_no_assignment_events(
 
     second = authenticated_client.post(
         "/api/v1/generation-jobs",
-        json={"startMonth": "2027-02", "endMonth": "2027-02", "guards": [], "absences": []},
+        json={
+            "startMonth": "2027-02",
+            "endMonth": "2027-02",
+            "startDate": "2027-02-01",
+            "endDate": "2027-02-01",
+            "guards": [],
+            "absences": [],
+        },
     )
     completed = wait_for_job(authenticated_client, second.json()["id"])
     events = authenticated_client.get("/api/v1/bootstrap").json()["calendar"]["events"]
 
-    assert completed["status"] == "succeeded"
+    assert completed["status"] == "succeeded", completed.get("error")
     assert set(january).issubset({item["id"] for item in events})
     assert any(item["type"] == "no_assignment" for item in events)
     assert any(item["date"].startswith("2027-02") for item in events)
@@ -434,6 +448,7 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
 
     assert response.status_code == 202
     assert response.json()["optimizationMode"] == "fairness"
+    assert response.json()["timeLimitSeconds"] == 20
     database = authenticated_client.app.state.database
     with database.session_factory() as session:
         stored = session.get(GenerationJob, response.json()["id"])
@@ -451,6 +466,127 @@ def test_generation_job_only_accepts_fairness_optimization_mode(
         },
     )
     assert invalid.status_code == 422
+
+
+def test_generation_job_accepts_a_user_time_limit_between_one_and_thirty_minutes(
+    authenticated_client: TestClient,
+) -> None:
+    response = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={
+            "startMonth": "2029-04",
+            "endMonth": "2029-04",
+            "guards": [],
+            "absences": [],
+            "timeLimitMinutes": 30,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["timeLimitSeconds"] == 1800
+    database = authenticated_client.app.state.database
+    with database.session_factory() as session:
+        stored = session.get(GenerationJob, response.json()["id"])
+        snapshot = json.loads(stored.input_snapshot)
+    assert snapshot["solver_config"]["timeLimitSeconds"] == 1800
+
+    for invalid_minutes in (0, 31):
+        invalid = authenticated_client.post(
+            "/api/v1/generation-jobs",
+            json={
+                "startMonth": "2029-05",
+                "endMonth": "2029-05",
+                "guards": [],
+                "absences": [],
+                "timeLimitMinutes": invalid_minutes,
+            },
+        )
+        assert invalid.status_code == 422
+
+
+def test_successful_first_generation_consumes_new_member_equity_exception(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    template = state["team"][0]
+    created = authenticated_client.post(
+        "/api/v1/members",
+        json={
+            "name": "New Generation Member",
+            "email": "new-generation@hospital.test",
+            "workPattern": template["workPattern"],
+            "allowedTypes": template["allowedTypes"],
+            "managementQuota": 0,
+            "fixedRules": [],
+        },
+    )
+    assert created.status_code == 201
+    member_id = created.json()["id"]
+    database = authenticated_client.app.state.database
+    with database.session_factory() as session:
+        member_row = session.get(Member, member_id)
+        assert member_row is not None
+        assert member_row.has_completed_generation is False
+
+    authenticated_client.app.state.job_dispatcher.start()
+    queued = authenticated_client.post(
+        "/api/v1/generation-jobs",
+        json={
+            "startMonth": "2027-01",
+            "endMonth": "2027-01",
+            "startDate": "2027-01-02",
+            "endDate": "2027-01-02",
+            "guards": [],
+            "absences": [],
+        },
+    )
+    assert queued.status_code == 202
+    with database.session_factory() as session:
+        stored = session.get(GenerationJob, queued.json()["id"])
+        assert stored is not None
+        snapshot = json.loads(stored.input_snapshot)
+        assert snapshot["first_generation_member_ids"] == [member_id]
+
+    completed = wait_for_job(authenticated_client, queued.json()["id"])
+
+    assert completed["status"] == "succeeded"
+    with database.session_factory() as session:
+        member_row = session.get(Member, member_id)
+        assert member_row is not None
+        assert member_row.has_completed_generation is True
+
+
+def test_failed_generation_does_not_consume_new_member_equity_exception(
+    client: TestClient,
+) -> None:
+    database = client.app.state.database
+    with database.session_factory.begin() as session:
+        member_row = session.scalar(select(Member).limit(1))
+        assert member_row is not None
+        member_row.has_completed_generation = False
+    job = enqueue_job(
+        database,
+        client.app.state.catalog,
+        {
+            "startMonth": "2029-05",
+            "endMonth": "2029-05",
+            "guards": [],
+            "absences": [],
+        },
+    )
+
+    JobDispatcher(database, process_pool=False)._complete(
+        job["id"],
+        {
+            "outcome": "infeasible",
+            "error": {"code": "TEST_FAILURE", "message": "expected"},
+        },
+    )
+
+    with database.session_factory() as session:
+        member_row = session.scalar(select(Member).limit(1))
+        assert member_row is not None
+        assert member_row.has_completed_generation is False
 
 
 def test_guard_before_period_creates_post_guard_absence(authenticated_client: TestClient) -> None:

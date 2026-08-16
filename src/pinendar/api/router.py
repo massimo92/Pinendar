@@ -39,6 +39,8 @@ from pinendar.application.commands import (
 )
 from pinendar.application.deferred_operations import (
     apply_deferred_vacancy,
+    apply_direct_deferred_vacancy,
+    deferred_member_options,
     deferred_vacancy_options,
 )
 from pinendar.application.guard_imports import (
@@ -115,6 +117,7 @@ class FixedRuleRequest(BaseModel):
     required_mode: Literal["all", "one"] = Field(default="all", alias="requiredMode")
     required_agenda_ids: list[str] = Field(default_factory=list, alias="requiredAgendaIds")
     forbidden_agenda_ids: list[str] = Field(default_factory=list, alias="forbiddenAgendaIds")
+    peonada_agenda_ids: list[str] = Field(default_factory=list, alias="peonadaAgendaIds")
     legacy_type: str | None = Field(default=None, alias="type", exclude=True)
 
     @model_validator(mode="after")
@@ -218,6 +221,7 @@ class VacancyAssignmentRequest(BaseModel):
 
 class DeferredVacancyRequest(BaseModel):
     target_date: date = Field(alias="targetDate")
+    target_member_id: str | None = Field(default=None, alias="targetMemberId")
     expected_revision: int | None = Field(default=None, alias="expectedRevision")
 
 
@@ -269,6 +273,7 @@ class GenerationRequest(BaseModel):
     locked_assignments: list[dict[str, Any]] = Field(default=[], alias="lockedAssignments")
     replace_existing: bool = Field(default=False, alias="replaceExisting")
     optimization_mode: Literal["fairness"] = Field(default="fairness", alias="optimizationMode")
+    time_limit_minutes: int | None = Field(default=None, alias="timeLimitMinutes", ge=1, le=30)
 
 
 class GuardImportRowRequest(BaseModel):
@@ -847,6 +852,14 @@ def defer_calendar_vacancy(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory.begin() as database_session:
+        if payload.target_member_id:
+            return apply_direct_deferred_vacancy(
+                database_session,
+                vacancy_id,
+                payload.target_date,
+                payload.target_member_id,
+                expected_revision=payload.expected_revision,
+            )
         return apply_deferred_vacancy(
             database_session,
             vacancy_id,
@@ -916,7 +929,13 @@ def member_extra_assignment_options(
     request: Request,
 ) -> dict[str, Any]:
     with request.state.database.session_factory() as database_session:
-        return extra_assignment_options(database_session, member_id, assignment_date)
+        result = extra_assignment_options(database_session, member_id, assignment_date)
+        deferred = deferred_member_options(database_session, member_id, assignment_date)
+        return {
+            **result,
+            "deferredOptions": deferred["options"],
+            "planningRevision": deferred["planningRevision"],
+        }
 
 
 @router.post(
@@ -1023,12 +1042,17 @@ def get_fairness(request: Request) -> dict[str, Any]:
 @router.post("/api/v1/generation-jobs", dependencies=[Depends(require_auth)], status_code=status.HTTP_202_ACCEPTED)
 def create_generation_job(payload: GenerationRequest, request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
+    time_limit_seconds = (
+        payload.time_limit_minutes * 60
+        if payload.time_limit_minutes is not None
+        else settings.scheduler_time_limit_seconds
+    )
     job = enqueue_job(
         request.state.database,
         request.app.state.catalog,
         command_payload(payload),
         {
-            "timeLimitSeconds": settings.scheduler_time_limit_seconds,
+            "timeLimitSeconds": time_limit_seconds,
             "workers": settings.scheduler_workers,
             "randomSeed": settings.scheduler_random_seed,
             "optimizationMode": payload.optimization_mode,

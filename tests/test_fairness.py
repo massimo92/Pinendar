@@ -43,6 +43,8 @@ def test_fairness_averages_person_profiles_without_tenure_weight(authenticated_c
     people = {item["memberId"]: item for item in body["people"]}
     assert people[first["id"]]["agendaPercentages"][agenda_a["id"]] == 0.6
     assert people[second["id"]]["agendaPercentages"][agenda_a["id"]] == 0.2
+    assert people[first["id"]]["averageDistanceBasisPoints"] == 4000
+    assert people[second["id"]]["averageDistanceBasisPoints"] == 4000
     assert people[first["id"]]["total"] == 10
     assert people[first["id"]]["managementDays"] == 1
     assert people[first["id"]]["activityCounts"]["management"] == 1

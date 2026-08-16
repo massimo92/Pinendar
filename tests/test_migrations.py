@@ -42,6 +42,25 @@ def test_multiple_guard_migration_preserves_rows_and_changes_the_unique_key(
     command.upgrade(config, "p6e10f4a5b23")
     with sqlite3.connect(database) as connection:
         connection.execute(
+            """
+            INSERT INTO members (
+                id, name, normalized_name, email, normalized_email, color,
+                management_quota, is_active, work_pattern_weeks
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "member-a",
+                "Existing Member",
+                "existing member",
+                "existing@hospital.test",
+                "existing@hospital.test",
+                "blue",
+                0,
+                1,
+                1,
+            ),
+        )
+        connection.execute(
             "INSERT INTO guards (id, generation_job_id, member_id, date) VALUES (?, NULL, ?, ?)",
             ("existing-guard", "member-a", "2027-01-04"),
         )
@@ -52,6 +71,9 @@ def test_multiple_guard_migration_preserves_rows_and_changes_the_unique_key(
         assert connection.execute(
             "SELECT id, member_id, date FROM guards"
         ).fetchall() == [("existing-guard", "member-a", "2027-01-04")]
+        assert connection.execute(
+            "SELECT has_completed_generation FROM members WHERE id = 'member-a'"
+        ).fetchone() == (1,)
         connection.execute(
             "INSERT INTO guards (id, generation_job_id, member_id, date) VALUES (?, NULL, ?, ?)",
             ("second-guard", "member-b", "2027-01-04"),

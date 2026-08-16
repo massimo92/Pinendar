@@ -59,7 +59,7 @@ Una asignación manual bloqueada se conserva como regla dura al regenerar su per
 7. Después se minimizan las personas planificables completamente sin actividad.
 8. La equidad clínica minimiza primero la peor distancia personal y después la distancia total, pudiendo reorganizar todo el mes.
 9. Finalmente se prefiere Gestión en viernes, después lunes y después el resto de días.
-10. La equidad compara el perfil porcentual por agenda de cada persona con la media no ponderada de los perfiles comparables. Usa todo el histórico conservado, sin reinicio anual.
+10. La equidad compara únicamente agendas compartibles. El perfil de cada persona y su referencia de compañeros capacitados se renormalizan sobre esas agendas, y la distancia personal es la variación total entre ambas distribuciones. Una agenda sin otro compañero capacitado no interviene ni directa ni indirectamente en la equidad operativa. Usa todo el histórico conservado, sin reinicio anual.
 
 ## Prioridades y equidad
 
@@ -72,7 +72,7 @@ La prioridad interviene en la generación con este orden:
 
 Gestión se sitúa entre la prioridad muy alta y la alta. Por tanto, nunca desplaza cobertura muy alta, pero puede dejar vacante una agenda alta, moderada o baja si no existe otra forma de completar su cuota. Antes de aceptar ese cierre, el optimizador puede mover Gestión a otra fecha y reasignar las agendas del mes completo.
 
-El generador compara, por agenda, el porcentaje del perfil de cada persona con la media no ponderada de las personas comparables. Primero minimiza la peor distancia personal y después la distancia conjunta. Usa todo el histórico conservado. Los miembros archivados no entran en nuevas asignaciones ni en la equidad actual, pero conservan sus registros pasados.
+El generador usa la misma equidad operativa que las operaciones manuales: para cada persona conserva solo las agendas que puede compartir con al menos otro miembro capacitado, renormaliza tanto su perfil como la referencia de esos compañeros sobre ese conjunto y calcula su distancia de variación total. Primero minimiza la peor distancia personal y después la distancia conjunta. Usa todo el histórico conservado. En la primera generación de un miembro nuevo, un histórico sin carga clínica comparable representa la distancia máxima; las agendas propuestas en esa misma generación permiten recalcular y reducir la distancia con la fórmula normal. La excepción se consume únicamente cuando la generación termina correctamente. Los miembros archivados no entran en nuevas asignaciones ni en la equidad actual, pero conservan sus registros pasados.
 
 Las preferencias por agenda usan +1 para corazón, −1 para pulgar abajo y 0 cuando no hay reacción. Pueden conservarse para análisis, pero no intervienen en la generación. Gestión tampoco forma parte del perfil de equidad ni del índice de felicidad.
 
@@ -81,8 +81,9 @@ Las preferencias por agenda usan +1 para corazón, −1 para pulgar abajo y 0 cu
 1. Configurar equipo, cobertura, festivos, guardias, vacaciones y reglas.
 2. Generar un mes y revisar cobertura, vacantes resaltadas en rojo, personas sin agenda en violeta, agendas parciales en naranja y estadísticas de equidad. Las vistas de día, semana y mes muestran indicadores diarios; los KPIs del periodo visible cuentan vacantes y días-persona sin agenda. Día y semana agrupan los eventos por hospital y muestran turno y carga, también en las vacantes, sin repetir el hospital dentro de cada tarjeta. En el mes, las asignaciones muestran solo el nombre de la persona y se identifican por el color de agenda. Las tarjetas de día y semana colocan turno y carga junto al nombre de la agenda. El desplegable de edición agrupa las opciones por hospital y no repite el hospital dentro de cada opción. Estadísticas añade una señal de capacidad sobre las últimas ocho semanas: exige al menos cuatro, distingue presión puntual de déficit estructural probable por volumen, persistencia y concentración, y solo habla de holgura probable cuando no hay vacantes y persisten días-persona sin asignar.
 3. Ajustar manualmente el calendario:
-   - Si la persona ya tiene una agenda, intercambiar de forma atómica su asignación con otra persona compatible del mismo día y carga. Las opciones se ordenan por mejora de equidad. Una asignación fija solo puede cambiarse entrando directamente en ella y confirmando un aviso previo; nunca aparece como destino desde otra persona. La excepción afecta únicamente al evento y conserva la regla recurrente del perfil.
+   - Si la persona ya tiene una agenda, intercambiar de forma atómica su asignación con otra persona compatible del mismo día y carga. Las opciones se ordenan con la misma equidad operativa que utiliza el generador. Una asignación fija solo puede cambiarse entrando directamente en ella y confirmando un aviso previo; nunca aparece como destino desde otra persona. La excepción afecta únicamente al evento y conserva la regla recurrente del perfil.
    - Si la persona no tiene actividad, abrir y asignarle una plaza extraordinaria compatible con su perfil y las reglas duras. Esta plaza cuenta en carga, histórico y equidad, pero no altera la demanda ordinaria ni sus vacantes.
+   Intercambios, cesiones, coberturas de vacante, actividades extraordinarias y propuestas diferidas calculan y ordenan su impacto con esa misma fórmula de equidad operativa.
    Ambos cambios quedan bloqueados y se conservan si se regenera ese periodo.
 4. Generar el periodo siguiente. Los eventos anteriores siguen vigentes y visibles.
 5. Exportar el periodo completo o filtrado por médico como XLSX, CSV e ICS de día completo, con el correo del médico como asistente.
@@ -95,7 +96,7 @@ Si un periodo ya contiene eventos o vacantes, la aplicación muestra las cantida
 - **Equipo**: perfiles, estado activo auditado, patrones de trabajo semanales o alternantes, capacidades, gestión, reglas, vacaciones y archivo.
 - **Agendas**: hospital, modalidad, prioridad, cobertura semanal y reglas especiales recurrentes.
 - **Guardias y festivos**: formularios simples y listado.
-- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, señal prudente de capacidad de plantilla y gráfico acumulado con selector entre equidad/felicidad y resolución diaria/mensual.
+- **Equidad e histórico**: composición de todos los eventos vigentes por actividad planificada, equilibrio clínico por persona y agenda, porcentaje de carga clínica asignada directamente por reglas fijas, señal prudente de capacidad de plantilla y gráfico acumulado con selector entre equidad/felicidad y resolución diaria/mensual. El porcentaje pondera la carga de cada agenda y excluye Gestión y los días sin asignación.
 - **Ajustes**: idioma, hospitales y festivos.
 - **Guía de uso**: explicación no técnica del flujo, las reglas, los criterios de reparto, los avisos y los cambios manuales.
 

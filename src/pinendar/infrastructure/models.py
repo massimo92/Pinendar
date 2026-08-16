@@ -109,6 +109,9 @@ class Member(Base):
     color: Mapped[str] = mapped_column(String, nullable=False)
     management_quota: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    has_completed_generation: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     work_pattern_weeks: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     archived_at: Mapped[date | None] = mapped_column(Date)
 
@@ -199,12 +202,14 @@ class FixedRuleAgenda(Base):
     __table_args__ = (
         UniqueConstraint("rule_id", "agenda_id"),
         CheckConstraint("effect IN ('required', 'forbidden')", name="ck_fixed_rule_agendas_effect"),
+        CheckConstraint("peonada = 0 OR effect = 'required'", name="ck_fixed_rule_agendas_peonada_required"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     rule_id: Mapped[str] = mapped_column(ForeignKey("fixed_rules.id", ondelete="CASCADE"), nullable=False)
     agenda_id: Mapped[str] = mapped_column(ForeignKey("agendas.id", ondelete="CASCADE"), nullable=False)
     effect: Mapped[str] = mapped_column(String(9), nullable=False)
+    peonada: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Absence(Base):

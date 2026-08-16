@@ -1,10 +1,11 @@
 import { api, waitForGeneration } from './api.js?v=14';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
-import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName } from './activity-utils.mjs?v=8';
+import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=13';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
+import { clampGenerationTimeLimit } from './generation-utils.mjs?v=2';
 const DAYS = ['Dilluns', 'Dimarts', 'Dimecres', 'Dijous', 'Divendres'];
 const DAYS_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv'];
 const WEEK_SHORT = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv', 'Ds', 'Dg'];
@@ -56,7 +57,7 @@ const ES_TEXT = {
   'Sense festius afegits.': 'Sin festivos añadidos.', 'Es mostraran directament al calendari principal.': 'Se mostrarán directamente en el calendario principal.',
   'Índex global d’equilibri': 'Índice global de equilibrio', 'Agenda més desviada': 'Agenda más desviada', 'Dins del marge ±20%': 'Dentro del margen ±20%',
   'Equilibri d’una persona': 'Equilibrio de una persona', 'Equilibri entre persones': 'Equilibrio entre personas', 'Per sota': 'Por debajo', 'Esperat': 'Esperado', 'Per sobre': 'Por encima',
-  'Teletreball': 'Teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
+  'Teletreball': 'Teletrabajo', '% de dies en teletreball': '% de días en teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
   'Períodes registrats': 'Períodos registrados', 'Calendari': 'Calendario', 'Històric': 'Histórico', 'Còpia JSON': 'Copia JSON',
   'Color automàtic': 'Color automático', 'Pastel per distingir persones': 'Pastel para distinguir personas', 'Saturat per distingir agendes': 'Saturado para distinguir agendas',
   'Nou color aleatori': 'Nuevo color aleatorio', 'Nom i cognoms': 'Nombre y apellidos', 'Correu': 'Correo', 'Dies disponibles': 'Días disponibles',
@@ -400,7 +401,7 @@ function header(title, subtitle, actions = '') {
 
 const NAV_PAGES = new Set(['calendar', 'guards', 'team', 'agendas', 'setup', 'history', 'guide']);
 const CALENDAR_VIEWS = new Set(['day', 'week', 'month']);
-const CALENDAR_ISSUE_FILTERS = new Set(['vacancy', 'unassigned', 'partial']);
+const CALENDAR_ISSUE_FILTERS = new Set(['vacancy', 'unassigned', 'deferred', 'peonada', 'partial']);
 function syncNavigationUrl(method = 'replace') {
   if (!window.history?.[`${method}State`]) return;
   const url = new URL(window.location.href);
@@ -458,12 +459,16 @@ function calendarIssueRange() {
 }
 
 function calendarIssueSummary() {
-  const summary = { vacancies: 0, unassigned: 0, people: new Set() };
+  const summary = { vacancies: 0, unassigned: 0, deferred: 0, peonada: 0, people: new Set() };
   calendarIssueRange().forEach((key) => {
     const incidents = calendarIncidents(key);
     summary.vacancies += incidents.vacancies.length;
     summary.unassigned += incidents.unassignedMemberIds.size;
     incidents.unassignedMemberIds.forEach((memberId) => summary.people.add(memberId));
+    calendarEvents().filter((item) => item.date === key).forEach((item) => {
+      if (item.deferredOriginDate) summary.deferred += 1;
+      if (item.peonada) summary.peonada += 1;
+    });
   });
   return { ...summary, people: summary.people.size };
 }
@@ -477,9 +482,17 @@ function calendarKpis() {
     ? (state.language === 'es' ? 'día-persona sin agenda' : 'dia-persona sense agenda')
     : (state.language === 'es' ? 'días-persona sin agenda' : 'dies-persona sense agenda');
   const peopleLabel = summary.people === 1 ? 'persona' : (state.language === 'es' ? 'personas' : 'persones');
+  const deferredLabel = summary.deferred === 1
+    ? (state.language === 'es' ? 'agenda diferida' : 'agenda diferida')
+    : (state.language === 'es' ? 'agendas diferidas' : 'agendes diferides');
+  const peonadaLabel = summary.peonada === 1
+    ? 'peonada'
+    : (state.language === 'es' ? 'peonadas' : 'peonades');
   return `<section class="calendar-kpis" aria-label="${state.language === 'es' ? 'Incidencias del periodo visible' : 'Incidències del període visible'}">
     <button type="button" class="calendar-kpi vacancy ${selectedCalendarIssueFilters.has('vacancy') ? 'active' : ''}" data-calendar-issue-filter="vacancy" aria-pressed="${selectedCalendarIssueFilters.has('vacancy')}"><i aria-hidden="true">!</i><span><b>${summary.vacancies}</b><small>${vacancyLabel}</small></span></button>
     <button type="button" class="calendar-kpi unassigned ${selectedCalendarIssueFilters.has('unassigned') ? 'active' : ''}" data-calendar-issue-filter="unassigned" aria-pressed="${selectedCalendarIssueFilters.has('unassigned')}"><i aria-hidden="true">−</i><span><b>${summary.unassigned}</b><small>${unassignedLabel} · ${summary.people} ${peopleLabel}</small></span></button>
+    <button type="button" class="calendar-kpi deferred ${selectedCalendarIssueFilters.has('deferred') ? 'active' : ''}" data-calendar-issue-filter="deferred" aria-pressed="${selectedCalendarIssueFilters.has('deferred')}"><i aria-hidden="true">D</i><span><b>${summary.deferred}</b><small>${deferredLabel}</small></span></button>
+    <button type="button" class="calendar-kpi peonada ${selectedCalendarIssueFilters.has('peonada') ? 'active' : ''}" data-calendar-issue-filter="peonada" aria-pressed="${selectedCalendarIssueFilters.has('peonada')}"><i aria-hidden="true">P</i><span><b>${summary.peonada}</b><small>${peonadaLabel}</small></span></button>
   </section>`;
 }
 function calendarTitle() {
@@ -599,7 +612,7 @@ function calendarCell(key) {
       : '';
     const deferredMarker = item.deferredOriginDate ? `<i class="calendar-deferred-marker" title="${esc(deferredLabel)}" aria-label="${esc(deferredLabel)}">D</i>` : '';
     const compactMeta = unassigned ? '' : `<i class="calendar-event-compact-meta">${compactActivityMeta(meta)}</i>`;
-    const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''} ${item.deferredOriginDate ? 'deferred' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}${deferredLabel ? ` · ${esc(deferredLabel)}` : ''}"><b>${deferredMarker}${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${deferredLabel ? `<i class="calendar-deferred-origin">${esc(deferredLabel)}</i>` : ''}${compactMeta}</span></button>`;
+    const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''} ${item.deferredOriginDate ? 'deferred' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}${deferredLabel ? ` · ${esc(deferredLabel)}` : ''}"><b>${deferredMarker}${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${compactMeta}</span></button>`;
     return eventEntry(html, hospital);
   };
   const vacancyItems = selectedCalendarIssueFilters.has('vacancy')
@@ -644,6 +657,10 @@ function calendarCell(key) {
     : filteredClinicalItems.filter((item) => incidents.partialMemberIds.has(item.memberId));
   const partialIds = new Set(partialItems.map((item) => item.id));
   const partialEvents = partialItems.map(assignmentEvent);
+  const deferredItems = events.assignments.filter((item) => item.type !== 'no_assignment' && item.deferredOriginDate);
+  const peonadaItems = events.assignments.filter((item) => item.type !== 'no_assignment' && item.peonada);
+  const deferredEvents = deferredItems.map(assignmentEvent);
+  const peonadaEvents = peonadaItems.map(assignmentEvent);
   const assignmentEvents = filteredClinicalItems
     .filter((item) => !partialIds.has(item.id))
     .map(assignmentEvent);
@@ -663,29 +680,22 @@ function calendarCell(key) {
   const badge = (kind, count, shortLabel, longLabel) => count
     ? `<button type="button" class="calendar-incident-badge ${kind} ${selectedCalendarIssueFilters.has(kind) ? 'active' : ''}" data-calendar-issue-filter="${kind}" title="${count} ${longLabel}" aria-label="${count} ${longLabel}" aria-pressed="${selectedCalendarIssueFilters.has(kind)}"><span>${shortLabel}</span><b>${count}</b></button>`
     : '';
-  const vacancyNoun = incidents.vacancies.length === 1
-    ? (state.language === 'es' ? 'agenda sin cubrir' : 'agenda sense cobrir')
-    : (state.language === 'es' ? 'agendas sin cubrir' : 'agendes sense cobrir');
-  const unassignedNoun = incidents.unassignedMemberIds.size === 1
-    ? (state.language === 'es' ? 'persona sin agenda' : 'persona sense agenda')
-    : (state.language === 'es' ? 'personas sin agenda' : 'persones sense agenda');
   const partialNoun = incidents.partialMemberIds.size === 1
     ? (state.language === 'es' ? 'persona con agenda parcial' : 'persona amb agenda parcial')
     : (state.language === 'es' ? 'personas con agenda parcial' : 'persones amb agenda parcial');
-  const incidentBadges = [
-    badge('vacancy', incidents.vacancies.length, 'A!', vacancyNoun),
-    badge('unassigned', incidents.unassignedMemberIds.size, 'P−', unassignedNoun),
-    badge('partial', incidents.partialMemberIds.size, '~', partialNoun),
-  ].join('');
+  const incidentBadges = badge('partial', incidents.partialMemberIds.size, '~', partialNoun);
   const unassignedEvents = [...inferredUnassignedEvents, ...persistedUnassignedEvents];
-  const issueEvents = [...vacancyEvents, ...unassignedEvents, ...partialEvents];
+  const uniqueEventEntries = (entries) => entries.filter((entry, index) => entries.findIndex((item) => item.html === entry.html) === index);
+  const issueEvents = uniqueEventEntries([...vacancyEvents, ...unassignedEvents, ...partialEvents, ...deferredEvents, ...peonadaEvents]);
   const allEvents = selectedCalendarIssueFilters.size
-    ? [
+    ? uniqueEventEntries([
       ...(selectedCalendarIssueFilters.has('vacancy') ? vacancyEvents : []),
       ...(selectedCalendarIssueFilters.has('unassigned') ? unassignedEvents : []),
       ...(selectedCalendarIssueFilters.has('partial') ? partialEvents : []),
-    ]
-    : [...issueEvents, ...absenceEvents, ...assignmentEvents];
+      ...(selectedCalendarIssueFilters.has('deferred') ? deferredEvents : []),
+      ...(selectedCalendarIssueFilters.has('peonada') ? peonadaEvents : []),
+    ])
+    : uniqueEventEntries([...issueEvents, ...absenceEvents, ...assignmentEvents]);
   const baseLimit = calendarView === 'month' ? 5 : allEvents.length;
   const limit = calendarView === 'month' && !selectedCalendarIssueFilters.size
     ? Math.max(baseLimit, issueEvents.length)
@@ -731,7 +741,7 @@ function calendarPage() {
   return `${header('Calendari', hasContent ? `${projectionPeriodLabel(calendarProjection())} · esdeveniments vigents` : 'Sense esdeveniments generats')}
     <div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="export-csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="export-excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="export-ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>
     ${hasContent ? calendarKpis() : ''}
-    <section class="calendar-toolbar card"><div class="calendar-nav"><button class="button ghost small" data-action="calendar-today">Avui</button><button class="icon-button" data-action="calendar-prev" aria-label="Anterior">‹</button><button class="icon-button" data-action="calendar-next" aria-label="Següent">›</button><h2>${calendarTitle()}</h2></div><div class="calendar-controls"><div class="calendar-filters">${calendarMultiFilter('member', 'Persones', selectedMemberFilters, calendarMemberFilterGroups(), 'Tothom')}${calendarMultiFilter('agenda', 'Agendes', selectedAgendaFilters, calendarAgendaFilterGroups(), 'Totes')}</div><div class="view-switch">${[['day', 'Dia'], ['week', 'Setmana'], ['month', 'Mes']].map(([id, label]) => `<button data-calendar-view="${id}" class="${calendarView === id ? 'active' : ''}">${label}</button>`).join('')}</div></div></section>
+    <section class="calendar-toolbar card"><div class="calendar-navigation"><div class="view-switch">${[['day', 'Dia'], ['week', 'Setmana'], ['month', 'Mes']].map(([id, label]) => `<button data-calendar-view="${id}" class="${calendarView === id ? 'active' : ''}">${label}</button>`).join('')}</div><div class="calendar-nav"><button class="button ghost small" data-action="calendar-today">Avui</button><button class="icon-button" data-action="calendar-prev" aria-label="Anterior">‹</button><button class="icon-button" data-action="calendar-next" aria-label="Següent">›</button><h2>${calendarTitle()}</h2></div></div><div class="calendar-controls"><div class="calendar-filters">${calendarMultiFilter('member', 'Persones', selectedMemberFilters, calendarMemberFilterGroups(), 'Tothom')}${calendarMultiFilter('agenda', 'Agendes', selectedAgendaFilters, calendarAgendaFilterGroups(), 'Totes')}</div></div></section>
     <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section><div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>`;
 }
 
@@ -852,10 +862,9 @@ function heatCell(cell) {
   const strength = magnitude >= 0.5 ? 'strong' : magnitude >= 0.25 ? 'medium' : 'soft';
   const actual = Math.round(cell.actualShare * 100);
   const expected = Math.round(cell.expectedShare * 100);
-  const weight = Math.round(cell.historicalWeight * 100);
   const detail = state.language === 'es'
-    ? `Real ${actual}% · media ${expected}% · diferencia ${roundedDeviation}% · peso histórico ${weight}%`
-    : `Real ${actual}% · mitjana ${expected}% · diferència ${roundedDeviation}% · pes històric ${weight}%`;
+    ? `Real ${actual}% · media ${expected}% · diferencia ${roundedDeviation}%`
+    : `Real ${actual}% · mitjana ${expected}% · diferència ${roundedDeviation}%`;
   return `<div class="heat-cell ${direction} ${strength}" title="${detail}" aria-label="${detail}">${roundedDeviation}%</div>`;
 }
 
@@ -868,13 +877,13 @@ function orderedFairnessAgendas(analysis, members) {
     .sort((left, right) => right.valueCount - left.valueCount || left.agenda.name.localeCompare(right.agenda.name, state.language === 'es' ? 'es' : 'ca', { sensitivity: 'base' }))
     .map((entry) => entry.agenda);
 }
-function teleworkBalance(selected, analysis) {
-  const activities = activeActivities();
-  const telematicIds = new Set(activities.filter((item) => item.telematic).map((item) => item.id));
-  const summaryFor = (member) => activities.reduce((summary, item) => { const value = analysis.counts[member.id]?.[item.id] || 0; summary.total += value; if (telematicIds.has(item.id)) summary.telematic += value; return summary; }, { total: 0, telematic: 0 });
-  const teamShares = activeTeam().map(summaryFor).filter((summary) => summary.total).map((summary) => summary.telematic / summary.total);
-  const own = selected ? summaryFor(selected) : { total: 0, telematic: 0 };
-  return { person: own.total ? own.telematic / own.total : null, team: teamShares.length ? teamShares.reduce((sum, value) => sum + value, 0) / teamShares.length : null };
+function teleworkBalance(selected) {
+  return teleworkByWeekdayAnalysis({
+    members: activeTeam(),
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+    selectedMemberId: selected?.id || null,
+  });
 }
 
 function managementSummary() {
@@ -898,7 +907,13 @@ function managementRecipientLabel(summary) {
 }
 function teleworkBar(balance) {
   const personValue = balance.person === null ? null : Math.round(balance.person * 100); const teamValue = balance.team === null ? null : Math.round(balance.team * 100);
-  return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Equip = mitjana real de les persones.</small></section>`;
+  const weekdayLabels = state.language === 'es' ? ['L', 'M', 'X', 'J', 'V'] : DAYS_SHORT;
+  const weekdays = balance.weekdays.map((day, index) => {
+    const person = day.person === null ? null : Math.round(day.person * 100);
+    const team = day.team === null ? null : Math.round(day.team * 100);
+    return `<div class="telework-weekday"><b>${weekdayLabels[index]}</b><div class="telework-weekday-track" aria-label="Persona ${person ?? 0}%, equip ${team ?? 0}%"><i style="width:${person ?? 0}%"></i>${team === null ? '' : `<b class="team" style="left:${team}%" title="Equip ${team}%"></b>`}</div><span><b>${person === null ? '—' : `${person}%`}</b><small>${team === null ? '—' : `${team}%`}</small></span></div>`;
+  }).join('');
+  return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><div class="telework-weekdays"><div class="telework-weekdays-head"><span>% de dies telemàtics</span><span>Persona · Equip</span></div>${weekdays}</div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Un dia amb alguna agenda presencial compta com a presencial. Equip = mitjana real de les persones.</small></section>`;
 }
 function happinessTimeline(resolution = historyResolution) {
   const people = [...state.team, ...(state.archivedTeam || [])];
@@ -1114,6 +1129,10 @@ document.addEventListener('pointerout', (event) => {
 function historyPage() {
   const analysis = fairnessAnalysis();
   const operationalAnalysis = operationalFairnessAnalysis();
+  const fixedRuleActivity = fixedRuleActivityAnalysis({
+    activities: historicalClinicalActivities(),
+    assignments: calendarEvents(),
+  });
   const members = activeTeam();
   const selected = members.find((member) => member.id === historyMemberFilter) || members[0];
   if (selected) historyMemberFilter = selected.id;
@@ -1121,7 +1140,7 @@ function historyPage() {
   const composition = selected && memberTotal
     ? analysis.activities.map((item) => ({ item, share: (analysis.counts[selected.id]?.[item.id] || 0) / memberTotal })).filter((entry) => entry.share > 0).sort((left, right) => right.share - left.share || left.item.name.localeCompare(right.item.name, 'ca'))
     : [];
-  const telework = teleworkBalance(selected, analysis);
+  const telework = teleworkBalance(selected);
   const heatmapAgendas = orderedFairnessAgendas(analysis, members);
   const capacity = workforceCapacitySignal({
     assignments: calendarEvents(),
@@ -1145,14 +1164,14 @@ function historyPage() {
     ? (state.language === 'es' ? 'Evolución de la equidad' : 'Evolució de l’equitat')
     : (state.language === 'es' ? 'Evolución de la felicidad' : 'Evolució de la felicitat');
   const chartDescription = historyMetric === 'equity'
-    ? (state.language === 'es' ? 'Índice acumulado: compara el reparto recibido con la media del equipo y pondera cada agenda por su peso histórico.' : 'Índex acumulat: compara el repartiment rebut amb la mitjana de l’equip i pondera cada agenda pel seu pes històric.')
+    ? (state.language === 'es' ? 'Índice acumulado: compara la distribución recibida con la distribución media del equipo.' : 'Índex acumulat: compara la distribució rebuda amb la distribució mitjana de l’equip.')
     : (state.language === 'es' ? 'Índice acumulado ponderado por carga: ♥ suma, 👎 resta y sin reacción no modifica el resultado.' : 'Índex acumulat ponderat per càrrega: ♥ suma, 👎 resta i sense reacció no modifica el resultat.');
   const chartFootnote = historyMetric === 'equity'
     ? (state.language === 'es' ? 'Cada punto utiliza todo el histórico disponible hasta esa fecha. La media del equipo está resaltada.' : 'Cada punt utilitza tot l’històric disponible fins aquella data. La mitjana de l’equip està ressaltada.')
     : (state.language === 'es' ? 'La serie histórica se recalcula con las preferencias actuales. La media del equipo está resaltada.' : 'La sèrie històrica es recalcula amb les preferències actuals. La mitjana de l’equip està ressaltada.');
   const toggle = (kind, value, label) => `<button type="button" class="${(kind === 'metric' ? historyMetric : historyResolution) === value ? 'active' : ''}" data-history-${kind}="${value}" aria-pressed="${(kind === 'metric' ? historyMetric : historyResolution) === value}">${label}</button>`;
   return `${header('Equitat i històric', 'Desviació respecte al perfil mitjà de l’equip durant l’històric de cada persona', '<button class="button ghost small" data-action="backup">Còpia JSON</button>')}
-    <section class="fairness-stats"><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad estructural' : 'Equitat estructural'}</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? (state.language === 'es' ? 'Genera un período para empezar' : 'Genera un període per començar') : (state.language === 'es' ? 'Similitud histórica ignorando la configuración' : 'Similitud històrica ignorant la configuració')}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad operativa' : 'Equitat operativa'}</span><div class="insight-score-row"><strong>${operationalAnalysis.globalScore === null ? '—' : `${operationalAnalysis.globalScore}/100`}</strong><div class="insight-secondary-score"><span>${state.language === 'es' ? 'Peor persona' : 'Pitjor persona'}</span><b>${operationalAnalysis.worstScore === null ? '—' : `${operationalAnalysis.worstScore}/100`}</b></div></div><small>${state.language === 'es' ? 'Qué tan bien reparte el generador según la configuración actual' : 'Com de bé reparteix el generador segons la configuració actual'}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Capacidad de plantilla' : 'Capacitat de plantilla'}</span><strong>${capacityCopy}</strong><small>${capacityDetails}</small></div></section>
+    <section class="fairness-stats"><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad estructural' : 'Equitat estructural'}</span><strong>${analysis.globalScore === null ? '—' : `${analysis.globalScore}/100`}</strong><small>${analysis.globalScore === null ? (state.language === 'es' ? 'Genera un período para empezar' : 'Genera un període per començar') : (state.language === 'es' ? 'Similitud histórica ignorando la configuración' : 'Similitud històrica ignorant la configuració')}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Equidad operativa' : 'Equitat operativa'}</span><div class="insight-score-row"><strong>${operationalAnalysis.globalScore === null ? '—' : `${operationalAnalysis.globalScore}/100`}</strong><div class="insight-secondary-score"><span>${state.language === 'es' ? 'Peor persona' : 'Pitjor persona'}</span><b>${operationalAnalysis.worstScore === null ? '—' : `${operationalAnalysis.worstScore}/100`}</b></div></div><small>${state.language === 'es' ? 'Qué tan bien reparte el generador según la configuración actual' : 'Com de bé reparteix el generador segons la configuració actual'}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Actividad por reglas fijas' : 'Activitat per regles fixes'}</span><strong>${fixedRuleActivity.percentage === null ? '—' : `${fixedRuleActivity.percentage}%`}</strong><small>${fixedRuleActivity.percentage === null ? (state.language === 'es' ? 'Genera un período para empezar' : 'Genera un període per començar') : (state.language === 'es' ? 'Carga clínica histórica asignada directamente por reglas fijas' : 'Càrrega clínica històrica assignada directament per regles fixes')}</small></div><div class="insight-card card"><span>${state.language === 'es' ? 'Capacidad de plantilla' : 'Capacitat de plantilla'}</span><strong>${capacityCopy}</strong><small>${capacityDetails}</small></div></section>
     <section class="section"><div class="section-head history-chart-head"><div><h2>${chartTitle}</h2><div class="muted">${chartDescription}</div><div class="history-chart-controls"><div>${toggle('metric', 'equity', state.language === 'es' ? 'Equidad' : 'Equitat')}${toggle('metric', 'happiness', state.language === 'es' ? 'Felicidad' : 'Felicitat')}</div><div>${toggle('resolution', 'day', state.language === 'es' ? 'Día' : 'Dia')}${toggle('resolution', 'month', state.language === 'es' ? 'Mes' : 'Mes')}</div></div></div></div><div class="card happiness-card">${happinessChart()}<p>${chartFootnote}</p></div></section>
     <section class="section"><div class="section-head"><div><h2>Equilibri d’una persona</h2><div class="muted">Resum de la composició històrica de la persona seleccionada.</div></div><select data-action="history-member">${memberOptions(selected?.id || '')}</select></div><section class="card balance-profile" style="--member-color:${selected?.color || '#b9c4c0'}"><div class="balance-person"><span class="member-avatar">${selected ? esc(selected.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('')) : '—'}</span><div><h3>${esc(selected?.name || 'Sense membres')}</h3><span>Índex personal ${selected && analysis.memberScores[selected.id] !== null ? `${analysis.memberScores[selected.id]}/100` : '—'}</span></div></div><div class="composition-bar">${composition.map((entry) => `<i style="width:${entry.share * 100}%;--agenda-color:${entry.item.color}" title="${esc(entry.item.name)} · ${Math.round(entry.share * 100)}%"></i>`).join('') || '<span>Sense activitat registrada</span>'}</div><div class="composition-legend" style="--legend-rows:${Math.ceil(composition.length / 2) || 1}">${composition.map((entry) => `<span><i style="--agenda-color:${entry.item.color}"></i>${esc(entry.item.name)} <b>${Math.round(entry.share * 100)}%</b></span>`).join('')}</div>${teleworkBar(telework)}</section></section>
     <section class="section"><div class="section-head"><div><h2>Equilibri entre persones</h2><div class="muted">${state.language === 'es' ? 'Mapa de calor de diferencias en puntos porcentuales: azul = por debajo; verde azulado = por encima. La intensidad indica la magnitud, no si es mejor o peor.' : 'Mapa de calor de diferències en punts percentuals: blau = per sota; verd blavós = per sobre. La intensitat indica la magnitud, no si és millor o pitjor.'}</div></div><div class="heat-legend"><span>Per sota</span><i></i><span>Equilibri</span><i></i><span>Per sobre</span></div></div><div class="card heatmap-wrap"><div class="fairness-heatmap" style="--agenda-columns:${heatmapAgendas.length}"><div class="heat-corner">Persona</div>${heatmapAgendas.map((item) => `<div class="heat-head" title="${esc(item.name)}"><i style="--agenda-color:${item.color}"></i><span>${esc(shortAgendaName(item.name))}</span></div>`).join('')}${members.flatMap((member) => [`<button class="heat-person" data-history-member="${member.id}" style="--member-color:${member.color}"><i></i>${esc(member.name)}</button>`, ...heatmapAgendas.map((item) => heatCell(analysis.cells.find((cell) => cell.member.id === member.id && cell.agenda.id === item.id)))]).join('')}</div></div></section>`;
@@ -1192,11 +1211,12 @@ function guidePage() {
 
     <section class="guide-section card"><div class="guide-section-head"><span>3</span><div><h2>${g('Com tria el millor repartiment', 'Cómo elige el mejor reparto')}</h2><p>${g('No barreja tots els criteris. Assegura cada objectiu abans de passar al següent.', 'No mezcla todos los criterios. Asegura cada objetivo antes de pasar al siguiente.')}</p></div></div>
       <ol class="guide-priority-list">
-        <li><b>${g('Protegeix les agendes de prioritat molt alta.', 'Protege las agendas de prioridad muy alta.')}</b><span>${g('Són les primeres que intenta cobrir.', 'Son las primeras que intenta cubrir.')}</span></li>
-        <li><b>${g('Reparteix Gestió per rondes.', 'Reparte Gestión por rondas.')}</b><span>${g('Intenta donar un primer dia a tothom abans de donar-ne un segon. Gestió pot desplaçar prioritats alta, moderada o baixa, però no la molt alta.', 'Intenta dar un primer día a todos antes de dar un segundo. Gestión puede desplazar prioridades alta, moderada o baja, pero no la muy alta.')}</span></li>
-        <li><b>${g('Cobreix la resta per prioritat.', 'Cubre el resto por prioridad.')}</b><span>${g('Primer alta, després moderada i finalment baixa.', 'Primero alta, después moderada y finalmente baja.')}</span></li>
+        <li><b>${g('Cobreix les agendes presencials per prioritat.', 'Cubre las agendas presenciales por prioridad.')}</b><span>${g('Primer molt alta, després alta, moderada i finalment baixa.', 'Primero muy alta, después alta, moderada y finalmente baja.')}</span></li>
+        <li><b>${g('Reparteix Gestió per rondes.', 'Reparte Gestión por rondas.')}</b><span>${g('Intenta donar un primer dia a tothom abans de donar-ne un segon, sense desplaçar la cobertura presencial ja assegurada.', 'Intenta dar un primer día a todos antes de dar un segundo, sin desplazar la cobertura presencial ya asegurada.')}</span></li>
+        <li><b>${g('Cobreix les agendes telemàtiques per prioritat.', 'Cubre las agendas telemáticas por prioridad.')}</b><span>${g('Aplica el mateix ordre de prioritat després de Gestió.', 'Aplica el mismo orden de prioridad después de Gestión.')}</span></li>
         <li><b>${g('Redueix jornades parcials i persones sense activitat.', 'Reduce jornadas parciales y personas sin actividad.')}</b><span>${g('Si dues agendes parcials poden completar una persona, evita repartir-les innecessàriament.', 'Si dos agendas parciales pueden completar una persona, evita repartirlas innecesariamente.')}</span></li>
         <li><b>${g('Millora l’equitat.', 'Mejora la equidad.')}</b><span>${g('Entre repartiments igual de bons en tot l’anterior, acosta cada perfil a la mitjana de la resta de persones habilitades per fer cada agenda. La persona no participa en la seva pròpia referència.', 'Entre repartos igual de buenos en todo lo anterior, acerca cada perfil a la media del resto de personas habilitadas para hacer cada agenda. La persona no participa en su propia referencia.')}</span></li>
+        <li><b>${g('Evita repetir la mateixa agenda en dies consecutius.', 'Evita repetir la misma agenda en días consecutivos.')}</b><span>${g('Només compta dates naturals contigües i deixa fora Gestió.', 'Sólo cuenta fechas naturales contiguas y excluye Gestión.')}</span></li>
         <li><b>${g('Col·loca Gestió preferentment en divendres i després en dilluns.', 'Coloca Gestión preferentemente en viernes y después en lunes.')}</b><span>${g('Només ho fa si no empitjora cap criteri anterior.', 'Sólo lo hace si no empeora ningún criterio anterior.')}</span></li>
       </ol>
       <div class="guide-note"><b>${g('I els cors i polzes?', '¿Y los corazones y pulgares?')}</b> ${g('Les preferències es guarden i apareixen a les mètriques de felicitat, però de moment no influeixen en la generació.', 'Las preferencias se guardan y aparecen en las métricas de felicidad, pero por ahora no influyen en la generación.')}</div>
@@ -1287,14 +1307,27 @@ function guardOperationPayload(formElement, operation) {
   };
 }
 
-async function refreshGuardOperationPreview(formElement) {
+async function refreshGuardOperationPreview(formElement, changedField = '') {
   const operation = modal?.type === 'guard-cession' ? 'cession' : modal?.type === 'guard-exchange' ? 'exchange' : '';
   if (!operation) return;
-  const form = new FormData(formElement);
+  let form = new FormData(formElement);
   if (operation === 'cession') {
     const target = form.get('toMemberId');
     modal.date = form.get('date') || '';
     modal.toMemberId = target === 'external' ? null : target || undefined;
+    if (changedField === 'date') {
+      const guard = modal.guardId ? activeGuards().find((item) => item.id === modal.guardId) : null;
+      const occupiedMemberIds = activeGuards().filter((item) => item.date === modal.date && item.id !== guard?.id).map((item) => item.memberId);
+      const select = $('[name="toMemberId"]', formElement);
+      const selectedTarget = Object.hasOwn(modal, 'toMemberId') ? (modal.toMemberId ?? 'external') : '';
+      select.innerHTML = guardMemberOptions(selectedTarget, Boolean(guard), [...occupiedMemberIds, guard?.memberId].filter(Boolean));
+      select.value = selectedTarget;
+      if (!select.value) select.selectedIndex = 0;
+      rebuildEnhancedSelect(select);
+      form = new FormData(formElement);
+      const refreshedTarget = form.get('toMemberId');
+      modal.toMemberId = refreshedTarget === 'external' ? null : refreshedTarget || undefined;
+    }
   } else {
     modal.secondRef = form.get('secondRef') || '';
   }
@@ -1302,23 +1335,43 @@ async function refreshGuardOperationPreview(formElement) {
   modal.preview = null;
   modal.previewError = '';
   const payload = guardOperationPayload(formElement, operation);
-  if (!payload) { modal.previewLoading = false; render(); return; }
+  if (!payload) { modal.previewLoading = false; refreshGuardOperationView(formElement); return; }
   const requestKey = uid();
   const currentModal = modal;
   currentModal.previewRequestKey = requestKey;
   currentModal.previewLoading = true;
-  render();
+  refreshGuardOperationView(formElement);
   try {
     const preview = operation === 'cession' ? await api.previewGuardCession(payload) : await api.previewGuardExchange(payload);
     if (modal !== currentModal || modal.previewRequestKey !== requestKey) return;
     modal.preview = preview;
     modal.previewLoading = false;
-    render();
+    refreshGuardOperationView(formElement);
   } catch (error) {
     if (modal !== currentModal || modal.previewRequestKey !== requestKey) return;
     modal.previewError = error.message;
     modal.previewLoading = false;
-    render();
+    refreshGuardOperationView(formElement);
+  }
+}
+
+function refreshGuardOperationView(formElement) {
+  const impact = $('.guard-inline-impact', formElement);
+  if (impact) {
+    impact.outerHTML = guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError);
+    translateDom($('.guard-inline-impact', formElement));
+  }
+  const submit = $('[data-action="submit-modal"]', formElement);
+  if (submit) submit.disabled = !modal.preview || modal.previewLoading;
+  if (modal?.type === 'guard-exchange') {
+    const first = activeGuards().find((item) => item.id === modal.guardId);
+    const second = activeGuards().find((item) => item.id === modal.secondRef);
+    const summary = $('[data-guard-exchange-summary]', formElement);
+    if (summary) summary.innerHTML = second ? `<div class="guard-exchange-summary"><span>${fmtDate(first?.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(first?.memberId)?.name || '—')}</b><i>⇄</i><span>${fmtDate(second.date, { day: 'numeric', month: 'short' })}</span><b>${esc(person(second.memberId)?.name || '—')}</b></div>` : '';
+    const note = $('[data-guard-exchange-note]', formElement);
+    if (note) note.innerHTML = modal.secondRef === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : '';
+    translateDom(summary);
+    translateDom(note);
   }
 }
 
@@ -1375,7 +1428,7 @@ function guardExchangeModal() {
   const secondaryAction = modal.returnToGuardAction
     ? '<button type="button" class="button ghost" data-action="return-guard-action">Enrere</button>'
     : '<button type="button" class="button ghost" data-action="close-modal">Cancel·la</button>';
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div>${exchangeSummary}${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}<div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-operation-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI DE GUÀRDIES</div><h2>Permuta dues guàrdies</h2><div class="muted">${esc(person(first?.memberId)?.name || '—')} · ${first ? fmtDate(first.date, { day: 'numeric', month: 'long' }) : '—'}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="guard-exchange-form"><input type="hidden" name="firstGuardId" value="${first?.id || ''}"><input type="hidden" name="firstDate" value="${first?.date || ''}"><div class="modal-body"><div class="field"><label>Intercanvia amb</label><select name="secondRef" required><option value="" disabled ${selected ? '' : 'selected'}>Selecciona una persona</option><option value="external" ${selected === 'external' ? 'selected' : ''}>Exterior</option>${others.map((item) => `<option value="${item.id}" ${selected === item.id ? 'selected' : ''}>${fmtDate(item.date, { day: 'numeric', month: 'short' })} · ${esc(person(item.memberId)?.name || '—')}</option>`).join('')}</select></div><div data-guard-exchange-summary>${exchangeSummary}</div>${guardInlineImpact(modal.preview, modal.previewLoading, modal.previewError)}<div data-guard-exchange-note>${selected === 'external' ? '<div class="guard-operation-note">La guàrdia sortirà del calendari intern. El canvi quedarà registrat a l’històric.</div>' : ''}</div><div class="field"><label>Nota <span class="muted">opcional</span></label><textarea name="note" maxlength="500" rows="2">${esc(modal.note || '')}</textarea></div></div><div class="modal-actions">${secondaryAction}<button type="button" class="button" data-action="submit-modal" ${modal.preview && !modal.previewLoading ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
 }
 function colorControl(kind, color) { const assigned = Boolean(color); return `<div class="automatic-color"><span class="color-swatch" data-color-swatch style="--automatic-color:${color || '#39413c'}"></span><div><b>Color automàtic</b><span>${assigned ? (kind === 'member' ? 'Pastel per distingir persones' : 'Saturat per distingir agendes') : 'El backend l’assignarà en desar'}</span></div>${assigned ? `<button type="button" class="button ghost small" data-action="random-color" data-color-kind="${kind}">Nou color aleatori</button>` : ''}</div>`; }
 function coverageFields(item) { return `<div class="coverage-block"><div><span class="label">Cobertura ordinària</span><span class="muted">Places necessàries per dia</span></div><div class="coverage-fields">${[1, 2, 3, 4, 5].map((day) => `<label><span>${DAYS_SHORT[day - 1]}</span><input type="number" name="coverage-${day}" min="0" max="30" value="${item?.coverage ? Number(item.coverage[String(day)] || 0) : item ? state.coverage[day]?.[item.id] || 0 : 0}" /></label>`).join('')}</div></div>`; }
@@ -1394,7 +1447,7 @@ function fixedRuleAgendaIds(allowed, weekdayValue) {
   });
 }
 function defaultFixedRule(allowed, available) {
-  return { weekday: available[0] || 1, requiredMode: 'all', requiredAgendaIds: [], forbiddenAgendaIds: [] };
+  return { weekday: available[0] || 1, requiredMode: 'all', requiredAgendaIds: [], forbiddenAgendaIds: [], peonadaAgendaIds: [] };
 }
 function fixedRuleAgendaChecks(ids, selected) {
   const selectedIds = new Set(selected);
@@ -1411,6 +1464,39 @@ function fixedRulePickerSummary(row) {
   const count = $$('[name="rule-agenda"]:checked', row).length;
   const summary = $('[data-rule-selection]', row);
   if (summary) summary.textContent = count ? `${count} agenda${count === 1 ? '' : 's'}` : 'Selecciona agendas';
+}
+function fixedRuleOccurrenceLoads(weekday, selected) {
+  return [1, 2, 3, 4, 5].map((ordinal) => {
+    const active = selected.filter((id) => Number(state.coverage[weekday]?.[id] || 0) > 0
+      || agenda(id)?.recurrences?.some((item) => Number(item.weekday) === Number(weekday) && Number(item.ordinal) === ordinal));
+    return { ordinal, active, load: active.reduce((total, id) => total + Number(agenda(id)?.loadPercentage || 100), 0) };
+  });
+}
+function fixedRulePeonadaError(weekday, selected, peonada) {
+  const peonadaIds = new Set(peonada);
+  const occurrenceLoads = fixedRuleOccurrenceLoads(weekday, selected);
+  if (occurrenceLoads.some((item) => item.load > 200)) return 'La càrrega no pot superar el 200%.';
+  for (const occurrence of occurrenceLoads.filter((item) => item.load > 100)) {
+    const ordinaryLoad = occurrence.active.filter((id) => !peonadaIds.has(id)).reduce((total, id) => total + Number(agenda(id)?.loadPercentage || 100), 0);
+    if (ordinaryLoad !== 100) return 'En cada coincidència, la càrrega ordinària ha de sumar exactament 100%.';
+  }
+  return '';
+}
+function fixedRulePeonadaMarkup(weekday, selected, action, peonada = []) {
+  const occurrenceLoads = fixedRuleOccurrenceLoads(weekday, selected);
+  const maxLoad = Math.max(0, ...occurrenceLoads.map((item) => item.load));
+  if (action !== 'all' || maxLoad <= 100) return '<div data-rule-peonada></div>';
+  const peonadaIds = new Set(peonada.filter((id) => selected.includes(id)));
+  const error = fixedRulePeonadaError(weekday, selected, [...peonadaIds]);
+  return `<div class="fixed-rule-peonada" data-rule-peonada><div><b>Càrrega màxima ${maxLoad}%</b><small>Marca les agendes que es facin com a peonada.</small></div><div class="fixed-rule-peonada-options">${selected.map((id) => `<label><input type="checkbox" name="rule-peonada-agenda" value="${esc(id)}" ${peonadaIds.has(id) ? 'checked' : ''}><span>${esc(agenda(id)?.name || id)}</span><div class="fixed-rule-peonada-meta"><small>${Number(agenda(id)?.loadPercentage || 100)}%</small>${peonadaIds.has(id) ? '<em>Peonada</em>' : ''}</div></label>`).join('')}</div>${error ? `<p>${esc(error)}</p>` : ''}</div>`;
+}
+function refreshFixedRulePeonada(row) {
+  const weekday = Number($('[name="rule-weekday"]', row)?.value || 1);
+  const action = $('[name="rule-action"]', row)?.value || 'all';
+  const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
+  const peonada = $$('[name="rule-peonada-agenda"]:checked', row).map((item) => item.value);
+  const container = $('[data-rule-peonada]', row);
+  if (container) container.outerHTML = fixedRulePeonadaMarkup(weekday, selected, action, peonada);
 }
 function refreshFixedRulePicker(row, formElement) {
   const allowed = $$('[name="allowed"]:checked', formElement).map((item) => item.value);
@@ -1486,14 +1572,16 @@ function fixedRuleRow(rule, allowed, available) {
   const value = rule || defaultFixedRule(allowed, available);
   const action = fixedRuleAction(value);
   const selected = fixedRuleSelectedIds(value, action);
-  return `<article class="fixed-rule-row"><div class="fixed-rule-fields"><select name="rule-weekday" aria-label="Dia de la setmana">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${Number(value.weekday) === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-action" aria-label="Tipus de regla"><option value="all" ${action === 'all' ? 'selected' : ''}>Ha de fer totes</option><option value="one" ${action === 'one' ? 'selected' : ''}>Ha de fer una</option><option value="none" ${action === 'none' ? 'selected' : ''}>No pot fer</option></select><details class="fixed-rule-agenda-picker"><summary><span data-rule-selection>${selected.length ? `${selected.length} agenda${selected.length === 1 ? '' : 's'}` : 'Selecciona agendas'}</span><b>⌄</b></summary><div class="fixed-rule-agenda-menu" data-rule-agendas>${fixedRuleAgendaChecks(allowed, selected)}</div></details>${fixedRuleWarningMarkup(value.weekday, selected, action)}<button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div></article>`;
+  return `<article class="fixed-rule-row"><div class="fixed-rule-fields"><select name="rule-weekday" aria-label="Dia de la setmana">${available.map((weekdayValue) => `<option value="${weekdayValue}" ${Number(value.weekday) === weekdayValue ? 'selected' : ''}>${DAYS[weekdayValue - 1]}</option>`).join('')}</select><select name="rule-action" aria-label="Tipus de regla"><option value="all" ${action === 'all' ? 'selected' : ''}>Ha de fer totes</option><option value="one" ${action === 'one' ? 'selected' : ''}>Ha de fer una</option><option value="none" ${action === 'none' ? 'selected' : ''}>No pot fer</option></select><details class="fixed-rule-agenda-picker"><summary><span data-rule-selection>${selected.length ? `${selected.length} agenda${selected.length === 1 ? '' : 's'}` : 'Selecciona agendas'}</span><b>⌄</b></summary><div class="fixed-rule-agenda-menu" data-rule-agendas>${fixedRuleAgendaChecks(allowed, selected)}</div></details>${fixedRuleWarningMarkup(value.weekday, selected, action)}<button type="button" class="icon-button danger-icon" data-action="remove-fixed-rule" aria-label="Elimina regla">×</button></div>${fixedRulePeonadaMarkup(value.weekday, selected, action, value.peonadaAgendaIds || [])}</article>`;
 }
 function refreshFixedRuleType(row, formElement) {
   refreshFixedRulePicker(row, formElement);
+  refreshFixedRulePeonada(row);
   refreshFixedRuleWarning(row);
 }
 function fixedRuleSummary(rule) {
-  const required = (rule.requiredAgendaIds || []).map((id) => agenda(id)?.name || id);
+  const peonada = new Set(rule.peonadaAgendaIds || []);
+  const required = (rule.requiredAgendaIds || []).map((id) => `${agenda(id)?.name || id}${peonada.has(id) ? ' (P)' : ''}`);
   const forbidden = (rule.forbiddenAgendaIds || []).map((id) => agenda(id)?.name || id);
   const requiredLabel = required.length ? `${rule.requiredMode === 'one' && required.length > 1 ? 'una de ' : ''}${required.join(rule.requiredMode === 'one' ? ' / ' : ' + ')}` : '';
   const forbiddenLabel = forbidden.length ? `no ${forbidden.join(' / ')}` : '';
@@ -1597,7 +1685,7 @@ function nextGenerationLoadingMessage() {
 }
 
 function startGenerationLoadingAnimation() {
-  return window.setInterval(() => {
+  const phraseTimer = window.setInterval(() => {
     if (!modal?.busy) return;
     modal.loadingPhrase = nextGenerationLoadingMessage();
     const message = document.querySelector('[data-generation-loading-message]');
@@ -1608,11 +1696,31 @@ function startGenerationLoadingAnimation() {
       { duration: 360, easing: 'ease-out' },
     );
   }, 2400);
+  const countdownTimer = window.setInterval(updateGenerationCountdown, 250);
+  return [phraseTimer, countdownTimer];
+}
+
+function generationCountdownText() {
+  const es = state.language === 'es';
+  const duration = Number(modal?.loadingTimeLimitSeconds || 0);
+  if (!duration) return es ? 'Calculando el tiempo máximo…' : 'Calculant el temps màxim…';
+  const elapsed = Math.max(0, (Date.now() - Number(modal.loadingStartedAt || Date.now())) / 1000);
+  const remaining = Math.max(0, Math.ceil(duration - elapsed));
+  if (!remaining) return es ? 'Finalizando la mejor solución encontrada…' : 'Finalitzant la millor solució trobada…';
+  const minutes = Math.floor(remaining / 60);
+  const seconds = String(remaining % 60).padStart(2, '0');
+  return `${es ? 'Tiempo máximo restante' : 'Temps màxim restant'} · ${minutes}:${seconds}`;
+}
+
+function updateGenerationCountdown() {
+  if (!modal?.busy) return;
+  const countdown = document.querySelector('[data-generation-countdown]');
+  if (countdown) countdown.textContent = generationCountdownText();
 }
 
 function generationLoadingModal() {
   const es = state.language === 'es';
-  return `<div class="modal-backdrop"><section class="modal-card modal-small generation-loading-modal" role="dialog" aria-modal="true" aria-labelledby="generation-loading-title" aria-describedby="generation-loading-help"><div class="generation-loading-body"><div class="generation-loading-orbit" aria-hidden="true"><i></i><i></i><i></i></div><div class="card-kicker">${es ? 'OPTIMIZANDO' : 'OPTIMITZANT'}</div><h2 id="generation-loading-title">${es ? 'Preparando el calendario' : 'Preparant el calendari'}</h2><p data-generation-loading-message aria-live="polite">${esc(modal.loadingPhrase)}</p><div class="generation-loading-track" aria-hidden="true"><i></i></div><small id="generation-loading-help">${es ? 'Puede tardar unos minutos. No cierres esta ventana.' : 'Pot trigar uns minuts. No tanquis aquesta finestra.'}</small></div></section></div>`;
+  return `<div class="modal-backdrop"><section class="modal-card modal-small generation-loading-modal" role="dialog" aria-modal="true" aria-labelledby="generation-loading-title" aria-describedby="generation-loading-help"><div class="generation-loading-body"><div class="generation-loading-orbit" aria-hidden="true"><i></i><i></i><i></i></div><div class="card-kicker">${es ? 'OPTIMIZANDO' : 'OPTIMITZANT'}</div><h2 id="generation-loading-title">${es ? 'Preparando el calendario' : 'Preparant el calendari'}</h2><p data-generation-loading-message aria-live="polite">${esc(modal.loadingPhrase)}</p><div class="generation-loading-track" aria-hidden="true"><i></i></div><div class="generation-loading-countdown" data-generation-countdown aria-live="off">${generationCountdownText()}</div><small id="generation-loading-help">${es ? 'Puede tardar unos minutos. No cierres esta ventana.' : 'Pot trigar uns minuts. No tanquis aquesta finestra.'}</small></div></section></div>`;
 }
 
 function generationModal() {
@@ -1622,7 +1730,9 @@ function generationModal() {
   const bounds = generationDateBounds();
   const monthMode = modal.periodMode !== 'custom';
   const periodControls = `<div class="generation-objective-options generation-period-options"><label><input type="radio" name="periodMode" value="month" ${monthMode ? 'checked' : ''}/><span><b>Mes complet</b><small>Selecciona directament un mes i un any.</small></span></label><label><input type="radio" name="periodMode" value="custom" ${monthMode ? '' : 'checked'}/><span><b>Període personalitzat</b><small>Escull manualment les dates dins d’un únic mes.</small></span></label></div><div class="period-fields ${monthMode ? 'single' : ''}">${monthMode ? monthYearPicker('generationMonth', modal.startMonth, 'Mes a generar') : `<div class="field"><label>Data inicial</label><input type="date" name="generationStartDate" value="${modal.startDate}" required /></div><span>→</span><div class="field"><label>Data final</label><input type="date" name="generationEndDate" value="${modal.endDate}" min="${modal.startDate}" max="${modal.startDate ? endOfMonth(modal.startDate) : ''}" required /></div>`}</div><p class="period-help">${monthMode ? 'Es generarà únicament el mes seleccionat.' : 'Les dues dates han de pertànyer al mateix mes natural.'}</p>`;
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true" aria-labelledby="generation-title"><div class="modal-head"><div><div class="card-kicker">NOU PERÍODE</div><h2 id="generation-title">Genera el calendari</h2><div class="muted">Defineix el període i les incidències noves.</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="generation-form"><div class="modal-body"><section class="generation-period"><div class="step-number">1</div><div>${periodControls}</div></section>${modal.conflict ? `<div class="generation-warning"><b>${modal.overlap ? 'Aquest període ja té esdeveniments' : 'No es pot generar aquest període'}</b><span>${esc(modal.conflict)}</span>${modal.overlap ? '<button type="button" class="button danger small" data-action="confirm-generation-overwrite">Regenera només aquest període</button>' : ''}</div>` : ''}<section class="generation-conditions"><div class="step-title"><span class="step-number">2</span><div><h3>Condicionants variables</h3><p>Les guardies i absències existents s’apliquen automàticament. Aquí només cal afegir-ne de noves.</p></div></div><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: ${state.language === 'es' ? 'columnas' : 'columnes'} <b>Persona</b> i <b>Data</b>.</p></div><div class="condition-box"><div class="condition-box-head"><h4>Vacances puntuals</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-absences-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-absences-file" /></label></div></div><div class="condition-inputs absence-inputs"><div class="field"><label>Persona</label><select name="absence-member">${emptyMemberOptions()}</select></div><div class="field"><label>Inici</label><input type="date" name="absence-start" min="${bounds.start}" max="${bounds.end}" /></div><div class="field"><label>Final</label><input type="date" name="absence-end" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-absence">Afegeix</button></div><div class="condition-list">${absenceItems || '<span class="muted">Sense vacances puntuals noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: <b>Persona</b>, <b>Inici</b> i <b>Final</b>.</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal" ${modal.busy ? 'disabled' : ''}>Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.busy ? 'disabled' : ''}>${modal.busy ? 'Generant…' : 'Genera calendari'}</button></div></form></section></div>`;
+  const timeLimitMinutes = Math.min(30, Math.max(1, Number(modal.timeLimitMinutes || 2)));
+  const timeLimitControl = `<section class="generation-time-limit"><span class="step-number">2</span><div class="step-title-text"><h3>Temps màxim d’optimització</h3><p>La generació pot acabar abans si troba l’òptim.</p><div class="field"><label for="generation-time-limit">Durada màxima en minuts</label><input id="generation-time-limit" name="generationTimeLimitMinutes" type="number" min="1" max="30" step="1" value="${timeLimitMinutes}" required /></div></div></section>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-large generation-modal" role="dialog" aria-modal="true" aria-labelledby="generation-title"><div class="modal-head"><div><div class="card-kicker">NOU PERÍODE</div><h2 id="generation-title">Genera el calendari</h2><div class="muted">Defineix el període i les incidències noves.</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><form id="generation-form"><div class="modal-body"><section class="generation-period"><div class="step-number">1</div><div>${periodControls}</div></section>${timeLimitControl}${modal.conflict ? `<div class="generation-warning"><b>${modal.overlap ? 'Aquest període ja té esdeveniments' : 'No es pot generar aquest període'}</b><span>${esc(modal.conflict)}</span>${modal.overlap ? '<button type="button" class="button danger small" data-action="confirm-generation-overwrite">Regenera només aquest període</button>' : ''}</div>` : ''}<section class="generation-conditions"><div class="step-title"><span class="step-number">3</span><div><h3>Condicionants variables</h3><p>Les guardies i absències existents s’apliquen automàticament. Aquí només cal afegir-ne de noves.</p></div></div><div class="condition-editor"><div class="condition-box"><div class="condition-box-head"><h4>Guàrdies</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-guards-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-guards-file" /></label></div></div><div class="condition-inputs guard-inputs"><div class="field"><label>Persona</label><select name="guard-member">${emptyMemberOptions()}</select></div><div class="field"><label>Data</label><input type="date" name="guard-date" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-guard">Afegeix</button></div><div class="condition-list">${guardItems || '<span class="muted">Sense guàrdies noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: ${state.language === 'es' ? 'columnas' : 'columnes'} <b>Persona</b> i <b>Data</b>.</p></div><div class="condition-box"><div class="condition-box-head"><h4>Vacances puntuals</h4><div class="condition-box-actions"><button type="button" class="button ghost small" data-action="export-absences-template">Exporta plantilla</button><label class="file-import button ghost small">Importa XLS<input type="file" accept=".xls,.xlsx" data-action="import-absences-file" /></label></div></div><div class="condition-inputs absence-inputs"><div class="field"><label>Persona</label><select name="absence-member">${emptyMemberOptions()}</select></div><div class="field"><label>Inici</label><input type="date" name="absence-start" min="${bounds.start}" max="${bounds.end}" /></div><div class="field"><label>Final</label><input type="date" name="absence-end" min="${bounds.start}" max="${bounds.end}" /></div><button type="button" class="button secondary small" data-action="add-generation-absence">Afegeix</button></div><div class="condition-list">${absenceItems || '<span class="muted">Sense vacances puntuals noves.</span>'}</div><p class="import-hint">${conditionDateHint()} XLS: <b>Persona</b>, <b>Inici</b> i <b>Final</b>.</p></div></div>${modal.importNotice ? `<div class="import-notice">${esc(modal.importNotice)}</div>` : ''}</section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal" ${modal.busy ? 'disabled' : ''}>Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${modal.busy ? 'disabled' : ''}>${modal.busy ? 'Generant…' : 'Genera calendari'}</button></div></form></section></div>`;
 }
 function guardEditorModal() {
   const guards = modal.guards || []; const bounds = generationDateBounds();
@@ -1659,14 +1769,20 @@ function fixedAssignmentWarningModal() {
   const item = calendarEvents().find((assignment) => assignment.id === modal.id);
   const member = person(item?.memberId);
   const itemAgenda = agenda(item?.type);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">ASSIGNACIÓ FIXA</div><h2>Vols canviar-la?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>${esc(member?.name || '—')} · ${esc(itemAgenda?.name || '—')}</b><span>Aquesta assignació prové d’una regla fixa. Si continues, el canvi només afectarà aquest dia; la regla recurrent del perfil es conservarà.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="confirm-fixed-exchange">Sí, continua</button></div></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">ASSIGNACIÓ FIXA</div><h2>Vols canviar-la?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>${esc(member?.name || '—')} · ${esc(itemAgenda?.name || '—')}${deferredOriginDetail(item)}</b><span>Aquesta assignació prové d’una regla fixa. Si continues, el canvi només afectarà aquest dia; la regla recurrent del perfil es conservarà.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="confirm-fixed-exchange">Sí, continua</button></div></section></div>`;
+}
+
+function deferredOriginDetail(item) {
+  if (!item?.deferredOriginDate) return '';
+  const label = state.language === 'es' ? 'Diferida del' : 'Diferida del';
+  return `<span class="assignment-origin-detail">· ${label} ${esc(fmtDate(item.deferredOriginDate, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</span>`;
 }
 
 function assignmentActionModal() {
   const item = calendarEvents().find((assignment) => assignment.id === modal.id);
   const member = person(item?.memberId);
   const itemAgenda = agenda(item?.type);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GESTIONA L’ASSIGNACIÓ</div><h2>${esc(member?.name || '—')}</h2><div class="muted">${fmtDate(item?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(itemAgenda?.name || '—')}</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options"><button type="button" class="guard-action-option" data-action="open-assignment-exchange"><b>Intercanvia</b><span>Permuta aquesta agenda amb una altra assignació o vacant.</span></button><button type="button" class="guard-action-option" data-action="open-assignment-transfer"><b>Cedeix</b><span>Trasllada aquesta agenda a una altra persona sense moure les seves.</span></button></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small guard-action-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">GESTIONA L’ASSIGNACIÓ</div><h2>${esc(member?.name || '—')}</h2><div class="muted">${fmtDate(item?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(itemAgenda?.name || '—')}${deferredOriginDetail(item)}</div></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body guard-action-options"><button type="button" class="guard-action-option" data-action="open-assignment-exchange"><b>Intercanvia</b><span>Permuta aquesta agenda amb una altra assignació o vacant.</span></button><button type="button" class="guard-action-option" data-action="open-assignment-transfer"><b>Cedeix</b><span>Trasllada aquesta agenda a una altra persona sense moure les seves.</span></button></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></section></div>`;
 }
 
 function assignmentTransferModal() {
@@ -1688,7 +1804,7 @@ function assignmentTransferModal() {
       : `<i>${option.projectedLoadPercentage}% de càrrega</i>`;
     return `<label class="assignment-choice"><input type="radio" name="targetMemberId" value="${esc(option.targetMemberId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(option.targetMemberName)}</b>${fairnessBadge(option)}</span><small>Càrrega actual: ${option.currentLoadPercentage}% → ${option.projectedLoadPercentage}%</small>${loadWarning}</span></label>`;
   }).join('');
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CESSIÓ D’ASSIGNACIÓ</div><h2>${esc(sourceAgenda?.name || '—')}</h2><div class="muted">${esc(sourceMember?.name || '—')} · ${fmtDate(source?.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="assignment-transfer-form"><input type="hidden" name="id" value="${esc(source?.id || '')}" /><input type="hidden" name="confirmFixed" value="${modal.confirmFixed ? 'true' : 'false'}" /><div class="modal-body"><p class="assignment-action-help">La persona escollida conservarà les seves agendes i afegirà aquesta. Si supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha cap persona disponible i capacitada per rebre aquesta agenda.</div>'}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="return-assignment-action">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Cedeix l’agenda</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CESSIÓ D’ASSIGNACIÓ</div><h2>${esc(sourceAgenda?.name || '—')}</h2><div class="muted">${esc(sourceMember?.name || '—')} · ${fmtDate(source?.date, { weekday: 'long', day: 'numeric', month: 'long' })}${deferredOriginDetail(source)}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="assignment-transfer-form"><input type="hidden" name="id" value="${esc(source?.id || '')}" /><input type="hidden" name="confirmFixed" value="${modal.confirmFixed ? 'true' : 'false'}" /><div class="modal-body"><p class="assignment-action-help">La persona escollida conservarà les seves agendes i afegirà aquesta. Si supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha cap persona disponible i capacitada per rebre aquesta agenda.</div>'}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="return-assignment-action">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Cedeix l’agenda</button></div></form></section></div>`;
 }
 
 function recoveryCodeModal() {
@@ -1736,7 +1852,7 @@ function assignmentModal() {
     const dayLoad = dayRows.reduce((total, item) => total + Number(item.loadPercentage ?? agenda(item.type)?.loadPercentage ?? 100), 0);
     const canReviewPeonada = dayLoad > 100 || dayRows.some((item) => item.peonada);
     const peonadaAction = canReviewPeonada ? `<button type="button" class="button ghost small" data-action="open-peonada-review" data-member-id="${esc(source?.memberId || '')}" data-peonada-date="${esc(source?.date || '')}">Revisa peonades</button>` : '';
-    return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI D’ASSIGNACIONS</div><h2>${esc(sourceMember?.name || '—')}</h2><div class="muted">${fmtDate(source?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(sourceAgenda?.name || '—')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="assignment-exchange-form"><input type="hidden" name="id" value="${esc(source?.id || '')}" /><input type="hidden" name="confirmFixed" value="${modal.confirmFixed ? 'true' : 'false'}" /><div class="modal-body"><p class="assignment-action-help">Tria una assignació compatible o una agenda sense cobrir. Pinendar mostrarà l’impacte en l’equitat.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha canvis compatibles per a aquesta assignació.</div>'}</div>${peonadaAction}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="${modal.returnModal ? 'return-assignment-action' : 'close-modal'}">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
+    return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">INTERCANVI D’ASSIGNACIONS</div><h2>${esc(sourceMember?.name || '—')}</h2><div class="muted">${fmtDate(source?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(sourceAgenda?.name || '—')}${deferredOriginDetail(source)}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="assignment-exchange-form"><input type="hidden" name="id" value="${esc(source?.id || '')}" /><input type="hidden" name="confirmFixed" value="${modal.confirmFixed ? 'true' : 'false'}" /><div class="modal-body"><p class="assignment-action-help">Tria una assignació compatible o una agenda sense cobrir. Pinendar mostrarà l’impacte en l’equitat.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha canvis compatibles per a aquesta assignació.</div>'}</div>${peonadaAction}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="${modal.returnModal ? 'return-assignment-action' : 'close-modal'}">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Aplica el canvi</button></div></form></section></div>`;
   }
   const manual = Boolean(modal.manual);
   const member = person(modal.memberId);
@@ -1768,6 +1884,15 @@ function assignmentModal() {
     const dateLabel = fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action modal-manual-extra" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">PLAÇA EXTRAORDINÀRIA</div><h2>Afegeix activitat manual</h2></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><input type="hidden" name="date" value="${esc(modal.date)}" /><div class="modal-body"><div class="manual-extra-fields"><div class="field manual-extra-date-field"><label>Data</label><div class="manual-extra-date-display" aria-label="Data seleccionada">${esc(dateLabel)}</div></div><div class="field"><label>Persona</label><select name="memberId" required><option value="">Selecciona una persona</option>${candidates.map((item) => `<option value="${esc(item.id)}" ${item.id === modal.memberId ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label>Agenda</label><select name="agendaId" required ${modal.memberId ? '' : 'disabled'}><option value="">${agendaPrompt}</option>${agendaOptions}</select></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
   }
+  const deferredRows = (modal.payload?.deferredOptions || []).map((option) => {
+    const item = agenda(option.agendaId);
+    const hospital = agendaHospital(item);
+    const loadPercentage = Number(option.loadPercentage ?? item?.loadPercentage ?? 100);
+    return `<button type="button" class="deferred-option" data-action="apply-member-deferred" data-vacancy-id="${esc(option.vacancyId)}" aria-label="${esc(`${item?.name || '—'} · Diferida del ${fmtDate(option.originDate, { weekday: 'long', day: 'numeric', month: 'long' })}`)}"><span class="assignment-choice-head"><span class="deferred-option-title"><b>${esc(item?.name || '—')}</b><small>· Diferida del ${fmtDate(option.originDate, { weekday: 'long', day: 'numeric', month: 'long' })}</small></span>${fairnessBadge(option)}</span><small>${esc(hospital?.name || 'Sense hospital')} · ${esc(activityMetaTitle(item))} · ${loadPercentage}% de càrrega</small></button>`;
+  }).join('');
+  const deferredSection = deferredRows
+    ? `<section class="vacancy-resolution-section"><h3>Assigna una agenda diferida</h3><p class="assignment-action-help">Pots adoptar directament una agenda dels sis dies anteriors. No es mourà ni s’afegirà cap altra activitat.</p><div class="deferred-option-list">${deferredRows}</div></section>`
+    : '';
   const manualControls = `<input type="hidden" name="memberId" value="${esc(modal.memberId)}" /><input type="hidden" name="date" value="${esc(modal.date)}" />`;
   const rows = options.map((option) => {
     const item = agenda(option.agendaId);
@@ -1779,7 +1904,7 @@ function assignmentModal() {
     return `<label class="assignment-choice"><input type="radio" name="agendaId" value="${esc(option.agendaId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(item?.name || '—')}</b>${fairnessBadge(option)}</span><small>${esc(hospital?.name || 'Sense hospital')} · ${esc(activityMetaTitle(item))}</small>${loadWarning}</span></label>`;
   }).join('');
   const emptyMessage = 'No hi ha cap agenda compatible amb les regles d’aquest dia.';
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">PLAÇA EXTRAORDINÀRIA</div><h2>${esc(member?.name || modal.payload?.memberName || '—')}</h2><div class="muted">${fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><div class="modal-body">${manualControls}<p class="assignment-action-help">Aquesta activitat s’afegirà fora de la demanda ordinària. Si la càrrega supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || `<div class="assignment-choice-empty">${emptyMessage}</div>`}</div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">SENSE ASSIGNACIÓ</div><h2>${esc(member?.name || modal.payload?.memberName || '—')}</h2><div class="muted">${fmtDate(modal.date, { weekday: 'long', day: 'numeric', month: 'long' })}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="extra-assignment-form"><div class="modal-body">${manualControls}${deferredSection}<section class="vacancy-resolution-section"><h3>Afegeix una plaça extraordinària</h3><p class="assignment-action-help">Aquesta activitat s’afegirà fora de la demanda ordinària. Si la càrrega supera el 100%, hauràs de definir la peonada.</p><div class="assignment-choice-list">${rows || `<div class="assignment-choice-empty">${emptyMessage}</div>`}</div></section></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="submit-modal" ${options.length ? '' : 'disabled'}>Afegeix l’esdeveniment</button></div></form></section></div>`;
 }
 
 function vacancyAssignmentModal() {
@@ -1797,14 +1922,16 @@ function vacancyAssignmentModal() {
   const deferredOptions = modal.payload?.deferredOptions || [];
   const deferredRows = deferredOptions.map((option, index) => {
     const destination = person(option.deferredMemberId);
-    const movementRows = (option.movements || []).map((movement) => {
+    const movementLabels = (option.movements || []).map((movement) => {
       const movedAgenda = agenda(movement.agendaId);
-      return `<li>${esc(movedAgenda?.name || '—')}: ${esc(person(movement.fromMemberId)?.name || '—')} → ${esc(person(movement.toMemberId)?.name || '—')}</li>`;
-    }).join('');
-    const movements = movementRows
-      ? `<details><summary>${option.changeCount} ${option.changeCount === 1 ? 'moviment necessari' : 'moviments necessaris'}</summary><ul>${movementRows}</ul></details>`
-      : '<small>No cal moure cap altra assignació.</small>';
-    return `<article class="deferred-option ${index === 0 ? 'preferred' : ''}"><div class="assignment-choice-head"><b>${index === 0 ? 'Opció preferida · ' : ''}${fmtDate(option.targetDate, { weekday: 'long', day: 'numeric', month: 'long' })}</b>${fairnessBadge(option)}</div><p>${esc(destination?.name || '—')} farà l’agenda diferida.</p>${movements}<button type="button" class="button small" data-action="apply-deferred" data-target-date="${esc(option.targetDate)}">Confirma la diferida</button></article>`;
+      return `${movedAgenda?.name || '—'}: ${person(movement.fromMemberId)?.name || '—'} → ${person(movement.toMemberId)?.name || '—'}`;
+    });
+    const movements = movementLabels.length
+      ? `<span class="deferred-option-movement-count">${movementLabels.length} ${movementLabels.length === 1 ? 'moviment necessari' : 'moviments necessaris'}</span><ul class="deferred-option-movement-list">${movementLabels.map((label) => `<li>${esc(label)}</li>`).join('')}</ul>`
+      : '<span class="deferred-option-movements">No cal moure cap altra assignació.</span>';
+    const targetDateLabel = fmtDate(option.targetDate, { weekday: 'long', day: 'numeric', month: 'long' });
+    const destinationName = destination?.name || '—';
+    return `<button type="button" class="deferred-option ${index === 0 ? 'preferred' : ''}" data-action="apply-deferred" data-target-date="${esc(option.targetDate)}" aria-label="${esc(`${destinationName} · ${targetDateLabel}`)}"><span class="assignment-choice-head"><b>${esc(destinationName)}</b>${fairnessBadge(option)}</span><small class="deferred-option-target">${esc(targetDateLabel)}</small>${movements}</button>`;
   }).join('');
   const rows = options.map((option) => {
     const loadWarning = option.projectedLoadPercentage > 100
@@ -2219,6 +2346,17 @@ document.addEventListener('click', async (event) => {
     } catch (error) { showError(error); }
     return;
   }
+  if (action === 'apply-member-deferred') {
+    try {
+      await api.deferVacancy(button.dataset.vacancyId, {
+        targetDate: modal.date,
+        targetMemberId: modal.memberId,
+        expectedRevision: modal.payload?.planningRevision,
+      });
+      modal = null; await reloadState('Agenda diferida'); render();
+    } catch (error) { showError(error); }
+    return;
+  }
   if (action === 'confirm-generation-overwrite') { modal.replaceExisting = true; modal.overlap = null; modal.conflict = ''; await handleForm(button.closest('form')); return; }
   if (action === 'confirm-fixed-exchange') {
     const assignmentId = modal.id;
@@ -2284,7 +2422,7 @@ document.addEventListener('click', async (event) => {
   if (action === 'add-manual-hospital') { const name = hospitalSearchQuery.trim(); if (name.length < 2) return; modal = { type: 'manual-hospital', name }; render(); return; }
   if (action === 'confirm-manual-hospital') { try { await api.selectHospital({ name: modal.name }); modal = null; hospitalSearchResults = []; hospitalSearchStatus = ''; hospitalSearchQuery = ''; await reloadState('Centre afegit'); render(); } catch (error) { showError(error); } return; }
   if (action === 'open-clear-calendar') { const bounds = hasCalendarContent() ? calendarBounds() : { start: `${monthKey(calendarDate)}-01`, end: endOfMonth(calendarDate) }; modal = { type: 'clear-calendar', startDate: bounds.start, endDate: bounds.end }; render(); return; }
-  if (action === 'open-generation') { const startMonth = nextGenerationMonth(); const startDate = `${startMonth}-01`; modal = { type: 'generation', periodMode: 'month', startMonth, endMonth: startMonth, startDate, endDate: endOfMonth(startDate), guards: [], absences: [], conflict: '' }; render(); return; }
+  if (action === 'open-generation') { const startMonth = nextGenerationMonth(); const startDate = `${startMonth}-01`; modal = { type: 'generation', periodMode: 'month', startMonth, endMonth: startMonth, startDate, endDate: endOfMonth(startDate), timeLimitMinutes: 2, guards: [], absences: [], conflict: '' }; render(); return; }
   if (action === 'open-guard-editor') { const bounds = calendarBounds(); modal = { type: 'guard-editor', startMonth: projectionStartMonth(calendarProjection()), endMonth: projectionEndMonth(calendarProjection()), startDate: bounds.start, endDate: bounds.end, guards: structuredClone(calendarGuards()), conflict: '' }; render(); return; }
   if (action === 'open-incoming-guard') { modal = { type: 'guard-cession', guardId: null, date: '' }; render(); return; }
   if (action === 'open-calendar-guards') { modal = { type: 'guard-picker', date: button.dataset.guardDate }; render(); return; }
@@ -2345,7 +2483,7 @@ document.addEventListener('change', async (event) => {
   if (event.target.dataset.action === 'import-guards-file') { await importGuardSpreadsheet(event.target.files?.[0]); return; }
   if (event.target.dataset.action === 'import-absences-file') { await importAbsenceSpreadsheet(event.target.files?.[0]); return; }
   if (event.target.dataset.action === 'guard-import-choice') { const key = `${event.target.dataset.guardImportRow}:${event.target.dataset.guardImportItem}`; modal.guardImport.choices[key] = event.target.value; applyGuardImportSelections(); render(); return; }
-  if (modal?.type === 'guard-cession' && ['toMemberId', 'date'].includes(event.target.name)) { await refreshGuardOperationPreview(event.target.closest('form')); return; }
+  if (modal?.type === 'guard-cession' && ['toMemberId', 'date'].includes(event.target.name)) { await refreshGuardOperationPreview(event.target.closest('form'), event.target.name); return; }
   if (modal?.type === 'guard-exchange' && event.target.name === 'secondRef') { await refreshGuardOperationPreview(event.target.closest('form')); return; }
   if (modal?.type === 'extra-assignment' && modal.manual && event.target.name === 'memberId') {
     modal.memberId = event.target.value;
@@ -2370,8 +2508,10 @@ document.addEventListener('change', async (event) => {
   if (modal?.type === 'member' && event.target.name === 'work-pattern-mode') { syncWorkPatternMode(event.target.closest('form')); return; }
   if (modal?.type === 'member' && (event.target.dataset.patternWorking !== undefined || event.target.dataset.patternTele !== undefined)) { refreshPatternDependentFields(event.target.closest('form')); return; }
   if (modal?.type === 'member' && ['rule-weekday', 'rule-action'].includes(event.target.name)) { const row = event.target.closest('.fixed-rule-row'); refreshFixedRuleType(row, event.target.closest('form')); return; }
-  if (modal?.type === 'member' && event.target.name === 'rule-agenda') { const row = event.target.closest('.fixed-rule-row'); fixedRulePickerSummary(row); refreshFixedRuleWarning(row); return; }
+  if (modal?.type === 'member' && event.target.name === 'rule-agenda') { const row = event.target.closest('.fixed-rule-row'); fixedRulePickerSummary(row); refreshFixedRulePeonada(row); refreshFixedRuleWarning(row); return; }
+  if (modal?.type === 'member' && event.target.name === 'rule-peonada-agenda') { refreshFixedRulePeonada(event.target.closest('.fixed-rule-row')); return; }
   if (modal?.type === 'generation' && event.target.name === 'periodMode') { modal.periodMode = event.target.value; modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
+  if (modal?.type === 'generation' && event.target.name === 'generationTimeLimitMinutes') { modal.timeLimitMinutes = Number(event.target.value); return; }
   if (modal?.type === 'generation' && event.target.dataset.monthPart) { const picker = event.target.closest('[data-month-picker]'); const month = $('[data-month-part="month"]', picker).value; const year = $('[data-month-part="year"]', picker).value; const next = `${year}-${month}`; modal.startMonth = next; modal.endMonth = next; modal.startDate = `${next}-01`; modal.endDate = endOfMonth(modal.startDate); modal.replaceExisting = false; modal.overlap = null; modal.conflict = ''; render(); return; }
   if (modal?.type === 'generation' && ['generationStartDate', 'generationEndDate'].includes(event.target.name)) { const formElement = event.target.closest('form'); const startInput = $('[name="generationStartDate"]', formElement); const endInput = $('[name="generationEndDate"]', formElement); if (event.target.name === 'generationStartDate') { modal.startDate = event.target.value; if (modal.startDate && (!modal.endDate || modal.endDate < modal.startDate || monthKey(modal.endDate) !== monthKey(modal.startDate))) modal.endDate = endOfMonth(modal.startDate); } else modal.endDate = event.target.value; if (modal.startDate) modal.startMonth = monthKey(modal.startDate); if (modal.endDate) modal.endMonth = monthKey(modal.endDate); modal.replaceExisting = false; modal.overlap = null; if (endInput) { endInput.value = modal.endDate || ''; endInput.min = modal.startDate || ''; endInput.max = modal.startDate ? endOfMonth(modal.startDate) : ''; } modal.conflict = generationPeriodError(); startInput?.setCustomValidity(modal.conflict); endInput?.setCustomValidity(modal.conflict); const warning = $('.generation-warning', formElement); if (warning) { warning.hidden = !modal.conflict; const message = $('span', warning); if (message) message.textContent = modal.conflict; } return; }
   if (event.target.dataset.calendarFilterAll) { const kind = event.target.dataset.calendarFilterAll; openCalendarFilter = kind; (kind === 'member' ? selectedMemberFilters : selectedAgendaFilters).clear(); syncNavigationUrl('replace'); render(); return; }
@@ -2380,6 +2520,7 @@ document.addEventListener('change', async (event) => {
 });
 document.addEventListener('click', (event) => {
   $$('.language-picker[open]').forEach((picker) => { if (!picker.contains(event.target)) picker.removeAttribute('open'); });
+  $$('.calendar-filter[open]').forEach((filter) => { if (!filter.contains(event.target)) filter.removeAttribute('open'); });
   if (!event.target.closest('[data-agenda-reaction]')) $$('[data-agenda-reaction].open').forEach((item) => { item.classList.remove('open'); $('[data-action="toggle-agenda-reaction"]', item)?.setAttribute('aria-expanded', 'false'); });
   if (!event.target.closest('.fixed-rule-warning')) $$('.fixed-rule-warning.open').forEach((warning) => { warning.classList.remove('open'); $('.fixed-rule-warning-trigger', warning)?.setAttribute('aria-expanded', 'false'); });
 });
@@ -2412,14 +2553,15 @@ async function handleForm(formElement) {
       const { startMonth, endMonth, startDate, endDate } = generationPeriodPayload();
       if (!guardImportReady()) { modal.conflict = 'Revisa les coincidències de l’XLSX i selecciona una persona per cada nom pendent.'; render(); return; }
       if (modal.guards.some((item) => item.date < bounds.start || item.date > bounds.end) || modal.absences.some((item) => item.start < bounds.start || item.end > bounds.end || item.end < item.start)) { modal.conflict = 'Hi ha guàrdies o vacances fora del període seleccionat. Elimina-les o ajusta el període.'; render(); return; }
-      modal.busy = true; modal.conflict = ''; modal.loadingPhrase = nextGenerationLoadingMessage(); render();
-      const loadingTimer = startGenerationLoadingAnimation();
+      modal.busy = true; modal.conflict = ''; modal.loadingTimeLimitSeconds = null; modal.loadingStartedAt = Date.now(); modal.loadingPhrase = nextGenerationLoadingMessage(); render();
+      const loadingTimers = startGenerationLoadingAnimation();
       let job;
       try {
-        const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, guards: modal.guards, absences: modal.absences, replaceExisting: Boolean(modal.replaceExisting) });
+        const queued = await api.startGeneration({ startMonth, endMonth, startDate, endDate, timeLimitMinutes: Number(form.get('generationTimeLimitMinutes')), guards: modal.guards, absences: modal.absences, replaceExisting: Boolean(modal.replaceExisting) });
+        modal.loadingTimeLimitSeconds = Number(queued.timeLimitSeconds || 120); modal.loadingStartedAt = Date.now(); updateGenerationCountdown();
         job = await waitForGeneration(queued.id);
       } finally {
-        window.clearInterval(loadingTimer);
+        loadingTimers.forEach((timer) => window.clearInterval(timer));
       }
       if (job.status !== 'succeeded') throw new Error(job.error?.message || 'No s’ha pogut generar el calendari');
       quarter = startMonth; calendarDate = startDate; modal = null; await reloadState();
@@ -2433,10 +2575,12 @@ async function handleForm(formElement) {
       const fixedRules = $$('.fixed-rule-row', formElement).map((row) => {
         const action = $('[name="rule-action"]', row).value;
         const selected = $$('[name="rule-agenda"]:checked', row).map((item) => item.value);
-        return { weekday: Number($('[name="rule-weekday"]', row).value), requiredMode: action === 'one' ? 'one' : 'all', requiredAgendaIds: action === 'none' ? [] : selected, forbiddenAgendaIds: action === 'none' ? selected : [] };
+        return { weekday: Number($('[name="rule-weekday"]', row).value), requiredMode: action === 'one' ? 'one' : 'all', requiredAgendaIds: action === 'none' ? [] : selected, forbiddenAgendaIds: action === 'none' ? selected : [], peonadaAgendaIds: action === 'all' ? $$('[name="rule-peonada-agenda"]:checked', row).map((item) => item.value) : [] };
       });
       if (fixedRules.some((rule) => !rule.requiredAgendaIds.length && !rule.forbiddenAgendaIds.length)) return toast('Cada regla ha de contenir almenys una agenda');
       if (new Set(fixedRules.map((rule) => rule.weekday)).size !== fixedRules.length) return toast('Només hi pot haver una regla per dia');
+      const invalidPeonadaRule = fixedRules.find((rule) => rule.requiredMode === 'all' && fixedRulePeonadaError(rule.weekday, rule.requiredAgendaIds, rule.peonadaAgendaIds));
+      if (invalidPeonadaRule) return toast(fixedRulePeonadaError(invalidPeonadaRule.weekday, invalidPeonadaRule.requiredAgendaIds, invalidPeonadaRule.peonadaAgendaIds));
       const workPattern = collectWorkPattern(formElement); const availableDays = [...new Set(workPattern.weeks.flatMap((week) => week.workingDays))].sort((a, b) => a - b); if (!availableDays.length) return toast('Selecciona almenys un dia de treball');
       const teleDays = [...new Set(workPattern.weeks.flatMap((week) => week.teleDays))].sort((a, b) => a - b);
       const agendaPreferences = Object.fromEntries($$('[data-agenda-preference]', formElement).map((input) => [input.closest('.agenda-capability').querySelector('[name="allowed"]').value, Number(input.value)]).filter(([, value]) => value));
@@ -2580,6 +2724,13 @@ document.addEventListener('submit', async (event) => {
 }, true);
 
 document.addEventListener('input', (event) => {
+  if (modal?.type === 'generation' && event.target.name === 'generationTimeLimitMinutes') {
+    const minutes = clampGenerationTimeLimit(event.target.value);
+    if (minutes === null) return;
+    event.target.value = String(minutes);
+    modal.timeLimitMinutes = minutes;
+    return;
+  }
   if (!event.target.matches?.('[data-hospital-search]')) return;
   hospitalSearchQuery = event.target.value;
   clearTimeout(hospitalSearchTimer);

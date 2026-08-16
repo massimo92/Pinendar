@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from pinendar.infrastructure.models import Assignment, Vacancy
+from pinendar.infrastructure.models import Agenda, Assignment, Vacancy
 
 
 def create_member(
@@ -110,6 +110,79 @@ def test_deferred_vacancy_uses_origin_plus_six_and_persists_origin(
     assert deferred["deferredOriginDate"] == origin.isoformat()
     assert all(item["id"] != "direct-free-valid" for item in calendar["events"])
     assert all(item["id"] != vacancy_id for item in calendar["vacancies"])
+
+
+def test_unassigned_member_can_directly_adopt_one_half_telematic_vacancy(
+    authenticated_client: TestClient,
+) -> None:
+    deferred_agenda, _others = full_agendas(authenticated_client)
+    member = create_member(
+        authenticated_client,
+        name="Reverse Direct Deferred",
+        allowed_types=[deferred_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    origin = date(2026, 8, 11)
+    target = origin + timedelta(days=6)
+    with database.session_factory.begin() as session:
+        agenda = session.get(Agenda, deferred_agenda["id"])
+        assert agenda is not None
+        agenda.load_percentage = 50
+        session.add(
+            Assignment(
+                id="reverse-direct-free",
+                date=target,
+                member_id=member["id"],
+                kind="no_assignment",
+                load_percentage=0,
+            )
+        )
+        valid = Vacancy(date=origin, agenda_id=deferred_agenda["id"])
+        too_old = Vacancy(
+            date=origin - timedelta(days=1),
+            agenda_id=deferred_agenda["id"],
+        )
+        session.add_all([valid, too_old])
+        session.flush()
+        valid_id = valid.id
+
+    preview = authenticated_client.get(
+        f"/api/v1/calendar/dates/{target.isoformat()}/members/{member['id']}/extra-options"
+    )
+
+    assert preview.status_code == 200, preview.json()
+    assert [item["vacancyId"] for item in preview.json()["deferredOptions"]] == [
+        valid_id
+    ]
+    proposal = preview.json()["deferredOptions"][0]
+    assert proposal["deferredMemberId"] == member["id"]
+    assert proposal["loadPercentage"] == 50
+
+    applied = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{valid_id}/defer",
+        json={
+            "targetDate": target.isoformat(),
+            "targetMemberId": member["id"],
+            "expectedRevision": preview.json()["planningRevision"],
+        },
+    )
+
+    assert applied.status_code == 201, applied.json()
+    assert applied.json()["movements"] == []
+    with database.session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(Assignment).where(
+                    Assignment.member_id == member["id"],
+                    Assignment.date == target,
+                )
+            )
+        )
+        assert len(rows) == 1
+        assert rows[0].agenda_id == deferred_agenda["id"]
+        assert rows[0].load_percentage == 50
+        assert rows[0].deferred_origin_date == origin
+        assert rows[0].extra is False
 
 
 def test_deferred_vacancy_can_suggest_and_apply_a_multi_person_chain(
