@@ -19,6 +19,8 @@ class ScheduleProblem:
     conditions: dict[str, list[dict[str, Any]]]
     historical_counts: dict[str, dict[str, int]]
     locked_assignments: list[dict[str, Any]]
+    historical_telematic_days: dict[str, int] = field(default_factory=dict)
+    historical_assigned_days: dict[str, int] = field(default_factory=dict)
     first_generation_member_ids: list[str] = field(default_factory=list)
     start_date: str | None = None
     end_date: str | None = None
@@ -31,6 +33,8 @@ class ScheduleProblem:
     def from_dict(cls, value: dict[str, Any]) -> ScheduleProblem:
         return cls(
             **{
+                "historical_telematic_days": {},
+                "historical_assigned_days": {},
                 "first_generation_member_ids": [],
                 "start_date": None,
                 "end_date": None,

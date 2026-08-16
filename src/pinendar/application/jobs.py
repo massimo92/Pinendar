@@ -217,6 +217,11 @@ def build_problem(
     )
     historical_counts = {member["id"]: {agenda["id"]: 0 for agenda in state["agendas"]} for member in planning_team}
     load_units = {agenda["id"]: int(agenda.get("loadPercentage", 100)) // 50 for agenda in state["agendas"]}
+    historical_agenda_modality = {
+        agenda["id"]: bool(agenda.get("telematic", False))
+        for agenda in [*state["agendas"], *state.get("archivedAgendas", [])]
+    }
+    historical_day_modalities: dict[tuple[str, date], list[bool]] = {}
     for event in calendar["events"]:
         event_date = date.fromisoformat(event["date"])
         if requested_start <= event_date <= requested_end:
@@ -229,6 +234,21 @@ def build_problem(
             historical_counts[event["memberId"]][event["type"]] += (
                 int(event.get("loadPercentage", load_units[event["type"]] * 50)) // 50
             )
+        if event["memberId"] not in planning_member_ids or event["type"] == "no_assignment":
+            continue
+        if event["type"] == "management":
+            telematic = True
+        elif event["type"] in historical_agenda_modality:
+            telematic = historical_agenda_modality[event["type"]]
+        else:
+            continue
+        historical_day_modalities.setdefault((event["memberId"], event_date), []).append(telematic)
+    historical_assigned_days = {member_id: 0 for member_id in planning_member_ids}
+    historical_telematic_days = {member_id: 0 for member_id in planning_member_ids}
+    for (member_id, _event_date), modalities in historical_day_modalities.items():
+        historical_assigned_days[member_id] += 1
+        if modalities and all(modalities):
+            historical_telematic_days[member_id] += 1
     absences = [
         item
         for item in calendar["absences"]
@@ -245,7 +265,7 @@ def build_problem(
             absences.append(item)
             known_absences.add(key)
     return ScheduleProblem(
-        schema_version=9,
+        schema_version=10,
         planning_revision=state["planningRevision"],
         start_month=payload["startMonth"],
         end_month=payload["endMonth"],
@@ -257,6 +277,8 @@ def build_problem(
         conditions={"guards": payload.get("guards", []), "absences": absences},
         historical_counts=historical_counts,
         locked_assignments=payload.get("lockedAssignments", []),
+        historical_telematic_days=historical_telematic_days,
+        historical_assigned_days=historical_assigned_days,
         first_generation_member_ids=first_generation_member_ids,
         start_date=payload.get("startDate"),
         end_date=payload.get("endDate"),

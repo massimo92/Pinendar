@@ -21,7 +21,7 @@ from pinendar.domain.scheduler import (
 )
 from pinendar.infrastructure.cp_sat_fairness import add_operational_fairness
 
-MODEL_VERSION = "26"
+MODEL_VERSION = "27"
 ORTOOLS_VERSION = version("ortools")
 
 
@@ -35,7 +35,7 @@ class _Phase:
 def _phase_time_weight(phase: _Phase, final_phase_count: int) -> float:
     if phase.name == "guard-onsite-days":
         return 10
-    if phase.name == "automatic-deferred-telematic-coverage":
+    if phase.name.startswith("automatic-deferred-priority-"):
         return 12
     if phase.name == "telematic-percentage-range":
         return 15
@@ -58,7 +58,6 @@ def _phase_time_budget(phases: list[_Phase], phase_index: int, remaining: float)
         return remaining
     primary_names = {
         "guard-onsite-days",
-        "automatic-deferred-telematic-coverage",
         "telematic-percentage-range",
         "telematic-percentage-dispersion",
         "worst-historical-distance",
@@ -194,7 +193,7 @@ def _daily_demand(problem: ScheduleProblem, planning_dates: list[date]) -> dict[
 class CpSatScheduler:
     def solve(self, problem: ScheduleProblem) -> ScheduleResult:
         started = monotonic()
-        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
+        if problem.schema_version not in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
             return _failure(
                 "UNSUPPORTED_SNAPSHOT_VERSION",
                 "La versió de les dades de planificació no és compatible",
@@ -227,6 +226,24 @@ class CpSatScheduler:
                 "Els dies de gestió han d’estar entre 0 i 5",
                 outcome="model_invalid",
                 details={"members": invalid_management_quotas},
+            )
+        invalid_historical_telematic_days = [
+            {
+                "memberId": member_id,
+                "telematicDays": int(problem.historical_telematic_days.get(member_id, 0)),
+                "assignedDays": int(problem.historical_assigned_days.get(member_id, 0)),
+            }
+            for member_id in members
+            if not 0
+            <= int(problem.historical_telematic_days.get(member_id, 0))
+            <= int(problem.historical_assigned_days.get(member_id, 0))
+        ]
+        if invalid_historical_telematic_days:
+            return _failure(
+                "INVALID_HISTORICAL_TELEMATIC_DAYS",
+                "Els dies telemàtics històrics no són vàlids",
+                outcome="model_invalid",
+                details={"members": invalid_historical_telematic_days},
             )
         agenda_load = {agenda_id: int(agenda.get("loadPercentage", 100)) for agenda_id, agenda in agendas.items()}
         agenda_load_units = {agenda_id: load // 50 for agenda_id, load in agenda_load.items()}
@@ -569,19 +586,23 @@ class CpSatScheduler:
             if ordinary_assignment is not None:
                 model.add(ordinary_assignment + sum(target_agenda_variables) <= 1)
 
-        automatic_deferred_phase = (
+        automatic_deferred_phases = [
             _Phase(
-                "automatic-deferred-telematic-coverage",
+                f"automatic-deferred-priority-{priority}-coverage",
                 sum(
                     vacancy - sum(source_variables)
                     for source, source_variables in deferred_by_source.items()
                     for vacancy in [vacancies[source]]
+                    if int(agendas[source[1]].get("priority", 3)) == priority
                 ),
-                False,
+                True,
             )
-            if deferred_by_source
-            else None
-        )
+            for priority in (1, 2, 3, 4)
+            if any(
+                int(agendas[source[1]].get("priority", 3)) == priority
+                for source in deferred_by_source
+            )
+        ]
 
         phases: list[_Phase] = []
         capacity_phases: list[_Phase] = []
@@ -881,7 +902,9 @@ class CpSatScheduler:
             has_activity: dict[str, cp_model.IntVar] = {}
             for member_id in members:
                 member_dates = [value for value in planning_dates if member_id in planifiable.get(value, [])]
-                if not member_dates:
+                historical_total = int(problem.historical_assigned_days.get(member_id, 0))
+                historical_telematic = int(problem.historical_telematic_days.get(member_id, 0))
+                if not member_dates and historical_total <= 0:
                     continue
                 assigned_days: list[cp_model.IntVar] = []
                 telematic_days: list[cp_model.IntVar] = []
@@ -911,19 +934,19 @@ class CpSatScheduler:
                     assigned_days.append(assigned_day)
                     telematic_days.append(telematic_day)
 
-                maximum_assignments = len(member_dates)
+                maximum_assignments = historical_total + len(member_dates)
                 total_count = model.new_int_var(
-                    0,
+                    historical_total,
                     maximum_assignments,
                     f"assigned_day_count_p{member_order[member_id]}",
                 )
-                model.add(total_count == sum(assigned_days))
+                model.add(total_count == historical_total + sum(assigned_days))
                 telematic_count = model.new_int_var(
-                    0,
+                    historical_telematic,
                     maximum_assignments,
                     f"telematic_day_count_p{member_order[member_id]}",
                 )
-                model.add(telematic_count == sum(telematic_days))
+                model.add(telematic_count == historical_telematic + sum(telematic_days))
                 active = model.new_bool_var(
                     f"has_activity_p{member_order[member_id]}"
                 )
@@ -1179,8 +1202,7 @@ class CpSatScheduler:
         phases = []
         if guard_onsite_phase is not None:
             phases.append(guard_onsite_phase)
-        if automatic_deferred_phase is not None:
-            phases.append(automatic_deferred_phase)
+        phases.extend(automatic_deferred_phases)
         phases.extend(capacity_phases)
         (
             telematic_assignment_counts,
@@ -1615,9 +1637,16 @@ def _result_telematic_balance(
         member_id
         for member_id, member in members.items()
         if any(_is_planifiable(member, value, problem) for value in planning_dates)
+        or int(problem.historical_assigned_days.get(member_id, 0)) > 0
     }
-    telematic_counts = {member_id: 0 for member_id in sorted(eligible)}
-    total_counts = {member_id: 0 for member_id in sorted(eligible)}
+    telematic_counts = {
+        member_id: int(problem.historical_telematic_days.get(member_id, 0))
+        for member_id in sorted(eligible)
+    }
+    total_counts = {
+        member_id: int(problem.historical_assigned_days.get(member_id, 0))
+        for member_id in sorted(eligible)
+    }
     days: dict[tuple[str, str], list[bool]] = defaultdict(list)
     for item in result.get("assignments", []):
         member_id = str(item.get("memberId"))
@@ -1724,6 +1753,15 @@ def _polish_solution(
     started = monotonic()
     current = deepcopy(result)
     agendas = {str(item["id"]): item for item in problem.agendas}
+    members = {str(item["id"]): item for item in problem.team}
+    planning_dates = _planning_dates(problem)
+    demand = _daily_demand(problem, planning_dates)
+    expected_capacity_keys = {
+        (member_id, value.isoformat())
+        for member_id, member in members.items()
+        for value in planning_dates
+        if _is_planifiable(member, value, problem)
+    }
     accepted = 0
     attempted = 0
     completed = True
@@ -1741,7 +1779,41 @@ def _polish_solution(
             )
         )
 
-    def scores(candidate: dict[str, Any]) -> tuple[tuple[int, ...], int, tuple[int, int], tuple[int, int], int]:
+    def movable_deferred(item: dict[str, Any]) -> bool:
+        return bool(item.get("deferredOriginDate")) and item.get("type") in agendas and not any(
+            item.get(flag)
+            for flag in (
+                "fixed",
+                "locked",
+                "extra",
+                "peonada",
+                "manuallyModified",
+            )
+        )
+
+    def assignment_load(item: dict[str, Any]) -> int:
+        activity_type = item.get("type")
+        if activity_type == "no_assignment":
+            return 0
+        if activity_type == "management":
+            return 100
+        return int(agendas.get(str(activity_type), {}).get("loadPercentage", 100))
+
+    def capacity_score(candidate: dict[str, Any]) -> tuple[int, int]:
+        loads: Counter[tuple[str, str]] = Counter()
+        for item in candidate.get("assignments", []):
+            key = (str(item.get("memberId")), str(item.get("date")))
+            if key not in expected_capacity_keys or item.get("type") == "no_assignment":
+                continue
+            loads[key] += assignment_load(item)
+        return (
+            sum(loads[key] == 50 for key in expected_capacity_keys),
+            sum(loads[key] == 0 for key in expected_capacity_keys),
+        )
+
+    def scores(
+        candidate: dict[str, Any],
+    ) -> tuple[tuple[int, ...], int, tuple[int, int], tuple[int, int], int, tuple[int, int]]:
         fairness, _distances = _result_fairness(problem, candidate)
         telematic, _telematic, _total, _percentages = _result_telematic_balance(
             problem, candidate
@@ -1752,6 +1824,7 @@ def _polish_solution(
             telematic,
             fairness,
             _result_repetitions(problem, candidate),
+            capacity_score(candidate),
         )
 
     while monotonic() < deadline:
@@ -1759,7 +1832,14 @@ def _polish_solution(
         assignments = current.get("assignments", [])
         vacancies = current.get("vacancies", [])
         best: dict[str, Any] | None = None
-        best_score: tuple[tuple[int, ...], int, tuple[int, int], tuple[int, int], int] | None = None
+        best_score: tuple[
+            tuple[int, ...],
+            int,
+            tuple[int, int],
+            tuple[int, int],
+            int,
+            tuple[int, int],
+        ] | None = None
 
         def consider(candidate: dict[str, Any]) -> None:
             nonlocal attempted, best, best_score
@@ -1767,12 +1847,14 @@ def _polish_solution(
             if monotonic() >= deadline or validate_solution(problem, candidate):
                 return
             candidate_score = scores(candidate)
-            coverage, guard, telematic, fairness, repetitions = candidate_score
+            coverage, guard, telematic, fairness, repetitions, capacity = candidate_score
             if any(after > before for before, after in zip(baseline[0], coverage, strict=True)):
                 return
             if guard > baseline[1]:
                 return
             if repetitions > baseline[4]:
+                return
+            if capacity > baseline[5]:
                 return
             rank: tuple[Any, ...]
             best_rank: tuple[Any, ...] | None
@@ -1785,7 +1867,7 @@ def _polish_solution(
                 improves = fairness < baseline[3] or (
                     fairness == baseline[3] and repetitions < baseline[4]
                 )
-                rank = (fairness, repetitions, telematic, coverage, guard)
+                rank = (fairness, repetitions, telematic, coverage, guard, capacity)
                 best_rank = (
                     (
                         best_score[3],
@@ -1793,6 +1875,7 @@ def _polish_solution(
                         best_score[2],
                         best_score[0],
                         best_score[1],
+                        best_score[5],
                     )
                     if best_score is not None
                     else None
@@ -1801,7 +1884,7 @@ def _polish_solution(
                 if fairness > baseline[3]:
                     return
                 improves = telematic < baseline[2]
-                rank = (telematic, fairness, repetitions, coverage, guard)
+                rank = (telematic, fairness, repetitions, coverage, guard, capacity)
                 best_rank = (
                     (
                         best_score[2],
@@ -1809,6 +1892,7 @@ def _polish_solution(
                         best_score[4],
                         best_score[0],
                         best_score[1],
+                        best_score[5],
                     )
                     if best_score is not None
                     else None
@@ -1818,6 +1902,108 @@ def _polish_solution(
             if best_rank is None or rank < best_rank:
                 best = candidate
                 best_score = candidate_score
+
+        if objective == "telematic-percentage":
+            for deferred_index, deferred in enumerate(assignments):
+                if monotonic() >= deadline:
+                    completed = False
+                    break
+                if not movable_deferred(deferred):
+                    continue
+                agenda_id = str(deferred["type"])
+                deferred_agenda = agendas[agenda_id]
+                deferred_load = int(deferred_agenda.get("loadPercentage", 100))
+                origin = date.fromisoformat(str(deferred["deferredOriginDate"]))
+                source_member_id = str(deferred["memberId"])
+                source_date = str(deferred["date"])
+
+                # Exchange the automatic deferment with an ordinary assignment
+                # on the same day. Coverage dates stay unchanged while the
+                # telematic day moves to another person.
+                for target_index, target in enumerate(assignments):
+                    if (
+                        target_index == deferred_index
+                        or target.get("date") != source_date
+                        or target.get("memberId") == source_member_id
+                        or not mutable(target)
+                        or target.get("type") not in agendas
+                        or int(agendas[str(target["type"])].get("loadPercentage", 100)) != deferred_load
+                    ):
+                        continue
+                    candidate = deepcopy(current)
+                    target_member_id = str(target["memberId"])
+                    candidate["assignments"][deferred_index]["memberId"] = target_member_id
+                    candidate["assignments"][target_index]["memberId"] = source_member_id
+                    consider(candidate)
+
+                # Move the automatic deferment to free capacity on any legal
+                # day in its six-day window. Generated no-assignment markers are
+                # replaced or restored as capacity becomes occupied or empty.
+                for target_date in planning_dates:
+                    if (
+                        target_date <= origin
+                        or target_date > origin + timedelta(days=6)
+                        or demand.get((target_date, agenda_id), 0) > 0
+                    ):
+                        continue
+                    target_date_text = target_date.isoformat()
+                    for target_member_id, member in members.items():
+                        if (
+                            (target_member_id, target_date_text) == (source_member_id, source_date)
+                            or not _is_planifiable(member, target_date, problem)
+                            or agenda_id not in member.get("allowedTypes", [])
+                        ):
+                            continue
+                        target_rows = [
+                            (index, item)
+                            for index, item in enumerate(assignments)
+                            if item.get("memberId") == target_member_id
+                            and item.get("date") == target_date_text
+                            and index != deferred_index
+                        ]
+                        if any(
+                            item.get("deferredOriginDate")
+                            or item.get("extra")
+                            or item.get("manuallyModified")
+                            or (item.get("type") == "no_assignment" and item.get("locked"))
+                            for _index, item in target_rows
+                        ):
+                            continue
+                        if any(item.get("type") == agenda_id for _index, item in target_rows):
+                            continue
+                        if sum(assignment_load(item) for _index, item in target_rows) + deferred_load > 100:
+                            continue
+
+                        candidate = deepcopy(current)
+                        candidate_assignments = candidate["assignments"]
+                        candidate_assignments[deferred_index]["memberId"] = target_member_id
+                        candidate_assignments[deferred_index]["date"] = target_date_text
+                        candidate["assignments"] = [
+                            item
+                            for index, item in enumerate(candidate_assignments)
+                            if not (
+                                index != deferred_index
+                                and item.get("memberId") == target_member_id
+                                and item.get("date") == target_date_text
+                                and item.get("type") == "no_assignment"
+                            )
+                        ]
+                        source_rows = [
+                            item
+                            for item in candidate["assignments"]
+                            if item.get("memberId") == source_member_id
+                            and item.get("date") == source_date
+                        ]
+                        if not source_rows:
+                            candidate["assignments"].append(
+                                {
+                                    "id": uuid4().hex,
+                                    "date": source_date,
+                                    "memberId": source_member_id,
+                                    "type": "no_assignment",
+                                }
+                            )
+                        consider(candidate)
 
         for source_index, source in enumerate(assignments):
             if monotonic() >= deadline:

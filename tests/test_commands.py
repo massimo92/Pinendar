@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -368,6 +368,88 @@ def test_member_status_is_tracked_and_inactive_member_is_not_planned(authenticat
         )
     assert [item.active for item in changes] == [False]
     assert member["id"] not in {item["id"] for item in problem.team}
+
+
+def test_generation_problem_collects_historical_telematic_days_without_double_counting_range(
+    authenticated_client: TestClient,
+) -> None:
+    state = authenticated_client.get("/api/v1/bootstrap").json()
+    member_id = state["team"][0]["id"]
+    telematic_agenda = next(item for item in state["agendas"] if item["telematic"])
+    onsite_agenda = next(item for item in state["agendas"] if not item["telematic"])
+    database = authenticated_client.app.state.database
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="historical-tele",
+                    date=date(2098, 12, 1),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="historical-onsite",
+                    date=date(2098, 12, 2),
+                    member_id=member_id,
+                    agenda_id=onsite_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="historical-management",
+                    date=date(2098, 12, 3),
+                    member_id=member_id,
+                    agenda_id=None,
+                    kind="management",
+                    load_percentage=100,
+                    management=True,
+                ),
+                Assignment(
+                    id="historical-mixed-tele",
+                    date=date(2098, 12, 4),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=50,
+                ),
+                Assignment(
+                    id="historical-mixed-onsite",
+                    date=date(2098, 12, 4),
+                    member_id=member_id,
+                    agenda_id=onsite_agenda["id"],
+                    kind="assigned",
+                    load_percentage=50,
+                ),
+                Assignment(
+                    id="historical-unassigned",
+                    date=date(2098, 12, 5),
+                    member_id=member_id,
+                    agenda_id=None,
+                    kind="no_assignment",
+                    load_percentage=0,
+                ),
+                Assignment(
+                    id="replacement-range-tele",
+                    date=date(2099, 1, 4),
+                    member_id=member_id,
+                    agenda_id=telematic_agenda["id"],
+                    kind="assigned",
+                    load_percentage=100,
+                ),
+            ]
+        )
+    with database.session_factory() as session:
+        schedule_problem = build_problem(
+            session,
+            authenticated_client.app.state.catalog,
+            {"startMonth": "2099-01", "endMonth": "2099-01", "guards": [], "absences": []},
+        )
+
+    assert schedule_problem.schema_version == 10
+    assert schedule_problem.historical_assigned_days[member_id] == 4
+    assert schedule_problem.historical_telematic_days[member_id] == 2
 
 
 def test_member_vacations_are_saved_and_past_days_are_immutable(authenticated_client: TestClient) -> None:

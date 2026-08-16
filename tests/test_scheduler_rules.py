@@ -74,6 +74,8 @@ def problem(
     guards: list[dict[str, str]] | None = None,
     conditions: dict[str, list[dict[str, Any]]] | None = None,
     historical: dict[str, dict[str, int]] | None = None,
+    historical_telematic_days: dict[str, int] | None = None,
+    historical_assigned_days: dict[str, int] | None = None,
     optimization_mode: str = "fairness",
     schema_version: int = 2,
     start_month: str = "2027-01",
@@ -96,6 +98,8 @@ def problem(
         historical_counts=historical
         or {item["id"]: {entry["id"]: 0 for entry in agendas} for item in team},
         locked_assignments=[],
+        historical_telematic_days=historical_telematic_days or {},
+        historical_assigned_days=historical_assigned_days or {},
         first_generation_member_ids=first_generation_member_ids or [],
         start_date=start_date,
         end_date=end_date,
@@ -271,8 +275,35 @@ def test_scheduler_assigns_a_telematic_vacancy_as_deferred_on_a_later_free_day()
         }
     ]
     phase_names = [phase["name"] for phase in result.metrics["phases"]]
-    assert phase_names.index("automatic-deferred-telematic-coverage") < phase_names.index(
+    assert phase_names.index("automatic-deferred-priority-1-coverage") < phase_names.index(
         "operational-fairness-polishing"
+    )
+
+
+def test_automatic_deferred_coverage_preserves_original_agenda_priority() -> None:
+    agendas = [
+        agenda("urgent-remote", priority=1, telematic=True),
+        agenda("low-remote", priority=4, telematic=True),
+    ]
+    team = [member("person", ["urgent-remote", "low-remote"], available=[2])]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"urgent-remote": 1, "low-remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-05",
+        )
+    )
+
+    deferred = next(item for item in result.assignments if item.get("deferredOriginDate"))
+    phase_names = [phase["name"] for phase in result.metrics["phases"]]
+    assert result.outcome == "solution"
+    assert deferred["type"] == "urgent-remote"
+    assert result.vacancies == [{"date": "2027-01-04", "type": "low-remote"}]
+    assert phase_names.index("automatic-deferred-priority-1-coverage") < phase_names.index(
+        "automatic-deferred-priority-4-coverage"
     )
 
 
@@ -532,6 +563,50 @@ def test_telematic_balance_uses_percentages_not_absolute_assignment_counts() -> 
         "long-week": 50.0,
     }
     assert result.metrics["telematicBalance"]["rangePercentagePoints"] == 50.0
+
+
+def test_telematic_balance_combines_historical_days_with_new_schedule() -> None:
+    agendas = [
+        agenda("onsite", priority=1),
+        agenda("remote", priority=1, telematic=True),
+    ]
+    team = [
+        member("historically-remote", ["onsite", "remote"]),
+        member("historically-onsite", ["onsite", "remote"]),
+    ]
+
+    result = CpSatScheduler().solve(
+        problem(
+            agendas,
+            team,
+            {"1": {"onsite": 1, "remote": 1}},
+            start_date="2027-01-04",
+            end_date="2027-01-04",
+            historical_telematic_days={
+                "historically-remote": 8,
+                "historically-onsite": 2,
+            },
+            historical_assigned_days={
+                "historically-remote": 10,
+                "historically-onsite": 10,
+            },
+        )
+    )
+
+    assignments = {item["memberId"]: item["type"] for item in result.assignments}
+    assert result.outcome == "solution"
+    assert assignments == {
+        "historically-remote": "onsite",
+        "historically-onsite": "remote",
+    }
+    assert result.metrics["telematicBalance"]["telematicDaysByMember"] == {
+        "historically-remote": 8,
+        "historically-onsite": 3,
+    }
+    assert result.metrics["telematicBalance"]["totalAssignedDaysByMember"] == {
+        "historically-remote": 11,
+        "historically-onsite": 11,
+    }
 
 
 def test_onsite_half_day_makes_the_whole_assigned_day_onsite() -> None:
@@ -1706,6 +1781,168 @@ def test_final_polishing_swaps_people_to_improve_telematic_percentage() -> None:
     assert remote["memberId"] == "long-week"
     assert metrics["acceptedMoves"] == 1
     assert metrics["remainingImprovingMoves"] == 0
+
+
+def test_telematic_polishing_can_change_automatic_deferred_recipient() -> None:
+    agendas = [agenda("onsite"), agenda("remote", telematic=True)]
+    team = [
+        member("historically-remote", ["onsite", "remote"], available=[2]),
+        member("historically-onsite", ["onsite", "remote"], available=[2]),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"remote": 1}, "2": {"onsite": 1}},
+        start_date="2027-01-04",
+        end_date="2027-01-05",
+        historical_telematic_days={
+            "historically-remote": 8,
+            "historically-onsite": 2,
+        },
+        historical_assigned_days={
+            "historically-remote": 10,
+            "historically-onsite": 10,
+        },
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {
+                "id": "automatic-deferred",
+                "date": "2027-01-05",
+                "memberId": "historically-remote",
+                "type": "remote",
+                "deferredOriginDate": "2027-01-04",
+            },
+            {
+                "id": "ordinary-onsite",
+                "date": "2027-01-05",
+                "memberId": "historically-onsite",
+                "type": "onsite",
+            },
+        ],
+        "vacancies": [],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+        objective="telematic-percentage",
+        allow_vacancies=False,
+    )
+
+    deferred = next(item for item in polished["assignments"] if item.get("deferredOriginDate"))
+    onsite = next(item for item in polished["assignments"] if item["type"] == "onsite")
+    assert deferred["memberId"] == "historically-onsite"
+    assert onsite["memberId"] == "historically-remote"
+    assert metrics["acceptedMoves"] == 1
+
+
+def test_telematic_polishing_can_move_automatic_deferred_to_another_legal_day() -> None:
+    agendas = [agenda("remote", telematic=True)]
+    team = [
+        member("historically-remote", ["remote"], available=[2]),
+        member("historically-onsite", ["remote"], available=[3]),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"remote": 1}},
+        start_date="2027-01-04",
+        end_date="2027-01-06",
+        historical_telematic_days={"historically-remote": 8, "historically-onsite": 2},
+        historical_assigned_days={"historically-remote": 10, "historically-onsite": 10},
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {
+                "id": "automatic-deferred",
+                "date": "2027-01-05",
+                "memberId": "historically-remote",
+                "type": "remote",
+                "deferredOriginDate": "2027-01-04",
+            },
+            {
+                "id": "free-day",
+                "date": "2027-01-06",
+                "memberId": "historically-onsite",
+                "type": "no_assignment",
+            },
+        ],
+        "vacancies": [],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+        objective="telematic-percentage",
+        allow_vacancies=False,
+    )
+
+    deferred = next(item for item in polished["assignments"] if item.get("deferredOriginDate"))
+    replacement = next(item for item in polished["assignments"] if item["type"] == "no_assignment")
+    assert (deferred["memberId"], deferred["date"]) == ("historically-onsite", "2027-01-06")
+    assert (replacement["memberId"], replacement["date"]) == ("historically-remote", "2027-01-05")
+    assert metrics["acceptedMoves"] == 1
+
+
+def test_telematic_polishing_keeps_manual_deferred_recipient_locked() -> None:
+    agendas = [agenda("onsite"), agenda("remote", telematic=True)]
+    team = [
+        member("historically-remote", ["onsite", "remote"], available=[2]),
+        member("historically-onsite", ["onsite", "remote"], available=[2]),
+    ]
+    schedule_problem = problem(
+        agendas,
+        team,
+        {"1": {"remote": 1}, "2": {"onsite": 1}},
+        start_date="2027-01-04",
+        end_date="2027-01-05",
+        historical_telematic_days={"historically-remote": 8, "historically-onsite": 2},
+        historical_assigned_days={"historically-remote": 10, "historically-onsite": 10},
+    )
+    initial = {
+        "outcome": "solution",
+        "assignments": [
+            {
+                "id": "manual-deferred",
+                "date": "2027-01-05",
+                "memberId": "historically-remote",
+                "type": "remote",
+                "deferredOriginDate": "2027-01-04",
+                "locked": True,
+                "manuallyModified": True,
+            },
+            {
+                "id": "ordinary-onsite",
+                "date": "2027-01-05",
+                "memberId": "historically-onsite",
+                "type": "onsite",
+            },
+        ],
+        "vacancies": [],
+        "metrics": {},
+        "diagnostics": [],
+    }
+
+    polished, metrics = _polish_solution(
+        schedule_problem,
+        initial,
+        deadline=monotonic() + 2,
+        objective="telematic-percentage",
+        allow_vacancies=False,
+    )
+
+    deferred = next(item for item in polished["assignments"] if item.get("deferredOriginDate"))
+    assert deferred["memberId"] == "historically-remote"
+    assert metrics["acceptedMoves"] == 0
 
 
 def test_polishing_can_exchange_an_assignment_with_same_modality_vacancy() -> None:

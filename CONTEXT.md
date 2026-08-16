@@ -136,7 +136,7 @@ _Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 **Asignación diferida**:
 Asignación de una plaza telemática que no pudo cubrirse en su fecha de origen y se realiza dentro de los seis días naturales posteriores usando capacidad que habría quedado sin asignar. Conserva su fecha de origen y cubre la vacante original.
 Al iniciarla desde una persona sin asignación, esa persona adopta directamente una única vacante compatible: no se mueve ni se añade ninguna otra agenda y una carga del 50% conserva la jornada parcial.
-Durante la generación, el optimizador puede crearla automáticamente para cubrir vacantes telemáticas usando solo capacidad libre; prioriza cubrir el mayor número posible y, después, mantener equilibrado el porcentaje telemático entre personas. Las asignaciones automáticas no desplazan agendas ordinarias y pueden recalcularse en una nueva generación.
+Durante la generación, el optimizador puede crearla automáticamente para cubrir vacantes telemáticas usando solo capacidad libre; maximiza la cobertura diferida según la prioridad de la agenda original y, después, mantiene equilibrado el porcentaje telemático acumulado entre personas. Las fases posteriores pueden cambiar la fecha o la persona de un diferido automático, pero no reducir la cobertura conseguida. Los diferidos manuales permanecen bloqueados.
 _Avoid_: Agenda nueva, peonada, cambio de fecha
 
 **Jornada parcial excepcional**:
@@ -176,7 +176,7 @@ Objetivo protegido, entre uno y cinco días, declarado únicamente para una pers
 _Avoid_: Agenda de gestión
 
 **Equilibrio telemático porcentual**:
-Proximidad entre los porcentajes de días asignados que son telemáticos para cada persona. Un día solo es telemático si todas sus asignaciones lo son: cualquier agenda presencial prevalece. Gestión sola cuenta como día telemático y la carga sin asignar queda excluida.
+Proximidad entre los porcentajes acumulados de días asignados que son telemáticos para cada persona. Combina los días conservados fuera del periodo regenerado con los propuestos dentro de él, evitando duplicar el rango reemplazado. Un día solo es telemático si todas sus asignaciones lo son: cualquier agenda presencial prevalece. Gestión sola cuenta como día telemático y la carga sin asignar queda excluida.
 _Avoid_: Porcentaje de eventos, igualdad de días telemáticos absolutos
 
 **Perfil estadístico**:
