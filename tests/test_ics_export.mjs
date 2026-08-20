@@ -67,15 +67,23 @@ const vacation = buildIcsEvent({
 assert.match(vacation, /DTSTART;VALUE=DATE:20260818\r\n/);
 assert.match(vacation, /DTEND;VALUE=DATE:20260821\r\n/);
 assert.match(vacation, /SUMMARY:Anna Serra · Vacaciones\r\n/);
+
+const vacant = buildIcsEvent({
+  event: { id: 'vacant-event', date: '2026-08-21' },
+  agenda: { name: 'TAC urgent', shift: 'morning' },
+  hospital,
+});
+assert.match(vacant, /SUMMARY:TAC urgent · Trueta\r\n/);
+assert.match(vacant, /DTSTART:20260821T080000\r\n/);
 assert.equal(
   hospitalExportColor({ catalogId: 'hospital-trueta' }),
   hospitalExportColor({ catalogId: 'hospital-trueta' }),
 );
 
-const calendar = buildIcsCalendar([morning, afternoonPeonada, deferred, management, vacation]);
+const calendar = buildIcsCalendar([morning, afternoonPeonada, deferred, management, vacation, vacant]);
 assert.ok(calendar.startsWith('BEGIN:VCALENDAR\r\nVERSION:2.0'));
 assert.match(calendar, /CALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nPRODID:-\/\/Pinendar\/\/CA/);
 assert.ok(calendar.endsWith('END:VCALENDAR'));
-assert.equal(calendar.match(/BEGIN:VEVENT/g)?.length, 5);
+assert.equal(calendar.match(/BEGIN:VEVENT/g)?.length, 6);
 
 console.log('ics-export tests passed');
