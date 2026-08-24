@@ -2,7 +2,7 @@ import { api, waitForGeneration } from './api.js?v=15';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=14';
 import { calendarIncidentsForDate, calendarIssueFilterFromValue, calendarRowsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, toggleCalendarIssueFilter, visibleAbsencesForDate } from './calendar-utils.mjs?v=5';
-import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=8';
+import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=10';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
 import { clampGenerationTimeLimit } from './generation-utils.mjs?v=2';
@@ -2217,6 +2217,9 @@ function render() {
   $$('.modal-head .icon-button').forEach((button) => { if (!button.hasAttribute('aria-label')) button.setAttribute('aria-label', state.language === 'es' ? 'Cerrar' : 'Tanca'); });
   document.documentElement.lang = state.language === 'es' ? 'es' : 'ca'; translateDom(app);
   enhanceSelects(app);
+  if (window.matchMedia('(max-width: 800px)').matches) {
+    requestAnimationFrame(() => $('.nav button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' }));
+  }
   if (page === 'setup') requestAnimationFrame(initHospitalMap);
   if (modal?.type === 'public-link') requestAnimationFrame(renderPublicQr);
   if (modal) requestAnimationFrame(() => ($('.modal-body input:not([type="hidden"]),.modal-body [data-enhanced-select-trigger]') || $('.modal-card button'))?.focus());
