@@ -13,7 +13,7 @@ def error_body(
     return {"error": {"code": code, "message": message, "field": field, "details": details or {}}}
 
 
-async def domain_error_handler(_request: Request, error: DomainError) -> JSONResponse:
+async def domain_error_handler(request: Request, error: DomainError) -> JSONResponse:
     status = (
         401
         if error.code in {"UNAUTHORIZED", "INVALID_CREDENTIALS", "INVALID_RECOVERY_CODE"}
@@ -23,9 +23,24 @@ async def domain_error_handler(_request: Request, error: DomainError) -> JSONRes
         if error.code in {"SIGNUP_DISABLED", "FORBIDDEN", "ADMIN_ACCOUNT_PROTECTED"}
         else 404
         if error.code.endswith("NOT_FOUND")
+        else 410
+        if error.code == "PUBLIC_LINK_REPLACED"
         else 409
     )
-    return JSONResponse(status_code=status, content=error_body(error.code, error.message, error.field, error.details))
+    headers = (
+        {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow",
+        }
+        if request.url.path.startswith("/api/v1/public/")
+        else None
+    )
+    return JSONResponse(
+        status_code=status,
+        content=error_body(error.code, error.message, error.field, error.details),
+        headers=headers,
+    )
 
 
 async def validation_error_handler(_request: Request, error: RequestValidationError) -> JSONResponse:

@@ -32,6 +32,44 @@ export function vacanciesForDate({ unfilled, date, selectedAgendaIds }) {
   );
 }
 
+export function calendarRowsForDate({
+  assignments,
+  guards,
+  vacancies,
+  date,
+  selectedMemberIds,
+  selectedAgendaIds,
+}) {
+  const matchesMember = (memberId) => (
+    !selectedMemberIds?.size || selectedMemberIds.has(memberId)
+  );
+  const matchesAgenda = (type) => (
+    !selectedAgendaIds?.size || selectedAgendaIds.has(type)
+  );
+  return {
+    assignments: assignments.filter(
+      (item) => item.date === date
+        && matchesMember(item.memberId)
+        && matchesAgenda(item.type),
+    ),
+    guards: guards.filter(
+      (item) => item.date === date && matchesMember(item.memberId),
+    ),
+    vacancies: selectedMemberIds?.size
+      ? []
+      : vacanciesForDate({ unfilled: vacancies, date, selectedAgendaIds }),
+  };
+}
+
+export function toggleCalendarIssueFilter(selected, issue) {
+  return selected.has(issue) ? new Set() : new Set([issue]);
+}
+
+export function calendarIssueFilterFromValue(value, allowedIssues) {
+  const issue = value.split(',').filter((item) => allowedIssues.has(item)).at(-1);
+  return new Set(issue ? [issue] : []);
+}
+
 export function visibleAbsencesForDate({
   savedAbsences,
   calendarAbsences,

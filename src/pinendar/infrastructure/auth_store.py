@@ -9,12 +9,14 @@ from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
-from sqlalchemy import Boolean, DateTime, Integer, String, create_engine, event, select, text
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, create_engine, event, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from pinendar.application.state import DomainError
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,39}$")
+PUBLIC_LINK_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+PUBLIC_LINK_REPLACED_GRACE = timedelta(days=7)
 
 
 class AuthBase(DeclarativeBase):
@@ -53,6 +55,23 @@ class AccountActivity(AuthBase):
     last_active_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class PublicShareLink(AuthBase):
+    __tablename__ = "public_share_links"
+    __table_args__ = (
+        Index(
+            "uq_public_share_links_active_account",
+            "account_id",
+            unique=True,
+            sqlite_where=text("replaced_at IS NULL"),
+        ),
+    )
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    replaced_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+
+
 class SignupRequest(AuthBase):
     __tablename__ = "signup_requests"
 
@@ -89,6 +108,14 @@ class SignupRequestSummary:
     id: str
     username: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class PublicShareResolution:
+    token: str
+    account_id: str
+    environment_path: Path
+    replaced_at: datetime | None
 
 
 class AuthStore:
@@ -150,6 +177,15 @@ class AuthStore:
     def recovery_code() -> str:
         raw = secrets.token_hex(16).upper()
         return "-".join(raw[index : index + 4] for index in range(0, len(raw), 4))
+
+    @staticmethod
+    def public_link_token() -> str:
+        return secrets.token_hex(32)
+
+    def _add_public_link(self, session: Session, account_id: str) -> PublicShareLink:
+        link = PublicShareLink(token=self.public_link_token(), account_id=account_id)
+        session.add(link)
+        return link
 
     @staticmethod
     def identity(account: Account) -> AccountIdentity:
@@ -214,6 +250,7 @@ class AuthStore:
             session.add(account)
             session.flush()
             session.add(AccountActivity(account_id=account.id, last_active_at=utc_now()))
+            self._add_public_link(session, account.id)
             return self.identity(account), recovery_code
 
     def request_signup(self, username: str, password: str) -> tuple[SignupRequestSummary, str]:
@@ -270,6 +307,7 @@ class AuthStore:
             session.add(account)
             session.flush()
             session.add(AccountActivity(account_id=account.id, last_active_at=utc_now()))
+            self._add_public_link(session, account.id)
             session.delete(request)
             return self.identity(account)
 
@@ -341,6 +379,10 @@ class AuthStore:
                 session.delete(activity)
             if onboarding:
                 session.delete(onboarding)
+            for link in session.scalars(
+                select(PublicShareLink).where(PublicShareLink.account_id == account.id)
+            ):
+                session.delete(link)
             session.delete(account)
             return identity
 
@@ -418,6 +460,74 @@ class AuthStore:
                 if account_id not in tracked_ids:
                     session.add(AccountActivity(account_id=account_id, last_active_at=now))
 
+    def initialize_missing_public_links(self) -> None:
+        with self.session_factory.begin() as session:
+            linked_ids = set(
+                session.scalars(
+                    select(PublicShareLink.account_id).where(PublicShareLink.replaced_at.is_(None))
+                )
+            )
+            for account_id in session.scalars(select(Account.id)):
+                if account_id not in linked_ids:
+                    self._add_public_link(session, account_id)
+
+    def get_public_link(self, account_id: str) -> PublicShareLink:
+        with self.session_factory.begin() as session:
+            account = session.get(Account, account_id)
+            if not account or account.disabled:
+                raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+            link = session.scalar(
+                select(PublicShareLink).where(
+                    PublicShareLink.account_id == account_id,
+                    PublicShareLink.replaced_at.is_(None),
+                )
+            )
+            if not link:
+                link = self._add_public_link(session, account_id)
+                session.flush()
+            return link
+
+    def regenerate_public_link(self, account_id: str) -> PublicShareLink:
+        now = utc_now()
+        with self.session_factory.begin() as session:
+            account = session.get(Account, account_id)
+            if not account or account.disabled:
+                raise DomainError("ACCOUNT_NOT_FOUND", "Usuari no trobat")
+            for link in session.scalars(
+                select(PublicShareLink).where(
+                    PublicShareLink.account_id == account_id,
+                    PublicShareLink.replaced_at.is_(None),
+                )
+            ):
+                link.replaced_at = now
+            next_link = self._add_public_link(session, account_id)
+            session.flush()
+            return next_link
+
+    def resolve_public_link(
+        self, token: str, *, now: datetime | None = None
+    ) -> PublicShareResolution | None:
+        if not PUBLIC_LINK_TOKEN_PATTERN.fullmatch(token):
+            return None
+        checked_at = now or utc_now()
+        with self.session_factory() as session:
+            row = session.execute(
+                select(PublicShareLink, Account)
+                .join(Account, Account.id == PublicShareLink.account_id)
+                .where(PublicShareLink.token == token, Account.disabled.is_(False))
+            ).one_or_none()
+            if not row:
+                return None
+            link, account = row
+            if link.replaced_at and link.replaced_at < checked_at - PUBLIC_LINK_REPLACED_GRACE:
+                return None
+            return PublicShareResolution(
+                token=link.token,
+                account_id=account.id,
+                environment_path=Path(account.environment_path),
+                replaced_at=link.replaced_at,
+            )
+
     def touch_activity(self, account_id: str) -> bool:
         with self.session_factory.begin() as session:
             if not session.get(Account, account_id):
@@ -442,6 +552,10 @@ class AuthStore:
                     session.delete(activity)
                 if onboarding:
                     session.delete(onboarding)
+                for link in session.scalars(
+                    select(PublicShareLink).where(PublicShareLink.account_id == account.id)
+                ):
+                    session.delete(link)
                 session.delete(account)
             return identities
 

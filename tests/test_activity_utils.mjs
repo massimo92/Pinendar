@@ -98,22 +98,23 @@ const telework = teleworkByWeekdayAnalysis({
   ],
   assignments: [
     { date: '2026-01-05', memberId: 'person-a', type: 'remote' },
-    { date: '2026-01-06', memberId: 'person-a', type: 'onsite' },
-    { date: '2026-01-07', memberId: 'person-a', type: 'remote-half' },
-    { date: '2026-01-07', memberId: 'person-a', type: 'onsite-half' },
     { date: '2026-01-05', memberId: 'person-b', type: 'onsite' },
-    { date: '2026-01-06', memberId: 'person-b', type: 'remote' },
+    { date: '2026-01-06', memberId: 'person-b', type: 'remote', peonada: true },
     { date: '2026-01-07', memberId: 'person-b', type: 'remote-half' },
-    { date: '2026-01-07', memberId: 'person-b', type: 'onsite-half' },
+    { date: '2026-01-07', memberId: 'person-b', type: 'onsite-half', peonada: true },
+    { date: '2026-01-08', memberId: 'person-b', type: 'onsite' },
+    { date: '2026-01-12', memberId: 'person-b', type: 'onsite' },
   ],
   selectedMemberId: 'person-a',
 });
-assert.equal(telework.person, 1 / 3);
+assert.equal(telework.person, 1);
 assert.equal(telework.team, 1 / 3);
+assert.deepEqual(telework.personDays, { telematic: 1, total: 1 });
+assert.deepEqual(telework.teamDays, { telematic: 2, total: 6 });
 assert.deepEqual(
   telework.weekdays.map((item) => [item.weekday, item.person, item.team]),
-  [[1, 1, 0.5], [2, 0, 0.5], [3, 0, 0], [4, null, null], [5, null, null]],
-  'Cualquier agenda presencial debe hacer que el día completo cuente como presencial',
+  [[1, 1, 1 / 3], [2, null, 1], [3, null, 0], [4, null, 0], [5, null, null]],
+  'Debe agregar días-persona y una peonada presencial debe convertir el día en presencial',
 );
 
 const teleworkWithManagement = teleworkByWeekdayAnalysis({

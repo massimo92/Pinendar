@@ -1,11 +1,30 @@
 import assert from 'node:assert/strict';
 import {
+  calendarRowsForDate,
   calendarIncidentsForDate,
+  calendarIssueFilterFromValue,
   dailyAssignmentLoad,
   eligibleUnassignedMemberIds,
+  toggleCalendarIssueFilter,
   vacanciesForDate,
   visibleAbsencesForDate,
 } from '../public/calendar-utils.mjs';
+
+assert.deepEqual(
+  toggleCalendarIssueFilter(new Set(['partial']), 'vacancy'),
+  new Set(['vacancy']),
+  'Un filtro de incidencia nuevo debe reemplazar el anterior',
+);
+assert.deepEqual(
+  toggleCalendarIssueFilter(new Set(['vacancy']), 'vacancy'),
+  new Set(),
+  'Pulsar de nuevo el filtro activo debe limpiarlo',
+);
+assert.deepEqual(
+  calendarIssueFilterFromValue('partial,vacancy', new Set(['partial', 'vacancy'])),
+  new Set(['vacancy']),
+  'Una URL antigua con varios filtros debe conservar sólo el último',
+);
 
 const members = [
   { id: 'active', active: true },
@@ -69,6 +88,28 @@ assert.deepEqual(
     selectedAgendaIds: new Set(['half-a']),
   }),
   [{ date: '2026-08-01', type: 'half-a' }],
+);
+assert.deepEqual(
+  calendarRowsForDate({
+    assignments: [
+      { memberId: 'active', date: '2026-08-01', type: 'half-a' },
+      { memberId: 'available', date: '2026-08-01', type: 'half-b' },
+    ],
+    guards: [
+      { memberId: 'active', date: '2026-08-01' },
+      { memberId: 'available', date: '2026-08-01' },
+    ],
+    vacancies: [{ date: '2026-08-01', type: 'half-a' }],
+    date: '2026-08-01',
+    selectedMemberIds: new Set(['active']),
+    selectedAgendaIds: new Set(['half-a']),
+  }),
+  {
+    assignments: [{ memberId: 'active', date: '2026-08-01', type: 'half-a' }],
+    guards: [{ memberId: 'active', date: '2026-08-01' }],
+    vacancies: [],
+  },
+  'Un filtro de persona no debe dejar pasar vacantes ni filas de otras personas',
 );
 assert.deepEqual(
   visibleAbsencesForDate({

@@ -60,6 +60,7 @@ from pinendar.application.state import (
     bump_revision,
     job_payload,
 )
+from pinendar.infrastructure.auth_store import PUBLIC_LINK_REPLACED_GRACE
 from pinendar.infrastructure.models import (
     Agenda,
     AppSettings,
@@ -418,6 +419,25 @@ def mark_guide_onboarding_seen(request: Request) -> dict[str, bool]:
     return {"ok": True}
 
 
+def public_link_payload(link: Any) -> dict[str, Any]:
+    return {
+        "path": f"/public/{link.token}",
+        "graceDays": PUBLIC_LINK_REPLACED_GRACE.days,
+    }
+
+
+@router.get("/api/v1/auth/public-link", dependencies=[Depends(require_auth)])
+def get_public_link(request: Request) -> dict[str, Any]:
+    link = request.app.state.auth_store.get_public_link(request.state.account.id)
+    return public_link_payload(link)
+
+
+@router.post("/api/v1/auth/public-link/regenerate", dependencies=[Depends(require_auth)])
+def regenerate_public_link(request: Request) -> dict[str, Any]:
+    link = request.app.state.auth_store.regenerate_public_link(request.state.account.id)
+    return public_link_payload(link)
+
+
 @router.get("/api/v1/bootstrap", dependencies=[Depends(require_auth)])
 def get_bootstrap(request: Request) -> dict[str, Any]:
     with request.state.database.session_factory() as database_session:
@@ -429,6 +449,29 @@ def get_bootstrap(request: Request) -> dict[str, Any]:
             ),
         }
         return result
+
+
+@router.get("/api/v1/public/{token}/bootstrap")
+def get_public_bootstrap(token: str, request: Request, response: Response) -> dict[str, Any]:
+    resolution = request.app.state.auth_store.resolve_public_link(token)
+    if not resolution:
+        raise DomainError("PUBLIC_LINK_NOT_FOUND", "Enllaç públic no trobat")
+    if resolution.replaced_at:
+        raise DomainError(
+            "PUBLIC_LINK_REPLACED",
+            "Aquest enllaç s’ha substituït. Sol·licita el nou enllaç al propietari.",
+        )
+    environment = request.app.state.environments.get(resolution.environment_path)
+    with environment.database.session_factory() as database_session:
+        result = bootstrap(database_session, request.app.state.catalog)
+    for member in [*result.get("team", []), *result.get("archivedTeam", [])]:
+        member.pop("email", None)
+    result.get("calendar", {}).pop("guardTransfers", None)
+    result["publicAccess"] = True
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return result
 
 
 def account_payload(account: Any) -> dict[str, Any]:

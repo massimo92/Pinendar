@@ -1,8 +1,8 @@
-import { api, waitForGeneration } from './api.js?v=14';
+import { api, waitForGeneration } from './api.js?v=15';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
-import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=13';
-import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
-import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
+import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=14';
+import { calendarIncidentsForDate, calendarIssueFilterFromValue, calendarRowsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, toggleCalendarIssueFilter, visibleAbsencesForDate } from './calendar-utils.mjs?v=5';
+import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=8';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
 import { clampGenerationTimeLimit } from './generation-utils.mjs?v=2';
@@ -13,6 +13,9 @@ const SHIFT_LABELS = { morning: 'Matí', afternoon: 'Tarda' };
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
 const app = $('#app');
+const publicPathMatch = window.location.pathname.match(/^\/public\/([^/]+)\/?$/);
+const publicAccessRequested = Boolean(publicPathMatch);
+const publicToken = publicPathMatch ? decodeURIComponent(publicPathMatch[1]) : '';
 let state = null;
 let authConfig = { signupEnabled: false };
 let page = 'calendar';
@@ -38,6 +41,7 @@ let hospitalSearchTimer = null;
 let hospitalSearchSequence = 0;
 const hospitalSearchCache = new Map();
 const hospitalDetailsCache = new Map();
+function isPublicAccess() { return state?.publicAccess === true; }
 const ES_TEXT = {
   'Calendari': 'Calendario', 'CALENDARI': 'CALENDARIO', 'Equip': 'Equipo', 'Configuració': 'Configuración', 'Equitat i històric': 'Equidad e histórico', 'Surt': 'Salir',
   'Genera un altre període': 'Generar otro período', 'Prepara el calendari': 'Prepara el calendario', 'Genera calendari': 'Generar calendario', 'Exporta': 'Exportar',
@@ -58,7 +62,7 @@ const ES_TEXT = {
   'Sense festius afegits.': 'Sin festivos añadidos.', 'Es mostraran directament al calendari principal.': 'Se mostrarán directamente en el calendario principal.',
   'Índex global d’equilibri': 'Índice global de equilibrio', 'Agenda més desviada': 'Agenda más desviada', 'Dins del marge ±20%': 'Dentro del margen ±20%',
   'Equilibri d’una persona': 'Equilibrio de una persona', 'Equilibri entre persones': 'Equilibrio entre personas', 'Per sota': 'Por debajo', 'Esperat': 'Esperado', 'Per sobre': 'Por encima',
-  'Teletreball': 'Teletrabajo', '% de dies en teletreball': '% de días en teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
+  'Teletreball': 'Teletrabajo', 'Dies completament telemàtics': 'Días completamente telemáticos', '% de dies completament telemàtics': '% de días completamente telemáticos', '% de dies en teletreball': '% de días en teletrabajo', 'Equip = mitjana real de les persones.': 'Equipo = media real de las personas.', 'Sense activitat per calcular-ho.': 'Sin actividad para calcularlo.',
   'Períodes registrats': 'Períodos registrados', 'Calendari': 'Calendario', 'Històric': 'Histórico', 'Còpia JSON': 'Copia JSON',
   'Color automàtic': 'Color automático', 'Pastel per distingir persones': 'Pastel para distinguir personas', 'Saturat per distingir agendes': 'Saturado para distinguir agendas',
   'Nou color aleatori': 'Nuevo color aleatorio', 'Nom i cognoms': 'Nombre y apellidos', 'Correu': 'Correo', 'Dies disponibles': 'Días disponibles',
@@ -393,14 +397,25 @@ function loginView(error = '', mode = 'login', recoveryCode = '', username = '',
   });
 }
 
+function publicErrorView(error) {
+  const replaced = error?.code === 'PUBLIC_LINK_REPLACED';
+  const title = replaced ? 'Aquest enllaç ha canviat.' : 'Enllaç no trobat.';
+  const message = replaced
+    ? 'El propietari ha generat un enllaç públic nou. Demana-l’hi per continuar consultant el calendari.'
+    : 'Aquest enllaç no existeix o ja ha caducat. Comprova’l o sol·licita’l de nou al propietari.';
+  app.innerHTML = `<section class="login public-link-error"><div class="login-card"><div class="brand">${document.querySelector('#icon-logo')?.innerHTML || ''}<span>Pinendar</span></div><div class="readonly-badge">Només lectura</div><h1>${title}</h1><p class="muted">${message}</p></div></section>`;
+  document.title = `${title} · Pinendar`;
+}
+
 function nav() {
-  return navTemplate({ page, language: state.language, labelFor: t });
+  return navTemplate({ page, language: state.language, labelFor: t, publicAccess: isPublicAccess() });
 }
 function header(title, subtitle, actions = '') {
-  return headerTemplate({ title, subtitle, actions, language: state.language, account: state.account });
+  return headerTemplate({ title, subtitle, actions, language: state.language, account: state.account, publicAccess: isPublicAccess() });
 }
 
 const NAV_PAGES = new Set(['calendar', 'guards', 'team', 'agendas', 'setup', 'history', 'guide']);
+const PUBLIC_NAV_PAGES = new Set(['calendar', 'history']);
 const CALENDAR_VIEWS = new Set(['day', 'week', 'month']);
 const CALENDAR_ISSUE_FILTERS = new Set(['vacancy', 'unassigned', 'deferred', 'peonada', 'partial']);
 function syncNavigationUrl(method = 'replace') {
@@ -420,14 +435,18 @@ function syncNavigationUrl(method = 'replace') {
 }
 function restoreNavigation() {
   const params = new URLSearchParams(window.location.search);
-  if (NAV_PAGES.has(params.get('page'))) page = params.get('page');
+  const allowedPages = isPublicAccess() ? PUBLIC_NAV_PAGES : NAV_PAGES;
+  page = allowedPages.has(params.get('page')) ? params.get('page') : 'calendar';
   if (CALENDAR_VIEWS.has(params.get('view'))) calendarView = params.get('view');
   if (isValidDateKey(params.get('date'))) calendarDate = params.get('date');
   const memberIds = new Set(activeTeam().map((member) => member.id));
   const agendaIds = new Set(activeActivities().map((item) => item.id));
   selectedMemberFilters = new Set((params.get('members') || '').split(',').filter((id) => memberIds.has(id)));
   selectedAgendaFilters = new Set((params.get('agendas') || '').split(',').filter((id) => agendaIds.has(id)));
-  selectedCalendarIssueFilters = new Set((params.get('issues') || '').split(',').filter((issue) => CALENDAR_ISSUE_FILTERS.has(issue)));
+  selectedCalendarIssueFilters = calendarIssueFilterFromValue(
+    params.get('issues') || '',
+    CALENDAR_ISSUE_FILTERS,
+  );
 }
 
 function calendarRange() {
@@ -462,11 +481,12 @@ function calendarIssueRange() {
 function calendarIssueSummary() {
   const summary = { vacancies: 0, unassigned: 0, deferred: 0, peonada: 0, people: new Set() };
   calendarIssueRange().forEach((key) => {
-    const incidents = calendarIncidents(key);
-    summary.vacancies += incidents.vacancies.length;
-    summary.unassigned += incidents.unassignedMemberIds.size;
-    incidents.unassignedMemberIds.forEach((memberId) => summary.people.add(memberId));
-    calendarEvents().filter((item) => item.date === key).forEach((item) => {
+    const events = eventsForDate(key);
+    const unassignedMembers = unassignedMembersForDate(key);
+    summary.vacancies += events.vacancies.length;
+    summary.unassigned += unassignedMembers.length;
+    unassignedMembers.forEach((member) => summary.people.add(member.id));
+    events.assignments.forEach((item) => {
       if (item.deferredOriginDate) summary.deferred += 1;
       if (item.peonada) summary.peonada += 1;
     });
@@ -502,11 +522,15 @@ function calendarTitle() {
   return fmtDate(`${monthKey(calendarDate)}-01`, { month: 'long', year: 'numeric' });
 }
 function eventsForDate(key) {
-  const matchesMember = (memberId) => !selectedMemberFilters.size || selectedMemberFilters.has(memberId);
-  const matchesAgenda = (type) => !selectedAgendaFilters.size || selectedAgendaFilters.has(type);
-  const assignments = calendarEvents().filter((item) => item.date === key && matchesMember(item.memberId) && matchesAgenda(item.type));
+  const rows = calendarRowsForDate({
+    assignments: calendarEvents(),
+    guards: calendarGuards(),
+    vacancies: calendarVacancies(),
+    date: key,
+    selectedMemberIds: selectedMemberFilters,
+    selectedAgendaIds: selectedAgendaFilters,
+  });
   const showUncategorised = !selectedAgendaFilters.size;
-  const guards = calendarGuards().filter((item) => item.date === key && matchesMember(item.memberId));
   const savedAbsences = showUncategorised ? [...state.team, ...(state.archivedTeam || [])].flatMap((member) => member.vacations.map((item) => ({ ...item, memberId: member.id }))) : [];
   const absences = showUncategorised ? visibleAbsencesForDate({
     savedAbsences,
@@ -514,12 +538,7 @@ function eventsForDate(key) {
     date: key,
     selectedMemberIds: selectedMemberFilters,
   }) : [];
-  const vacancies = vacanciesForDate({
-    unfilled: calendarVacancies(),
-    date: key,
-    selectedAgendaIds: selectedAgendaFilters,
-  });
-  return { assignments, guards, absences, vacancies };
+  return { ...rows, absences };
 }
 function isMemberAbsentOnDate(member, key) {
   const activeAbsences = calendarAbsences().filter((item) => item.memberId === member.id);
@@ -578,7 +597,6 @@ function calendarCell(key) {
   const holiday = isHoliday(key);
   const activeEvents = calendarEvents();
   const activeAgendas = planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]);
-  const rawDateAssignments = activeEvents.filter((item) => item.date === key);
   const noHospitalName = state.language === 'es' ? 'Sin hospital' : 'Sense hospital';
   const eventEntry = (html, hospital) => ({
     html,
@@ -616,9 +634,7 @@ function calendarCell(key) {
     const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''} ${item.deferredOriginDate ? 'deferred' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}${deferredLabel ? ` · ${esc(deferredLabel)}` : ''}"><b>${deferredMarker}${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${compactMeta}</span></button>`;
     return eventEntry(html, hospital);
   };
-  const vacancyItems = selectedCalendarIssueFilters.has('vacancy')
-    ? incidents.vacancies
-    : events.vacancies;
+  const vacancyItems = events.vacancies;
   const vacancyCounts = new Map();
   vacancyItems.forEach((item) => {
     const current = vacancyCounts.get(item.type) || { count: 0, id: item.id };
@@ -634,14 +650,9 @@ function calendarCell(key) {
     const html = `<button class="calendar-event vacancy" style="--agenda-color:${meta.color};--member-color:#ff5f69" data-assign-vacancy="${vacancy.id}" title="${esc(vacancyLabel)} · ${esc(meta.name)}${countLabel} · ${esc(details)}"><b>${vacancyLabel}${countLabel}</b><span class="calendar-event-activity"><em>${esc(meta.name)}</em><i class="calendar-event-compact-meta">${compactActivityMeta(meta)}</i></span></button>`;
     return eventEntry(html, hospital);
   });
-  const unassignedMembers = selectedCalendarIssueFilters.has('unassigned')
-    ? activeTeam().filter((member) => incidents.unassignedMemberIds.has(member.id))
-    : unassignedMembersForDate(key);
+  const unassignedMembers = unassignedMembersForDate(key);
   const eligibleUnassignedIds = new Set(unassignedMembers.map((member) => member.id));
-  const unassignedAssignmentSource = selectedCalendarIssueFilters.has('unassigned')
-    ? rawDateAssignments
-    : events.assignments;
-  const persistedUnassignedItems = unassignedAssignmentSource.filter(
+  const persistedUnassignedItems = events.assignments.filter(
     (item) => item.type === 'no_assignment' && eligibleUnassignedIds.has(item.memberId),
   );
   const persistedUnassignedIds = new Set(persistedUnassignedItems.map((item) => item.memberId));
@@ -650,12 +661,10 @@ function calendarCell(key) {
     .filter((member) => !persistedUnassignedIds.has(member.id))
     .map((member) => eventEntry(`<button class="calendar-event unassigned" style="--member-color:${member.color}" data-open-extra-member="${member.id}" data-extra-date="${key}" title="${esc(member.name)} · Sense assignació"><b>${esc(member.name)}</b><span>Sense assignació</span></button>`, null));
   const filteredClinicalItems = events.assignments.filter((item) => item.type !== 'no_assignment');
-  const rawPartialItems = rawDateAssignments.filter(
-    (item) => item.type !== 'no_assignment' && incidents.partialMemberIds.has(item.memberId),
+  const partialItems = filteredClinicalItems.filter(
+    (item) => incidents.partialMemberIds.has(item.memberId),
   );
-  const partialItems = selectedCalendarIssueFilters.has('partial')
-    ? rawPartialItems
-    : filteredClinicalItems.filter((item) => incidents.partialMemberIds.has(item.memberId));
+  const visiblePartialMemberIds = new Set(partialItems.map((item) => item.memberId));
   const partialIds = new Set(partialItems.map((item) => item.id));
   const partialEvents = partialItems.map(assignmentEvent);
   const deferredItems = events.assignments.filter((item) => item.type !== 'no_assignment' && item.deferredOriginDate);
@@ -681,10 +690,10 @@ function calendarCell(key) {
   const badge = (kind, count, shortLabel, longLabel) => count
     ? `<button type="button" class="calendar-incident-badge ${kind} ${selectedCalendarIssueFilters.has(kind) ? 'active' : ''}" data-calendar-issue-filter="${kind}" title="${count} ${longLabel}" aria-label="${count} ${longLabel}" aria-pressed="${selectedCalendarIssueFilters.has(kind)}"><span>${shortLabel}</span><b>${count}</b></button>`
     : '';
-  const partialNoun = incidents.partialMemberIds.size === 1
+  const partialNoun = visiblePartialMemberIds.size === 1
     ? (state.language === 'es' ? 'persona con agenda parcial' : 'persona amb agenda parcial')
     : (state.language === 'es' ? 'personas con agenda parcial' : 'persones amb agenda parcial');
-  const incidentBadges = badge('partial', incidents.partialMemberIds.size, '~', partialNoun);
+  const incidentBadges = badge('partial', visiblePartialMemberIds.size, '~', partialNoun);
   const unassignedEvents = [...inferredUnassignedEvents, ...persistedUnassignedEvents];
   const uniqueEventEntries = (entries) => entries.filter((entry, index) => entries.findIndex((item) => item.html === entry.html) === index);
   const issueEvents = uniqueEventEntries([...vacancyEvents, ...unassignedEvents, ...partialEvents, ...deferredEvents, ...peonadaEvents]);
@@ -705,9 +714,9 @@ function calendarCell(key) {
   const visibleEvents = allEvents.slice(0, limit);
   const dayClasses = [
     'calendar-day',
-    incidents.vacancies.length ? 'has-vacancies' : '',
-    incidents.unassignedMemberIds.size ? 'has-unassigned' : '',
-    incidents.partialMemberIds.size ? 'has-partials' : '',
+    events.vacancies.length ? 'has-vacancies' : '',
+    unassignedMembers.length ? 'has-unassigned' : '',
+    visiblePartialMemberIds.size ? 'has-partials' : '',
     weekend ? 'weekend' : '',
     holiday ? 'holiday' : '',
     monthKey(key) !== monthKey(calendarDate) && calendarView === 'month' ? 'outside' : '',
@@ -739,11 +748,14 @@ function calendarPage() {
   const assignments = calendarEvents();
   const unfilled = calendarVacancies().length;
   const hasContent = hasCalendarContent();
+  const accessPanel = isPublicAccess()
+    ? `<section class="readonly-notice card"><b>Consulta de només lectura</b><span>Pots navegar i aplicar filtres durant aquesta visita. No es pot modificar ni generar contingut.</span></section>`
+    : `<div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Tria el període; respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="open-export" data-export-format="csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="open-export" data-export-format="excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="open-export" data-export-format="ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>`;
   return `${header('Calendari', hasContent ? `${projectionPeriodLabel(calendarProjection())} · esdeveniments vigents` : 'Sense esdeveniments generats')}
-    <div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Tria el període; respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="open-export" data-export-format="csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="open-export" data-export-format="excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="open-export" data-export-format="ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>
+    ${accessPanel}
     ${hasContent ? calendarKpis() : ''}
     <section class="calendar-toolbar card"><div class="calendar-navigation"><div class="view-switch">${[['day', 'Dia'], ['week', 'Setmana'], ['month', 'Mes']].map(([id, label]) => `<button data-calendar-view="${id}" class="${calendarView === id ? 'active' : ''}">${label}</button>`).join('')}</div><div class="calendar-nav"><button class="button ghost small" data-action="calendar-today">Avui</button><button class="icon-button" data-action="calendar-prev" aria-label="Anterior">‹</button><button class="icon-button" data-action="calendar-next" aria-label="Següent">›</button><h2>${calendarTitle()}</h2></div></div><div class="calendar-controls"><div class="calendar-filters">${calendarMultiFilter('member', 'Persones', selectedMemberFilters, calendarMemberFilterGroups(), 'Tothom')}${calendarMultiFilter('agenda', 'Agendes', selectedAgendaFilters, calendarAgendaFilterGroups(), 'Totes')}</div></div></section>
-    <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section><div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>`;
+    <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section>${isPublicAccess() ? '' : '<div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>'}`;
 }
 
 function calendarMultiFilter(kind, label, selected, groups, allLabel) {
@@ -917,13 +929,17 @@ function managementRecipientLabel(summary) {
 }
 function teleworkBar(balance) {
   const personValue = balance.person === null ? null : Math.round(balance.person * 100); const teamValue = balance.team === null ? null : Math.round(balance.team * 100);
+  const personDays = balance.personDays || { telematic: 0, total: 0 };
   const weekdayLabels = state.language === 'es' ? ['L', 'M', 'X', 'J', 'V'] : DAYS_SHORT;
   const weekdays = balance.weekdays.map((day, index) => {
     const person = day.person === null ? null : Math.round(day.person * 100);
     const team = day.team === null ? null : Math.round(day.team * 100);
     return `<div class="telework-weekday"><b>${weekdayLabels[index]}</b><div class="telework-weekday-track" aria-label="Persona ${person ?? 0}%, equip ${team ?? 0}%"><i style="width:${person ?? 0}%"></i>${team === null ? '' : `<b class="team" style="left:${team}%" title="Equip ${team}%"></b>`}</div><span><b>${person === null ? '—' : `${person}%`}</b><small>${team === null ? '—' : `${team}%`}</small></span></div>`;
   }).join('');
-  return `<section class="telework-balance"><div class="telework-head"><b>Teletreball</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><div class="telework-weekdays"><div class="telework-weekdays-head"><span>% de dies telemàtics</span><span>Persona · Equip</span></div>${weekdays}</div><small>${personValue === null ? 'Sense activitat per calcular-ho. ' : ''}Un dia amb alguna agenda presencial compta com a presencial. Equip = mitjana real de les persones.</small></section>`;
+  const explanation = state.language === 'es'
+    ? `${personDays.total ? `Persona: ${personDays.telematic} de ${personDays.total} días completamente telemáticos. ` : 'Sin actividad para calcularlo. '}Cualquier actividad presencial, incluida una peonada parcial, convierte el día en presencial. Equipo = agregado de días-persona.`
+    : `${personDays.total ? `Persona: ${personDays.telematic} de ${personDays.total} dies completament telemàtics. ` : 'Sense activitat per calcular-ho. '}Qualsevol activitat presencial, inclosa una peonada parcial, converteix el dia en presencial. Equip = agregat de dies-persona.`;
+  return `<section class="telework-balance"><div class="telework-head"><b>Dies completament telemàtics</b></div><div class="telework-track" aria-label="Persona ${personValue ?? 0}%, equip ${teamValue ?? 0}%"><i style="width:${personValue ?? 0}%"></i>${teamValue === null ? '' : `<b class="team" style="left:${teamValue}%" title="Equip ${teamValue}%"></b>`}</div><div class="telework-legend"><span class="person">Persona <b>${personValue === null ? '—' : `${personValue}%`}</b></span><span class="team">Equip <b>${teamValue === null ? '—' : `${teamValue}%`}</b></span></div><div class="telework-weekdays"><div class="telework-weekdays-head"><span>% de dies completament telemàtics</span><span>Persona · Equip</span></div>${weekdays}</div><small>${explanation}</small></section>`;
 }
 function happinessTimeline(resolution = historyResolution) {
   const people = [...state.team, ...(state.archivedTeam || [])];
@@ -1263,7 +1279,7 @@ function guidePage() {
       <article><b>${g('Capacitat de plantilla', 'Capacidad de plantilla')}</b><p>${g('Mira les últimes setmanes i descompta les vacants que podrien explicar les vacances o postguàrdies. Si el dèficit restant es repeteix sovint, avisa d’un possible dèficit estructural; si està concentrat, indica pressió puntual. El percentatge és la part de la demanda que continua sense cobrir.', 'Mira las últimas semanas y descuenta las vacantes que podrían explicar las vacaciones o postguardias. Si el déficit restante se repite a menudo, avisa de un posible déficit estructural; si está concentrado, indica presión puntual. El porcentaje es la parte de la demanda que sigue sin cubrir.')}</p></article>
       <article><b>${g('Equitat estructural', 'Equidad estructural')}</b><p>${g('Pregunta si totes les persones han rebut una combinació semblant d’agendes. Compara cada perfil amb la resta de l’equip, sense descomptar capacitats ni regles fixes. Una especialització continuada redueix aquest índex.', 'Pregunta si todas las personas han recibido una combinación parecida de agendas. Compara cada perfil con el resto del equipo, sin descontar capacidades ni reglas fijas. Una especialización continuada reduce este índice.')}</p></article>
       <article><b>${g('Equitat operativa', 'Equidad operativa')}</b><p>${g('Pregunta si el generador reparteix bé allò que realment pot repartir. Només compara amb persones habilitades per a cada agenda i exclou la persona de la seva pròpia referència. La puntuació indica quina part de la càrrega ja coincideix amb el perfil operatiu esperat; també es mostra la pitjor persona.', 'Pregunta si el generador reparte bien aquello que realmente puede repartir. Sólo compara con personas habilitadas para cada agenda y excluye a la persona de su propia referencia. La puntuación indica qué parte de la carga ya coincide con el perfil operativo esperado; también se muestra la peor persona.')}</p></article>
-      <article><b>${g('Teletreball', 'Teletrabajo')}</b><p>${g('Compara el percentatge de dies telemàtics de la persona amb la mitjana real de l’equip, en total i per dia de la setmana. Un dia amb alguna agenda presencial compta com a presencial.', 'Compara el porcentaje de días telemáticos de la persona con la media real del equipo, en total y por día de la semana. Un día con alguna agenda presencial cuenta como presencial.')}</p></article>
+      <article><b>${g('Dies completament telemàtics', 'Días completamente telemáticos')}</b><p>${g('Compara els dies completament telemàtics de la persona amb el conjunt de dies-persona de l’equip, en total i per dia de la setmana. Qualsevol activitat presencial, inclosa una peonada parcial, converteix el dia en presencial. La gestió compta com a telemàtica.', 'Compara los días completamente telemáticos de la persona con el conjunto de días-persona del equipo, en total y por día de la semana. Cualquier actividad presencial, incluida una peonada parcial, convierte el día en presencial. La gestión cuenta como telemática.')}</p></article>
       <article><b>${g('Activitat per regles fixes', 'Actividad por reglas fijas')}</b><p>${g('Mostra quin percentatge de la càrrega clínica històrica prové directament de regles fixes.', 'Muestra qué porcentaje de la carga clínica histórica procede directamente de reglas fijas.')}</p></article>
       <article><b>${g('Felicitat', 'Felicidad')}</b><p>${g('Mostra l’evolució de cors i polzes. És informativa.', 'Muestra la evolución de corazones y pulgares. Es informativa.')}</p></article>
       <article><b>${g('Exportació', 'Exportación')}</b><p>${g('CSV, Excel i ICS respecten el període i els filtres actius. Els diferits conserven la data original als detalls; l’ICS crea esdeveniments de dia complet preparats per al calendari.', 'CSV, Excel e ICS respetan el período y los filtros activos. Los diferidos conservan la fecha original en los detalles; el ICS crea eventos de día completo preparados para el calendario.')}</p></article>
@@ -1860,6 +1876,38 @@ function recoveryCodeModal() {
   return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CLAU DE RECUPERACIÓ</div><h2>Generar una clau nova?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>La clau actual no es pot mostrar per seguretat.</b><span>En generar-ne una de nova, la clau anterior deixarà de funcionar.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="generate-recovery-code">Genera i mostra</button></div></section></div>`;
 }
 
+function publicLinkModal() {
+  const graceDays = Number(modal.graceDays || 7);
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><button type="button" class="public-link-qr" id="public-link-qr" data-action="copy-public-qr" aria-label="Copia la imatge QR al portapapers" title="Copia la imatge QR"></button></div><div class="modal-actions public-link-actions"><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p><button type="button" class="button warning" data-action="regenerate-public-link">Regenera</button></div></section></div>`;
+}
+
+function renderPublicQr() {
+  const target = $('#public-link-qr');
+  if (!target || !modal?.url || !window.QRCode) return;
+  target.innerHTML = '';
+  new window.QRCode(target, {
+    text: modal.url,
+    width: 220,
+    height: 220,
+    colorDark: '#07100e',
+    colorLight: '#ffffff',
+    correctLevel: window.QRCode.CorrectLevel.M,
+  });
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  const input = Object.assign(document.createElement('textarea'), { value });
+  input.style.position = 'fixed'; input.style.opacity = '0'; document.body.appendChild(input); input.select();
+  document.execCommand('copy'); input.remove();
+}
+
+function publicQrBlob() {
+  const canvas = $('#public-link-qr canvas');
+  if (!canvas) return Promise.resolve(null);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
 function guideOnboardingModal() {
   const es = state.language === 'es';
   const g = (ca, translated) => es ? translated : ca;
@@ -2032,6 +2080,7 @@ function modalView() {
   if (!modal) return '';
   if (modal.type === 'guide-onboarding') return guideOnboardingModal();
   if (modal.type === 'recovery-code') return recoveryCodeModal();
+  if (modal.type === 'public-link') return publicLinkModal();
   if (modal.type === 'generation') return generationModal();
   if (modal.type === 'guard-editor') return guardEditorModal();
   if (modal.type === 'guard-picker') return guardPickerModal();
@@ -2153,11 +2202,23 @@ function render() {
   if (hospitalMap) { hospitalMap.remove(); hospitalMap = null; }
   $$('[data-enhanced-select-portal]').forEach((menu) => menu.remove());
   const view = { calendar: calendarPage, guards: guardsPage, team: teamPage, agendas: agendasPage, setup: setupPage, history: historyPage, guide: guidePage }[page]();
-  app.innerHTML = shellTemplate({ navigation: nav(), view, modal: modalView() });
+  app.innerHTML = shellTemplate({ navigation: nav(), view, modal: modalView(), publicAccess: isPublicAccess() });
+  if (isPublicAccess()) {
+    $$('button.calendar-event, button.calendar-guard-hover, button.calendar-guard-banner').forEach((button) => {
+      const replacement = document.createElement('div');
+      replacement.className = button.className;
+      replacement.style.cssText = button.style.cssText;
+      replacement.innerHTML = button.innerHTML;
+      if (button.title) replacement.title = button.title;
+      button.replaceWith(replacement);
+    });
+    $$('.calendar-extra-day-button').forEach((button) => button.remove());
+  }
   $$('.modal-head .icon-button').forEach((button) => { if (!button.hasAttribute('aria-label')) button.setAttribute('aria-label', state.language === 'es' ? 'Cerrar' : 'Tanca'); });
   document.documentElement.lang = state.language === 'es' ? 'es' : 'ca'; translateDom(app);
   enhanceSelects(app);
   if (page === 'setup') requestAnimationFrame(initHospitalMap);
+  if (modal?.type === 'public-link') requestAnimationFrame(renderPublicQr);
   if (modal) requestAnimationFrame(() => ($('.modal-body input:not([type="hidden"]),.modal-body [data-enhanced-select-trigger]') || $('.modal-card button'))?.focus());
 }
 
@@ -2325,10 +2386,11 @@ window.addEventListener('resize', () => { $$('.enhanced-select.open').forEach(po
 document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.enhanced-select-menu')) $$('.enhanced-select.open').forEach(positionEnhancedSelect); if (!event.target.closest?.('.fixed-rule-agenda-menu')) $$('.fixed-rule-agenda-picker[open]').forEach(positionFixedRuleAgendaPicker); if (!event.target.closest?.('.fixed-rule-warning-popover')) $$('.fixed-rule-warning.open').forEach(positionFixedRuleWarning); }, true);
 
 document.addEventListener('click', async (event) => {
+  if (isPublicAccess() && event.target.closest('.calendar-event,.calendar-guard-hover,.calendar-guard-banner')) return;
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-assign-vacancy],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
   if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
   const action = button.dataset.action;
-  if (button.dataset.calendarIssueFilter) { const issue = button.dataset.calendarIssueFilter; if (selectedCalendarIssueFilters.has(issue)) selectedCalendarIssueFilters.delete(issue); else selectedCalendarIssueFilters.add(issue); syncNavigationUrl('replace'); render(); return; }
+  if (button.dataset.calendarIssueFilter) { selectedCalendarIssueFilters = toggleCalendarIssueFilter(selectedCalendarIssueFilters, button.dataset.calendarIssueFilter); syncNavigationUrl('replace'); render(); return; }
   if (button.dataset.calendarView) { if (calendarView !== button.dataset.calendarView) { calendarView = button.dataset.calendarView; syncNavigationUrl('push'); render(); } return; }
   if (button.dataset.calendarOpen) { calendarDate = button.dataset.calendarOpen; calendarView = 'day'; modal = null; syncNavigationUrl('push'); render(); return; }
   if (button.dataset.calendarDate) { calendarDate = button.dataset.calendarDate; calendarView = 'day'; syncNavigationUrl('push'); render(); return; }
@@ -2470,6 +2532,34 @@ document.addEventListener('click', async (event) => {
   if (action === 'dismiss-guide-onboarding') { try { await api.markGuideOnboardingSeen(); state.account.guideOnboardingPending = false; modal = null; render(); } catch (error) { showError(error); } return; }
   if (action === 'open-guide-onboarding') { try { await api.markGuideOnboardingSeen(); state.account.guideOnboardingPending = false; page = 'guide'; modal = null; syncNavigationUrl('push'); render(); } catch (error) { showError(error); } return; }
   if (action === 'open-recovery-code') { modal = { type: 'recovery-code', code: '' }; render(); return; }
+  if (action === 'open-public-link') {
+    try {
+      const result = await api.publicLink();
+      modal = { type: 'public-link', url: new URL(result.path, window.location.origin).href, graceDays: result.graceDays };
+      render();
+    } catch (error) { showError(error); }
+    return;
+  }
+  if (action === 'copy-public-link') { await copyText(modal.url); toast('Enllaç copiat'); return; }
+  if (action === 'copy-public-qr') {
+    const blob = await publicQrBlob();
+    if (!blob) { toast('No s’ha pogut generar el QR', 'error'); return; }
+    try {
+      if (!navigator.clipboard?.write || !window.ClipboardItem) throw new Error('El navegador no permet copiar imatges');
+      await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })]);
+      toast('QR copiat com a imatge');
+    } catch (error) { showError(error); }
+    return;
+  }
+  if (action === 'regenerate-public-link') {
+    if (!window.confirm('Vols regenerar l’enllaç? L’actual deixarà de donar accés immediatament.')) return;
+    try {
+      const result = await api.regeneratePublicLink();
+      modal = { type: 'public-link', url: new URL(result.path, window.location.origin).href, graceDays: result.graceDays };
+      render(); toast('Enllaç públic regenerat');
+    } catch (error) { showError(error); }
+    return;
+  }
   if (action === 'generate-recovery-code') { try { const result = await api.rotateRecoveryCode(); modal = { type: 'recovery-code', code: result.recoveryCode }; render(); } catch (error) { showError(error); } return; }
   if (action === 'copy-recovery-code') { await navigator.clipboard.writeText(modal.code); toast('Clau copiada'); return; }
   if (action === 'download-recovery-code') { download(`pinendar-${state.account?.username || 'compte'}-recuperacio.txt`, `Pinendar · ${state.account?.username || ''}\nClau de recuperació: ${modal.code}\n`, 'text/plain'); return; }
@@ -2768,6 +2858,7 @@ async function handleForm(formElement) {
   }
 }
 document.addEventListener('submit', async (event) => {
+  if (isPublicAccess()) { event.preventDefault(); return; }
   if (event.target.matches?.('[data-hospital-alias-form]')) {
     event.preventDefault();
     const aliasForm = new FormData(event.target);
@@ -2810,6 +2901,14 @@ window.addEventListener('popstate', () => {
 });
 
 async function load() {
+  if (publicAccessRequested) {
+    try {
+      state = normalizeBootstrapState(await api.publicBootstrap(publicToken));
+      if (hasCalendarContent()) { quarter = projectionStartMonth(calendarProjection()); calendarDate = `${quarter}-01`; }
+      restoreNavigation(); modal = null; syncNavigationUrl('replace'); render();
+    } catch (error) { publicErrorView(error); }
+    return;
+  }
   try {
     state = normalizeBootstrapState(await api.bootstrap());
     if (hasCalendarContent()) { quarter = projectionStartMonth(calendarProjection()); calendarDate = `${quarter}-01`; }

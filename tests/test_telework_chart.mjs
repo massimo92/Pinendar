@@ -12,7 +12,8 @@ assert.match(teleworkSource, /class="telework-track"/, 'Debe conservar la barra 
 assert.match(teleworkSource, /balance\.weekdays\.map/, 'Debe renderizar el detalle de lunes a viernes');
 assert.match(teleworkSource, /class="telework-weekdays"/, 'Debe añadir el detalle debajo de la barra global');
 assert.match(teleworkSource, /class="telework-weekday-track"/, 'Cada día debe replicar el formato de la barra global');
-assert.match(teleworkSource, /<b class="team"/, 'La media del equipo debe mostrarse como una marca');
+assert.match(teleworkSource, /<b class="team"/, 'El agregado del equipo debe mostrarse como una marca');
+assert.match(teleworkSource, /balance\.personDays/, 'Debe contextualizar el porcentaje con los días de la persona');
 assert.match(calendarCss, /\.telework-weekday-track\{height:5px;/, 'Las barras diarias deben tener poco peso visual');
 
 console.log('telework chart regression: ok');
