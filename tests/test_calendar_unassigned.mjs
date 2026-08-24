@@ -2,11 +2,29 @@ import assert from 'node:assert/strict';
 import {
   calendarRowsForDate,
   calendarIncidentsForDate,
+  calendarIssueFilterFromValue,
   dailyAssignmentLoad,
   eligibleUnassignedMemberIds,
+  toggleCalendarIssueFilter,
   vacanciesForDate,
   visibleAbsencesForDate,
 } from '../public/calendar-utils.mjs';
+
+assert.deepEqual(
+  toggleCalendarIssueFilter(new Set(['partial']), 'vacancy'),
+  new Set(['vacancy']),
+  'Un filtro de incidencia nuevo debe reemplazar el anterior',
+);
+assert.deepEqual(
+  toggleCalendarIssueFilter(new Set(['vacancy']), 'vacancy'),
+  new Set(),
+  'Pulsar de nuevo el filtro activo debe limpiarlo',
+);
+assert.deepEqual(
+  calendarIssueFilterFromValue('partial,vacancy', new Set(['partial', 'vacancy'])),
+  new Set(['vacancy']),
+  'Una URL antigua con varios filtros debe conservar sólo el último',
+);
 
 const members = [
   { id: 'active', active: true },

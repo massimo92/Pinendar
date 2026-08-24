@@ -1,7 +1,7 @@
 import { api, waitForGeneration } from './api.js?v=15';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=13';
-import { calendarIncidentsForDate, calendarRowsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, visibleAbsencesForDate } from './calendar-utils.mjs?v=4';
+import { calendarIncidentsForDate, calendarIssueFilterFromValue, calendarRowsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, toggleCalendarIssueFilter, visibleAbsencesForDate } from './calendar-utils.mjs?v=5';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=8';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
@@ -443,7 +443,10 @@ function restoreNavigation() {
   const agendaIds = new Set(activeActivities().map((item) => item.id));
   selectedMemberFilters = new Set((params.get('members') || '').split(',').filter((id) => memberIds.has(id)));
   selectedAgendaFilters = new Set((params.get('agendas') || '').split(',').filter((id) => agendaIds.has(id)));
-  selectedCalendarIssueFilters = new Set((params.get('issues') || '').split(',').filter((issue) => CALENDAR_ISSUE_FILTERS.has(issue)));
+  selectedCalendarIssueFilters = calendarIssueFilterFromValue(
+    params.get('issues') || '',
+    CALENDAR_ISSUE_FILTERS,
+  );
 }
 
 function calendarRange() {
@@ -1871,7 +1874,7 @@ function recoveryCodeModal() {
 
 function publicLinkModal() {
   const graceDays = Number(modal.graceDays || 7);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><button type="button" class="public-link-qr" id="public-link-qr" data-action="copy-public-qr" aria-label="Copia la imatge QR al portapapers" title="Copia la imatge QR"></button><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p></div><div class="modal-actions public-link-actions"><button type="button" class="button warning" data-action="regenerate-public-link">Regenera</button></div></section></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><button type="button" class="public-link-qr" id="public-link-qr" data-action="copy-public-qr" aria-label="Copia la imatge QR al portapapers" title="Copia la imatge QR"></button></div><div class="modal-actions public-link-actions"><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p><button type="button" class="button warning" data-action="regenerate-public-link">Regenera</button></div></section></div>`;
 }
 
 function renderPublicQr() {
@@ -2383,7 +2386,7 @@ document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-assign-vacancy],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
   if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
   const action = button.dataset.action;
-  if (button.dataset.calendarIssueFilter) { const issue = button.dataset.calendarIssueFilter; if (selectedCalendarIssueFilters.has(issue)) selectedCalendarIssueFilters.delete(issue); else selectedCalendarIssueFilters.add(issue); syncNavigationUrl('replace'); render(); return; }
+  if (button.dataset.calendarIssueFilter) { selectedCalendarIssueFilters = toggleCalendarIssueFilter(selectedCalendarIssueFilters, button.dataset.calendarIssueFilter); syncNavigationUrl('replace'); render(); return; }
   if (button.dataset.calendarView) { if (calendarView !== button.dataset.calendarView) { calendarView = button.dataset.calendarView; syncNavigationUrl('push'); render(); } return; }
   if (button.dataset.calendarOpen) { calendarDate = button.dataset.calendarOpen; calendarView = 'day'; modal = null; syncNavigationUrl('push'); render(); return; }
   if (button.dataset.calendarDate) { calendarDate = button.dataset.calendarDate; calendarView = 'day'; syncNavigationUrl('push'); render(); return; }

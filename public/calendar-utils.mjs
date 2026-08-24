@@ -61,6 +61,15 @@ export function calendarRowsForDate({
   };
 }
 
+export function toggleCalendarIssueFilter(selected, issue) {
+  return selected.has(issue) ? new Set() : new Set([issue]);
+}
+
+export function calendarIssueFilterFromValue(value, allowedIssues) {
+  const issue = value.split(',').filter((item) => allowedIssues.has(item)).at(-1);
+  return new Set(issue ? [issue] : []);
+}
+
 export function visibleAbsencesForDate({
   savedAbsences,
   calendarAbsences,

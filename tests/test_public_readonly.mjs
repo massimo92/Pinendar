@@ -47,4 +47,8 @@ test('owner sharing dialog copies the link or QR and regenerates it', () => {
   assert.match(source, /new window\.ClipboardItem/);
   assert.match(source, /modal\.graceDays \|\| 7/);
   assert.match(source, /button warning[^>]+data-action="regenerate-public-link"/);
+  assert.match(
+    source,
+    /modal-actions public-link-actions[\s\S]*?public-link-warning[\s\S]*?regenerate-public-link/,
+  );
 });
