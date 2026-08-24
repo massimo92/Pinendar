@@ -165,18 +165,28 @@ export function teleworkByWeekdayAnalysis({
       weekdays: Object.fromEntries([1, 2, 3, 4, 5].map((weekday) => [weekday, shareFor(weekday)])),
     }];
   }));
-  const teamMean = (values) => {
-    const comparable = values.filter((value) => value !== null);
-    return comparable.length ? comparable.reduce((sum, value) => sum + value, 0) / comparable.length : null;
+  const teamDays = people.flatMap((member) => [...daysByMember[member.id].values()]);
+  const teamShare = (weekday = null) => {
+    const matching = weekday === null ? teamDays : teamDays.filter((day) => day.weekday === weekday);
+    return matching.length ? matching.filter((day) => day.telematic).length / matching.length : null;
   };
+  const selectedDays = [...(daysByMember[selectedMemberId]?.values() || [])];
 
   return {
     person: memberShares[selectedMemberId]?.overall ?? null,
-    team: teamMean(people.map((member) => memberShares[member.id].overall)),
+    team: teamShare(),
+    personDays: {
+      telematic: selectedDays.filter((day) => day.telematic).length,
+      total: selectedDays.length,
+    },
+    teamDays: {
+      telematic: teamDays.filter((day) => day.telematic).length,
+      total: teamDays.length,
+    },
     weekdays: [1, 2, 3, 4, 5].map((weekday) => ({
       weekday,
       person: memberShares[selectedMemberId]?.weekdays[weekday] ?? null,
-      team: teamMean(people.map((member) => memberShares[member.id].weekdays[weekday])),
+      team: teamShare(weekday),
     })),
   };
 }
