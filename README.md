@@ -19,6 +19,24 @@ El calendario es continuo: cada mes generado añade eventos por fecha y no reemp
 
 Cada cuenta dispone de un entorno independiente. Las bases SQLite, copias, exportaciones, claves y archivos `.env` están excluidos de Git y del contexto Docker.
 
+## Actualizaciones del despliegue
+
+El despliegue puede comprobar `origin/main` cada cinco minutos y aplicar versiones nuevas. En cada servidor, instala una vez el temporizador de systemd:
+
+```bash
+sudo ./scripts/install-auto-update-timer.sh
+```
+
+`PINENDAR_AUTO_UPDATE=true` activa las actualizaciones automáticas y es el valor por defecto. Para mantener congelado un servidor, define `PINENDAR_AUTO_UPDATE=false` en su `.env`; el temporizador seguirá activo, pero no modificará el despliegue.
+
+Para actualizar manualmente, incluso con la actualización automática desactivada:
+
+```bash
+./scripts/deploy.sh
+```
+
+El script exige una copia limpia en la rama `main`, hace un avance rápido desde `origin/main`, construye primero la imagen y solo después recrea los servicios. Respeta `COMPOSE_FILE` si el despliegue combina `compose.yaml` con otros archivos, como `compose.tunnel.yaml`.
+
 ## Registro y administración
 
 El registro público crea una solicitud pendiente y muestra al solicitante su clave de recuperación. La cuenta no puede iniciar sesión hasta que un administrador la acepte.
