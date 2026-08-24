@@ -1,8 +1,8 @@
-import { api, waitForGeneration } from './api.js?v=14';
+import { api, waitForGeneration } from './api.js?v=15';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=13';
 import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
-import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=7';
+import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=8';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
 import { clampGenerationTimeLimit } from './generation-utils.mjs?v=2';
@@ -13,6 +13,9 @@ const SHIFT_LABELS = { morning: 'Matí', afternoon: 'Tarda' };
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
 const app = $('#app');
+const publicPathMatch = window.location.pathname.match(/^\/public\/([^/]+)\/?$/);
+const publicAccessRequested = Boolean(publicPathMatch);
+const publicToken = publicPathMatch ? decodeURIComponent(publicPathMatch[1]) : '';
 let state = null;
 let authConfig = { signupEnabled: false };
 let page = 'calendar';
@@ -38,6 +41,7 @@ let hospitalSearchTimer = null;
 let hospitalSearchSequence = 0;
 const hospitalSearchCache = new Map();
 const hospitalDetailsCache = new Map();
+function isPublicAccess() { return state?.publicAccess === true; }
 const ES_TEXT = {
   'Calendari': 'Calendario', 'CALENDARI': 'CALENDARIO', 'Equip': 'Equipo', 'Configuració': 'Configuración', 'Equitat i històric': 'Equidad e histórico', 'Surt': 'Salir',
   'Genera un altre període': 'Generar otro período', 'Prepara el calendari': 'Prepara el calendario', 'Genera calendari': 'Generar calendario', 'Exporta': 'Exportar',
@@ -393,14 +397,25 @@ function loginView(error = '', mode = 'login', recoveryCode = '', username = '',
   });
 }
 
+function publicErrorView(error) {
+  const replaced = error?.code === 'PUBLIC_LINK_REPLACED';
+  const title = replaced ? 'Aquest enllaç ha canviat.' : 'Enllaç no trobat.';
+  const message = replaced
+    ? 'El propietari ha generat un enllaç públic nou. Demana-l’hi per continuar consultant el calendari.'
+    : 'Aquest enllaç no existeix o ja ha caducat. Comprova’l o sol·licita’l de nou al propietari.';
+  app.innerHTML = `<section class="login public-link-error"><div class="login-card"><div class="brand">${document.querySelector('#icon-logo')?.innerHTML || ''}<span>Pinendar</span></div><div class="readonly-badge">Només lectura</div><h1>${title}</h1><p class="muted">${message}</p></div></section>`;
+  document.title = `${title} · Pinendar`;
+}
+
 function nav() {
-  return navTemplate({ page, language: state.language, labelFor: t });
+  return navTemplate({ page, language: state.language, labelFor: t, publicAccess: isPublicAccess() });
 }
 function header(title, subtitle, actions = '') {
-  return headerTemplate({ title, subtitle, actions, language: state.language, account: state.account });
+  return headerTemplate({ title, subtitle, actions, language: state.language, account: state.account, publicAccess: isPublicAccess() });
 }
 
 const NAV_PAGES = new Set(['calendar', 'guards', 'team', 'agendas', 'setup', 'history', 'guide']);
+const PUBLIC_NAV_PAGES = new Set(['calendar', 'history']);
 const CALENDAR_VIEWS = new Set(['day', 'week', 'month']);
 const CALENDAR_ISSUE_FILTERS = new Set(['vacancy', 'unassigned', 'deferred', 'peonada', 'partial']);
 function syncNavigationUrl(method = 'replace') {
@@ -420,7 +435,8 @@ function syncNavigationUrl(method = 'replace') {
 }
 function restoreNavigation() {
   const params = new URLSearchParams(window.location.search);
-  if (NAV_PAGES.has(params.get('page'))) page = params.get('page');
+  const allowedPages = isPublicAccess() ? PUBLIC_NAV_PAGES : NAV_PAGES;
+  page = allowedPages.has(params.get('page')) ? params.get('page') : 'calendar';
   if (CALENDAR_VIEWS.has(params.get('view'))) calendarView = params.get('view');
   if (isValidDateKey(params.get('date'))) calendarDate = params.get('date');
   const memberIds = new Set(activeTeam().map((member) => member.id));
@@ -739,11 +755,14 @@ function calendarPage() {
   const assignments = calendarEvents();
   const unfilled = calendarVacancies().length;
   const hasContent = hasCalendarContent();
+  const accessPanel = isPublicAccess()
+    ? `<section class="readonly-notice card"><b>Consulta de només lectura</b><span>Pots navegar i aplicar filtres durant aquesta visita. No es pot modificar ni generar contingut.</span></section>`
+    : `<div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Tria el període; respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="open-export" data-export-format="csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="open-export" data-export-format="excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="open-export" data-export-format="ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>`;
   return `${header('Calendari', hasContent ? `${projectionPeriodLabel(calendarProjection())} · esdeveniments vigents` : 'Sense esdeveniments generats')}
-    <div class="calendar-actions"><section class="calendar-generate card"><div><b>${hasContent ? 'Genera un altre període' : 'Prepara el calendari'}</b><span class="calendar-status">${assignments.length ? `${assignments.length} assignacions · ${unfilled} vacants` : 'Tria període i condicionants'}</span></div><div class="export-row"><button class="button" data-action="open-generation">Genera calendari</button></div></section><section class="calendar-export card"><div><b>Exporta</b><span>Tria el període; respecta els filtres actius</span></div><div class="export-row"><button class="button ghost small" data-action="open-export" data-export-format="csv" ${hasContent ? '' : 'disabled'}>CSV</button><button class="button ghost small" data-action="open-export" data-export-format="excel" ${hasContent ? '' : 'disabled'}>Excel</button><button class="button ghost small" data-action="open-export" data-export-format="ics" ${hasContent ? '' : 'disabled'}>ICS</button></div></section></div>
+    ${accessPanel}
     ${hasContent ? calendarKpis() : ''}
     <section class="calendar-toolbar card"><div class="calendar-navigation"><div class="view-switch">${[['day', 'Dia'], ['week', 'Setmana'], ['month', 'Mes']].map(([id, label]) => `<button data-calendar-view="${id}" class="${calendarView === id ? 'active' : ''}">${label}</button>`).join('')}</div><div class="calendar-nav"><button class="button ghost small" data-action="calendar-today">Avui</button><button class="icon-button" data-action="calendar-prev" aria-label="Anterior">‹</button><button class="icon-button" data-action="calendar-next" aria-label="Següent">›</button><h2>${calendarTitle()}</h2></div></div><div class="calendar-controls"><div class="calendar-filters">${calendarMultiFilter('member', 'Persones', selectedMemberFilters, calendarMemberFilterGroups(), 'Tothom')}${calendarMultiFilter('agenda', 'Agendes', selectedAgendaFilters, calendarAgendaFilterGroups(), 'Totes')}</div></div></section>
-    <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section><div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>`;
+    <section class="calendar-shell card view-${calendarView}">${calendarView !== 'day' ? `<div class="calendar-weekdays">${WEEK_SHORT.map((day) => `<div>${day}</div>`).join('')}</div>` : ''}<div class="calendar-grid">${calendarRange().map(calendarCell).join('')}</div></section>${isPublicAccess() ? '' : '<div class="calendar-destructive-actions"><button class="button danger small" data-action="open-clear-calendar">Esborra període</button></div>'}`;
 }
 
 function calendarMultiFilter(kind, label, selected, groups, allLabel) {
@@ -1860,6 +1879,38 @@ function recoveryCodeModal() {
   return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small modal-fixed-warning" role="alertdialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">CLAU DE RECUPERACIÓ</div><h2>Generar una clau nova?</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><div class="fixed-assignment-warning"><span class="fixed-warning-icon" aria-hidden="true">!</span><div><b>La clau actual no es pot mostrar per seguretat.</b><span>En generar-ne una de nova, la clau anterior deixarà de funcionar.</span></div></div></div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button><button type="button" class="button" data-action="generate-recovery-code">Genera i mostra</button></div></section></div>`;
 }
 
+function publicLinkModal() {
+  const graceDays = Number(modal.graceDays || 30);
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><div class="public-link-qr" id="public-link-qr" role="img" aria-label="Codi QR de l’enllaç públic"></div><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p></div><div class="modal-actions public-link-actions"><button type="button" class="button danger" data-action="regenerate-public-link">Regenera</button><button type="button" class="button ghost" data-action="share-public-qr">Comparteix QR</button><button type="button" class="button" data-action="share-public-link">Comparteix enllaç</button></div></section></div>`;
+}
+
+function renderPublicQr() {
+  const target = $('#public-link-qr');
+  if (!target || !modal?.url || !window.QRCode) return;
+  target.innerHTML = '';
+  new window.QRCode(target, {
+    text: modal.url,
+    width: 220,
+    height: 220,
+    colorDark: '#07100e',
+    colorLight: '#ffffff',
+    correctLevel: window.QRCode.CorrectLevel.M,
+  });
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  const input = Object.assign(document.createElement('textarea'), { value });
+  input.style.position = 'fixed'; input.style.opacity = '0'; document.body.appendChild(input); input.select();
+  document.execCommand('copy'); input.remove();
+}
+
+function publicQrFile() {
+  const canvas = $('#public-link-qr canvas');
+  if (!canvas) return Promise.resolve(null);
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], 'pinendar-enllac-public.png', { type: 'image/png' }) : null), 'image/png'));
+}
+
 function guideOnboardingModal() {
   const es = state.language === 'es';
   const g = (ca, translated) => es ? translated : ca;
@@ -2032,6 +2083,7 @@ function modalView() {
   if (!modal) return '';
   if (modal.type === 'guide-onboarding') return guideOnboardingModal();
   if (modal.type === 'recovery-code') return recoveryCodeModal();
+  if (modal.type === 'public-link') return publicLinkModal();
   if (modal.type === 'generation') return generationModal();
   if (modal.type === 'guard-editor') return guardEditorModal();
   if (modal.type === 'guard-picker') return guardPickerModal();
@@ -2153,11 +2205,23 @@ function render() {
   if (hospitalMap) { hospitalMap.remove(); hospitalMap = null; }
   $$('[data-enhanced-select-portal]').forEach((menu) => menu.remove());
   const view = { calendar: calendarPage, guards: guardsPage, team: teamPage, agendas: agendasPage, setup: setupPage, history: historyPage, guide: guidePage }[page]();
-  app.innerHTML = shellTemplate({ navigation: nav(), view, modal: modalView() });
+  app.innerHTML = shellTemplate({ navigation: nav(), view, modal: modalView(), publicAccess: isPublicAccess() });
+  if (isPublicAccess()) {
+    $$('button.calendar-event, button.calendar-guard-hover, button.calendar-guard-banner').forEach((button) => {
+      const replacement = document.createElement('div');
+      replacement.className = button.className;
+      replacement.style.cssText = button.style.cssText;
+      replacement.innerHTML = button.innerHTML;
+      if (button.title) replacement.title = button.title;
+      button.replaceWith(replacement);
+    });
+    $$('.calendar-extra-day-button').forEach((button) => button.remove());
+  }
   $$('.modal-head .icon-button').forEach((button) => { if (!button.hasAttribute('aria-label')) button.setAttribute('aria-label', state.language === 'es' ? 'Cerrar' : 'Tanca'); });
   document.documentElement.lang = state.language === 'es' ? 'es' : 'ca'; translateDom(app);
   enhanceSelects(app);
   if (page === 'setup') requestAnimationFrame(initHospitalMap);
+  if (modal?.type === 'public-link') requestAnimationFrame(renderPublicQr);
   if (modal) requestAnimationFrame(() => ($('.modal-body input:not([type="hidden"]),.modal-body [data-enhanced-select-trigger]') || $('.modal-card button'))?.focus());
 }
 
@@ -2325,6 +2389,7 @@ window.addEventListener('resize', () => { $$('.enhanced-select.open').forEach(po
 document.addEventListener('scroll', (event) => { if (!event.target.closest?.('.enhanced-select-menu')) $$('.enhanced-select.open').forEach(positionEnhancedSelect); if (!event.target.closest?.('.fixed-rule-agenda-menu')) $$('.fixed-rule-agenda-picker[open]').forEach(positionFixedRuleAgendaPicker); if (!event.target.closest?.('.fixed-rule-warning-popover')) $$('.fixed-rule-warning.open').forEach(positionFixedRuleWarning); }, true);
 
 document.addEventListener('click', async (event) => {
+  if (isPublicAccess() && event.target.closest('.calendar-event,.calendar-guard-hover,.calendar-guard-banner')) return;
   const button = event.target.closest('[data-action],[data-page],[data-calendar-view],[data-calendar-issue-filter],[data-calendar-date],[data-calendar-open],[data-edit-member],[data-delete-member],[data-edit-agenda],[data-delete-agenda],[data-edit-assignment],[data-assign-vacancy],[data-open-extra-member],[data-remove-guard],[data-remove-time],[data-remove-hospital],[data-focus-hospital],[data-remove-generation-condition],[data-hospital-result],[data-history-member]'); if (!button) return;
   if (button.dataset.page) { if (page !== button.dataset.page) { page = button.dataset.page; modal = null; syncNavigationUrl('push'); render(); } return; }
   const action = button.dataset.action;
@@ -2470,6 +2535,43 @@ document.addEventListener('click', async (event) => {
   if (action === 'dismiss-guide-onboarding') { try { await api.markGuideOnboardingSeen(); state.account.guideOnboardingPending = false; modal = null; render(); } catch (error) { showError(error); } return; }
   if (action === 'open-guide-onboarding') { try { await api.markGuideOnboardingSeen(); state.account.guideOnboardingPending = false; page = 'guide'; modal = null; syncNavigationUrl('push'); render(); } catch (error) { showError(error); } return; }
   if (action === 'open-recovery-code') { modal = { type: 'recovery-code', code: '' }; render(); return; }
+  if (action === 'open-public-link') {
+    try {
+      const result = await api.publicLink();
+      modal = { type: 'public-link', url: new URL(result.path, window.location.origin).href, graceDays: result.graceDays };
+      render();
+    } catch (error) { showError(error); }
+    return;
+  }
+  if (action === 'copy-public-link') { await copyText(modal.url); toast('Enllaç copiat'); return; }
+  if (action === 'share-public-link') {
+    try {
+      if (navigator.share) await navigator.share({ title: 'Calendari Pinendar', url: modal.url });
+      else { await copyText(modal.url); toast('Enllaç copiat'); }
+    } catch (error) { if (error?.name !== 'AbortError') showError(error); }
+    return;
+  }
+  if (action === 'share-public-qr') {
+    const file = await publicQrFile();
+    if (!file) { toast('No s’ha pogut generar el QR', 'error'); return; }
+    try {
+      if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ title: 'Calendari Pinendar', text: modal.url, files: [file] });
+      else {
+        const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(file); anchor.download = file.name; anchor.click(); setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
+        toast('QR descarregat');
+      }
+    } catch (error) { if (error?.name !== 'AbortError') showError(error); }
+    return;
+  }
+  if (action === 'regenerate-public-link') {
+    if (!window.confirm('Vols regenerar l’enllaç? L’actual deixarà de donar accés immediatament.')) return;
+    try {
+      const result = await api.regeneratePublicLink();
+      modal = { type: 'public-link', url: new URL(result.path, window.location.origin).href, graceDays: result.graceDays };
+      render(); toast('Enllaç públic regenerat');
+    } catch (error) { showError(error); }
+    return;
+  }
   if (action === 'generate-recovery-code') { try { const result = await api.rotateRecoveryCode(); modal = { type: 'recovery-code', code: result.recoveryCode }; render(); } catch (error) { showError(error); } return; }
   if (action === 'copy-recovery-code') { await navigator.clipboard.writeText(modal.code); toast('Clau copiada'); return; }
   if (action === 'download-recovery-code') { download(`pinendar-${state.account?.username || 'compte'}-recuperacio.txt`, `Pinendar · ${state.account?.username || ''}\nClau de recuperació: ${modal.code}\n`, 'text/plain'); return; }
@@ -2768,6 +2870,7 @@ async function handleForm(formElement) {
   }
 }
 document.addEventListener('submit', async (event) => {
+  if (isPublicAccess()) { event.preventDefault(); return; }
   if (event.target.matches?.('[data-hospital-alias-form]')) {
     event.preventDefault();
     const aliasForm = new FormData(event.target);
@@ -2810,6 +2913,14 @@ window.addEventListener('popstate', () => {
 });
 
 async function load() {
+  if (publicAccessRequested) {
+    try {
+      state = normalizeBootstrapState(await api.publicBootstrap(publicToken));
+      if (hasCalendarContent()) { quarter = projectionStartMonth(calendarProjection()); calendarDate = `${quarter}-01`; }
+      restoreNavigation(); modal = null; syncNavigationUrl('replace'); render();
+    } catch (error) { publicErrorView(error); }
+    return;
+  }
   try {
     state = normalizeBootstrapState(await api.bootstrap());
     if (hasCalendarContent()) { quarter = projectionStartMonth(calendarProjection()); calendarDate = `${quarter}-01`; }

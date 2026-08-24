@@ -34,22 +34,26 @@ export function loginTemplate({ mode = 'login', error = '', recoveryCode = '', u
   </form></section>`;
 }
 
-export function navTemplate({ page, language, labelFor }) {
-  const items = [['calendar', 'Calendari'], ['guards', 'Guàrdies'], ['team', 'Equip'], ['agendas', 'Agendes'], ['setup', 'Configuració'], ['history', 'Equitat i històric'], ['guide', 'Guia d’ús']];
+export function navTemplate({ page, language, labelFor, publicAccess = false }) {
+  const items = publicAccess
+    ? [['calendar', 'Calendari'], ['history', 'Equitat i històric']]
+    : [['calendar', 'Calendari'], ['guards', 'Guàrdies'], ['team', 'Equip'], ['agendas', 'Agendes'], ['setup', 'Configuració'], ['history', 'Equitat i històric'], ['guide', 'Guia d’ús']];
   return `<aside class="sidebar"><div class="brand">${logo()}<span>Pinendar</span></div>
     <nav class="nav">${items.map(([id, label]) => `<button data-page="${id}" class="${page === id ? 'active' : ''}"><span class="dot"></span>${language === 'es' ? labelFor(id) : label}</button>`).join('')}</nav>
-    <div class="sidebar-foot">Servei de Radiologia Abdominal<br><span class="status">Dades locals · SQLite</span></div>
+    <div class="sidebar-foot">${publicAccess ? 'Consulta compartida' : 'Servei de Radiologia Abdominal'}<br><span class="status">${publicAccess ? 'Accés públic · només lectura' : 'Dades locals · SQLite'}</span></div>
   </aside>`;
 }
 
-export function headerTemplate({ title, subtitle, actions, language, account }) {
+export function headerTemplate({ title, subtitle, actions, language, account, publicAccess = false }) {
+  if (publicAccess) return `<header class="topbar"><div><h1>${title}</h1>${subtitle ? `<div class="muted">${subtitle}</div>` : ''}</div><div class="top-actions"><span class="readonly-badge">Només lectura</span></div></header>`;
   const languages = [['ca', 'CA', 'Català'], ['es', 'ES', 'Español']];
   const selected = languages.find(([value]) => value === language) || languages[0];
   const languagePicker = `<details class="language-picker"><summary aria-label="Idioma" aria-haspopup="listbox"><span>${selected[1]}</span></summary><div class="language-menu" role="listbox">${languages.map(([value, short, name]) => `<button type="button" role="option" aria-selected="${value === language}" data-action="language" data-language="${value}"><span>${name}</span><b>${short}</b>${value === language ? '<i aria-hidden="true">✓</i>' : '<i aria-hidden="true"></i>'}</button>`).join('')}</div></details>`;
   const recoveryButton = `<button class="button ghost small" data-action="open-recovery-code" title="Compte: ${account?.username || ''}">Clau de recuperació</button>`;
-  return `<header class="topbar"><div><h1>${title}</h1>${subtitle ? `<div class="muted">${subtitle}</div>` : ''}</div><div class="top-actions">${actions}${languagePicker}${recoveryButton}<button class="button ghost small" data-action="logout">Surt</button></div></header>`;
+  const publicLinkButton = `<button class="button ghost small" data-action="open-public-link">Enllaç públic</button>`;
+  return `<header class="topbar"><div><h1>${title}</h1>${subtitle ? `<div class="muted">${subtitle}</div>` : ''}</div><div class="top-actions">${actions}${publicLinkButton}${languagePicker}${recoveryButton}<button class="button ghost small" data-action="logout">Surt</button></div></header>`;
 }
 
-export function shellTemplate({ navigation, view, modal }) {
-  return `<div class="shell">${navigation}<main class="page">${view}</main></div><div class="toast"></div>${modal}`;
+export function shellTemplate({ navigation, view, modal, publicAccess = false }) {
+  return `<div class="shell ${publicAccess ? 'public-readonly' : ''}">${navigation}<main class="page">${view}</main></div><div class="toast"></div>${modal}`;
 }

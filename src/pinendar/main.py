@@ -67,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.auth_store.create_schema()
         app.state.auth_store.initialize_missing_activity()
+        app.state.auth_store.initialize_missing_public_links()
         if resolved.bootstrap_username and resolved.bootstrap_password:
             if not app.state.auth_store.username_exists(resolved.bootstrap_username):
                 app.state.auth_store.create_account(
@@ -131,6 +132,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/admin/", include_in_schema=False)
         def admin_frontend() -> FileResponse:
             return FileResponse(static_dir / "admin.html")
+
+        @app.get("/public/{token}", include_in_schema=False)
+        @app.get("/public/{token}/", include_in_schema=False)
+        def public_frontend(token: str) -> FileResponse:
+            return FileResponse(
+                static_dir / "index.html",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                    "X-Robots-Tag": "noindex, nofollow",
+                },
+            )
 
         @app.get("/{path:path}", include_in_schema=False)
         def frontend(path: str = "") -> FileResponse:
