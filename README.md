@@ -8,7 +8,7 @@ El calendario es continuo: cada mes generado añade eventos por fecha y no reemp
 
 1. Copia `.env.example` a `.env`.
 2. Define un `PINENDAR_SESSION_SECRET` largo y aleatorio.
-3. Ejecuta `docker compose up --build`.
+3. Ejecuta `./scripts/deploy.sh`.
 4. Crea la cuenta administradora:
 
    ```bash
@@ -21,13 +21,9 @@ Cada cuenta dispone de un entorno independiente. Las bases SQLite, copias, expor
 
 ## Actualizaciones del despliegue
 
-El despliegue puede comprobar `origin/main` cada cinco minutos y aplicar versiones nuevas. En cada servidor, instala una vez el temporizador de systemd:
+Cada despliegue sincroniza la programación con `PINENDAR_AUTO_UPDATE`. Su valor predeterminado es `true`: crea en el `crontab` del usuario una comprobación de `origin/main` cada hora. El minuto se reparte automáticamente entre servidores para evitar que todos actualicen a la vez.
 
-```bash
-sudo ./scripts/install-auto-update-timer.sh
-```
-
-`PINENDAR_AUTO_UPDATE=true` activa las actualizaciones automáticas y es el valor por defecto. Para mantener congelado un servidor, define `PINENDAR_AUTO_UPDATE=false` en su `.env`; el temporizador seguirá activo, pero no modificará el despliegue.
+Con `PINENDAR_AUTO_UPDATE=false`, el despliegue elimina únicamente su propia tarea programada y el servidor queda congelado. Si se cambia la variable sin desplegar, la siguiente comprobación detecta el cambio y se elimina a sí misma. No queda ningún servicio ni temporizador específico de Pinendar ejecutándose.
 
 Para actualizar manualmente, incluso con la actualización automática desactivada:
 
@@ -36,6 +32,8 @@ Para actualizar manualmente, incluso con la actualización automática desactiva
 ```
 
 El script exige una copia limpia en la rama `main`, hace un avance rápido desde `origin/main`, construye primero la imagen y solo después recrea los servicios. Respeta `COMPOSE_FILE` si el despliegue combina `compose.yaml` con otros archivos, como `compose.tunnel.yaml`.
+
+Para aplicar inmediatamente un cambio de la variable sin desplegar, ejecuta `./scripts/configure-auto-update.sh`.
 
 ## Registro y administración
 

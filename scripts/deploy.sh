@@ -14,52 +14,6 @@ Actualiza main desde origin y despliega Pinendar con Docker Compose.
 EOF
 }
 
-read_dotenv_value() {
-    key=$1
-    file=$2
-
-    awk -v key="$key" '
-        /^[[:space:]]*#/ { next }
-        {
-            line = $0
-            sub(/^[[:space:]]*/, "", line)
-            if (index(line, key "=") != 1) next
-            value = substr(line, length(key) + 2)
-            sub(/[[:space:]]*#[[:space:]].*$/, "", value)
-            sub(/^[[:space:]]*/, "", value)
-            sub(/[[:space:]]*$/, "", value)
-            if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
-                (substr(value, 1, 1) == "\047" && substr(value, length(value), 1) == "\047")) {
-                value = substr(value, 2, length(value) - 2)
-            }
-            print value
-            exit
-        }
-    ' "$file"
-}
-
-auto_update_enabled() {
-    if [ "${PINENDAR_AUTO_UPDATE+x}" = x ]; then
-        value=$PINENDAR_AUTO_UPDATE
-    elif [ -f "$ROOT_DIR/.env" ]; then
-        value=$(read_dotenv_value PINENDAR_AUTO_UPDATE "$ROOT_DIR/.env")
-    else
-        value=true
-    fi
-
-    [ -n "$value" ] || value=true
-    value=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
-
-    case "$value" in
-        true|1|yes|on) return 0 ;;
-        false|0|no|off) return 1 ;;
-        *)
-            printf '%s\n' "PINENDAR_AUTO_UPDATE debe ser true o false; recibido: $value" >&2
-            exit 2
-            ;;
-    esac
-}
-
 case "${1:-}" in
     "") ;;
     --automatic) MODE=automatic ;;
@@ -67,16 +21,32 @@ case "${1:-}" in
     *) usage >&2; exit 2 ;;
 esac
 
-if [ "$MODE" = automatic ] && ! auto_update_enabled; then
-    printf '%s\n' "Actualización automática desactivada."
-    exit 0
-fi
-
 cd "$ROOT_DIR"
 
 if [ "$(git branch --show-current)" != main ]; then
     printf '%s\n' "El despliegue debe usar la rama main." >&2
     exit 1
+fi
+
+schedule_status=0
+./scripts/configure-auto-update.sh || schedule_status=$?
+if [ "$schedule_status" -eq 2 ]; then
+    exit 2
+elif [ "$schedule_status" -ne 0 ]; then
+    printf '%s\n' "Aviso: el despliegue continuará sin modificar la programación automática." >&2
+fi
+
+if [ "$MODE" = automatic ]; then
+    enabled_status=0
+    ./scripts/configure-auto-update.sh --is-enabled || enabled_status=$?
+    case "$enabled_status" in
+        0) ;;
+        1)
+            printf '%s\n' "Actualización automática desactivada."
+            exit 0
+            ;;
+        *) exit "$enabled_status" ;;
+    esac
 fi
 
 git_common_dir=$(git rev-parse --git-common-dir)
