@@ -7,7 +7,7 @@ const calendarCss = readFileSync(new URL('../public/calendar.css', import.meta.u
 assert.match(appSource, /data-generation-countdown/, 'El popup debe mostrar la cuenta atrás');
 assert.match(appSource, /timeLimitSeconds/, 'La cuenta atrás debe usar el límite real del servidor');
 assert.match(appSource, /name="generationTimeLimitMinutes" type="number" min="1" max="30"/, 'El popup debe limitar el tiempo entre uno y treinta minutos');
-assert.match(appSource, /timeLimitMinutes: 2/, 'El tiempo predeterminado debe ser de dos minutos');
+assert.match(appSource, /timeLimitMinutes: 15/, 'El tiempo predeterminado debe ser de quince minutos');
 assert.match(appSource, /timeLimitMinutes: Number\(form\.get\('generationTimeLimitMinutes'\)\)/, 'El límite escogido debe enviarse al servidor');
 assert.match(appSource, /clampGenerationTimeLimit\(event\.target\.value\)/, 'El valor visible debe limitarse inmediatamente');
 assert.match(appSource, /setInterval\(updateGenerationCountdown/, 'La cuenta atrás debe actualizarse durante la generación');
