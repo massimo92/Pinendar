@@ -47,6 +47,11 @@ assert.match(
   /data-calendar-issue-filter="deferred"[\s\S]*?data-calendar-issue-filter="peonada"/,
   'El calendario debe ofrecer filtros superiores para diferidos y peonadas',
 );
+assert.doesNotMatch(
+  calendarCellSource,
+  /incidents\.vacancies\s*:\s*events\.vacancies|rawPartialItems|rawDateAssignments\s*:\s*events\.assignments/,
+  'Los filtros de incidencias deben respetar los filtros activos de persona y agenda',
+);
 assert.match(
   calendarCss,
   /\.calendar-guard-banner\{[^}]*min-width:0[^}]*overflow:hidden/,

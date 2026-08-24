@@ -35,11 +35,16 @@ test('public calendar removes mutation controls and makes events inert', () => {
   assert.match(source, /if \(isPublicAccess\(\)\) \{ event\.preventDefault\(\); return; \}/);
 });
 
-test('owner sharing dialog supports copy, native share, QR, and regeneration', () => {
+test('owner sharing dialog copies the link or QR and regenerates it', () => {
   const source = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
-  for (const action of ['copy-public-link', 'share-public-link', 'share-public-qr', 'regenerate-public-link']) {
+  for (const action of ['copy-public-link', 'copy-public-qr', 'regenerate-public-link']) {
     assert.match(source, new RegExp(`data-action="${action}"`));
   }
+  assert.doesNotMatch(source, /data-action="share-public-(link|qr)"/);
   assert.match(source, /new window\.QRCode/);
+  assert.match(source, /navigator\.clipboard\.write/);
+  assert.match(source, /new window\.ClipboardItem/);
+  assert.match(source, /modal\.graceDays \|\| 7/);
+  assert.match(source, /button warning[^>]+data-action="regenerate-public-link"/);
 });

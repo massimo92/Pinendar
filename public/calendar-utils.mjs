@@ -32,6 +32,35 @@ export function vacanciesForDate({ unfilled, date, selectedAgendaIds }) {
   );
 }
 
+export function calendarRowsForDate({
+  assignments,
+  guards,
+  vacancies,
+  date,
+  selectedMemberIds,
+  selectedAgendaIds,
+}) {
+  const matchesMember = (memberId) => (
+    !selectedMemberIds?.size || selectedMemberIds.has(memberId)
+  );
+  const matchesAgenda = (type) => (
+    !selectedAgendaIds?.size || selectedAgendaIds.has(type)
+  );
+  return {
+    assignments: assignments.filter(
+      (item) => item.date === date
+        && matchesMember(item.memberId)
+        && matchesAgenda(item.type),
+    ),
+    guards: guards.filter(
+      (item) => item.date === date && matchesMember(item.memberId),
+    ),
+    vacancies: selectedMemberIds?.size
+      ? []
+      : vacanciesForDate({ unfilled: vacancies, date, selectedAgendaIds }),
+  };
+}
+
 export function visibleAbsencesForDate({
   savedAbsences,
   calendarAbsences,

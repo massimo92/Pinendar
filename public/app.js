@@ -1,7 +1,7 @@
 import { api, waitForGeneration } from './api.js?v=15';
 import { LEGACY_AGENDAS, normalizeBootstrapState } from './state.js?v=3';
 import { MANAGEMENT_ACTIVITY, assignmentExchangePreviewLabels, compactActivityMeta, compactHospitalName, fixedRuleActivityAnalysis, historicalActivityCounts, historicalEquityAnalysis, historicalEquityTimeline, operationalEquityAnalysis, planningActivities, planningActivityGroups, sortByName, teleworkByWeekdayAnalysis } from './activity-utils.mjs?v=13';
-import { calendarIncidentsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, vacanciesForDate, visibleAbsencesForDate } from './calendar-utils.mjs?v=3';
+import { calendarIncidentsForDate, calendarRowsForDate, dailyAssignmentLoad, eligibleUnassignedMemberIds, visibleAbsencesForDate } from './calendar-utils.mjs?v=4';
 import { headerTemplate, loginTemplate, navTemplate, shellTemplate } from './views.js?v=8';
 import { workforceCapacitySignal } from './workforce-utils.mjs?v=2';
 import { buildIcsCalendar, buildIcsEvent } from './ics-export.mjs?v=2';
@@ -478,11 +478,12 @@ function calendarIssueRange() {
 function calendarIssueSummary() {
   const summary = { vacancies: 0, unassigned: 0, deferred: 0, peonada: 0, people: new Set() };
   calendarIssueRange().forEach((key) => {
-    const incidents = calendarIncidents(key);
-    summary.vacancies += incidents.vacancies.length;
-    summary.unassigned += incidents.unassignedMemberIds.size;
-    incidents.unassignedMemberIds.forEach((memberId) => summary.people.add(memberId));
-    calendarEvents().filter((item) => item.date === key).forEach((item) => {
+    const events = eventsForDate(key);
+    const unassignedMembers = unassignedMembersForDate(key);
+    summary.vacancies += events.vacancies.length;
+    summary.unassigned += unassignedMembers.length;
+    unassignedMembers.forEach((member) => summary.people.add(member.id));
+    events.assignments.forEach((item) => {
       if (item.deferredOriginDate) summary.deferred += 1;
       if (item.peonada) summary.peonada += 1;
     });
@@ -518,11 +519,15 @@ function calendarTitle() {
   return fmtDate(`${monthKey(calendarDate)}-01`, { month: 'long', year: 'numeric' });
 }
 function eventsForDate(key) {
-  const matchesMember = (memberId) => !selectedMemberFilters.size || selectedMemberFilters.has(memberId);
-  const matchesAgenda = (type) => !selectedAgendaFilters.size || selectedAgendaFilters.has(type);
-  const assignments = calendarEvents().filter((item) => item.date === key && matchesMember(item.memberId) && matchesAgenda(item.type));
+  const rows = calendarRowsForDate({
+    assignments: calendarEvents(),
+    guards: calendarGuards(),
+    vacancies: calendarVacancies(),
+    date: key,
+    selectedMemberIds: selectedMemberFilters,
+    selectedAgendaIds: selectedAgendaFilters,
+  });
   const showUncategorised = !selectedAgendaFilters.size;
-  const guards = calendarGuards().filter((item) => item.date === key && matchesMember(item.memberId));
   const savedAbsences = showUncategorised ? [...state.team, ...(state.archivedTeam || [])].flatMap((member) => member.vacations.map((item) => ({ ...item, memberId: member.id }))) : [];
   const absences = showUncategorised ? visibleAbsencesForDate({
     savedAbsences,
@@ -530,12 +535,7 @@ function eventsForDate(key) {
     date: key,
     selectedMemberIds: selectedMemberFilters,
   }) : [];
-  const vacancies = vacanciesForDate({
-    unfilled: calendarVacancies(),
-    date: key,
-    selectedAgendaIds: selectedAgendaFilters,
-  });
-  return { assignments, guards, absences, vacancies };
+  return { ...rows, absences };
 }
 function isMemberAbsentOnDate(member, key) {
   const activeAbsences = calendarAbsences().filter((item) => item.memberId === member.id);
@@ -594,7 +594,6 @@ function calendarCell(key) {
   const holiday = isHoliday(key);
   const activeEvents = calendarEvents();
   const activeAgendas = planningActivities([...(state.agendas || []), ...(state.archivedAgendas || [])]);
-  const rawDateAssignments = activeEvents.filter((item) => item.date === key);
   const noHospitalName = state.language === 'es' ? 'Sin hospital' : 'Sense hospital';
   const eventEntry = (html, hospital) => ({
     html,
@@ -632,9 +631,7 @@ function calendarCell(key) {
     const html = `<button class="calendar-event assignment ${unassigned ? 'unassigned' : ''} ${partial ? 'partial-day' : ''} ${item.peonada ? 'peonada' : ''} ${item.deferredOriginDate ? 'deferred' : ''}" style="--agenda-color:${meta.color};--member-color:${member?.color || '#b9c4c0'}" data-edit-assignment="${item.id}" title="${esc(member?.name || '—')} · ${esc(activityName)}${activityDetails ? ` · ${esc(activityDetails)}` : ''}${item.peonada ? ` · ${peonadaLabel}` : ''}${deferredLabel ? ` · ${esc(deferredLabel)}` : ''}"><b>${deferredMarker}${peonadaMarker}${esc(member?.name || '—')}</b><span class="calendar-event-activity"><em>${esc(activityName)}</em>${partialBadge}${compactMeta}</span></button>`;
     return eventEntry(html, hospital);
   };
-  const vacancyItems = selectedCalendarIssueFilters.has('vacancy')
-    ? incidents.vacancies
-    : events.vacancies;
+  const vacancyItems = events.vacancies;
   const vacancyCounts = new Map();
   vacancyItems.forEach((item) => {
     const current = vacancyCounts.get(item.type) || { count: 0, id: item.id };
@@ -650,14 +647,9 @@ function calendarCell(key) {
     const html = `<button class="calendar-event vacancy" style="--agenda-color:${meta.color};--member-color:#ff5f69" data-assign-vacancy="${vacancy.id}" title="${esc(vacancyLabel)} · ${esc(meta.name)}${countLabel} · ${esc(details)}"><b>${vacancyLabel}${countLabel}</b><span class="calendar-event-activity"><em>${esc(meta.name)}</em><i class="calendar-event-compact-meta">${compactActivityMeta(meta)}</i></span></button>`;
     return eventEntry(html, hospital);
   });
-  const unassignedMembers = selectedCalendarIssueFilters.has('unassigned')
-    ? activeTeam().filter((member) => incidents.unassignedMemberIds.has(member.id))
-    : unassignedMembersForDate(key);
+  const unassignedMembers = unassignedMembersForDate(key);
   const eligibleUnassignedIds = new Set(unassignedMembers.map((member) => member.id));
-  const unassignedAssignmentSource = selectedCalendarIssueFilters.has('unassigned')
-    ? rawDateAssignments
-    : events.assignments;
-  const persistedUnassignedItems = unassignedAssignmentSource.filter(
+  const persistedUnassignedItems = events.assignments.filter(
     (item) => item.type === 'no_assignment' && eligibleUnassignedIds.has(item.memberId),
   );
   const persistedUnassignedIds = new Set(persistedUnassignedItems.map((item) => item.memberId));
@@ -666,12 +658,10 @@ function calendarCell(key) {
     .filter((member) => !persistedUnassignedIds.has(member.id))
     .map((member) => eventEntry(`<button class="calendar-event unassigned" style="--member-color:${member.color}" data-open-extra-member="${member.id}" data-extra-date="${key}" title="${esc(member.name)} · Sense assignació"><b>${esc(member.name)}</b><span>Sense assignació</span></button>`, null));
   const filteredClinicalItems = events.assignments.filter((item) => item.type !== 'no_assignment');
-  const rawPartialItems = rawDateAssignments.filter(
-    (item) => item.type !== 'no_assignment' && incidents.partialMemberIds.has(item.memberId),
+  const partialItems = filteredClinicalItems.filter(
+    (item) => incidents.partialMemberIds.has(item.memberId),
   );
-  const partialItems = selectedCalendarIssueFilters.has('partial')
-    ? rawPartialItems
-    : filteredClinicalItems.filter((item) => incidents.partialMemberIds.has(item.memberId));
+  const visiblePartialMemberIds = new Set(partialItems.map((item) => item.memberId));
   const partialIds = new Set(partialItems.map((item) => item.id));
   const partialEvents = partialItems.map(assignmentEvent);
   const deferredItems = events.assignments.filter((item) => item.type !== 'no_assignment' && item.deferredOriginDate);
@@ -697,10 +687,10 @@ function calendarCell(key) {
   const badge = (kind, count, shortLabel, longLabel) => count
     ? `<button type="button" class="calendar-incident-badge ${kind} ${selectedCalendarIssueFilters.has(kind) ? 'active' : ''}" data-calendar-issue-filter="${kind}" title="${count} ${longLabel}" aria-label="${count} ${longLabel}" aria-pressed="${selectedCalendarIssueFilters.has(kind)}"><span>${shortLabel}</span><b>${count}</b></button>`
     : '';
-  const partialNoun = incidents.partialMemberIds.size === 1
+  const partialNoun = visiblePartialMemberIds.size === 1
     ? (state.language === 'es' ? 'persona con agenda parcial' : 'persona amb agenda parcial')
     : (state.language === 'es' ? 'personas con agenda parcial' : 'persones amb agenda parcial');
-  const incidentBadges = badge('partial', incidents.partialMemberIds.size, '~', partialNoun);
+  const incidentBadges = badge('partial', visiblePartialMemberIds.size, '~', partialNoun);
   const unassignedEvents = [...inferredUnassignedEvents, ...persistedUnassignedEvents];
   const uniqueEventEntries = (entries) => entries.filter((entry, index) => entries.findIndex((item) => item.html === entry.html) === index);
   const issueEvents = uniqueEventEntries([...vacancyEvents, ...unassignedEvents, ...partialEvents, ...deferredEvents, ...peonadaEvents]);
@@ -721,9 +711,9 @@ function calendarCell(key) {
   const visibleEvents = allEvents.slice(0, limit);
   const dayClasses = [
     'calendar-day',
-    incidents.vacancies.length ? 'has-vacancies' : '',
-    incidents.unassignedMemberIds.size ? 'has-unassigned' : '',
-    incidents.partialMemberIds.size ? 'has-partials' : '',
+    events.vacancies.length ? 'has-vacancies' : '',
+    unassignedMembers.length ? 'has-unassigned' : '',
+    visiblePartialMemberIds.size ? 'has-partials' : '',
     weekend ? 'weekend' : '',
     holiday ? 'holiday' : '',
     monthKey(key) !== monthKey(calendarDate) && calendarView === 'month' ? 'outside' : '',
@@ -1880,8 +1870,8 @@ function recoveryCodeModal() {
 }
 
 function publicLinkModal() {
-  const graceDays = Number(modal.graceDays || 30);
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><div class="public-link-qr" id="public-link-qr" role="img" aria-label="Codi QR de l’enllaç públic"></div><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p></div><div class="modal-actions public-link-actions"><button type="button" class="button danger" data-action="regenerate-public-link">Regenera</button><button type="button" class="button ghost" data-action="share-public-qr">Comparteix QR</button><button type="button" class="button" data-action="share-public-link">Comparteix enllaç</button></div></section></div>`;
+  const graceDays = Number(modal.graceDays || 7);
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-small public-link-modal" role="dialog" aria-modal="true" aria-labelledby="public-link-title"><div class="modal-head"><div><div class="card-kicker">ACCÉS PÚBLIC</div><h2 id="public-link-title">Calendari compartit</h2></div><button class="icon-button" data-action="close-modal" aria-label="Tanca">×</button></div><div class="modal-body"><p class="muted">Qualsevol persona amb aquest enllaç pot consultar Calendari i Equitat i històric, sense fer canvis.</p><div class="public-link-value"><input id="public-link-value" value="${esc(modal.url)}" readonly aria-label="Enllaç públic" /><button type="button" class="button" data-action="copy-public-link">Copia</button></div><button type="button" class="public-link-qr" id="public-link-qr" data-action="copy-public-qr" aria-label="Copia la imatge QR al portapapers" title="Copia la imatge QR"></button><p class="public-link-warning">Si el regeneres, aquest enllaç mostrarà un avís durant ${graceDays} dies i després respondrà com a no trobat.</p></div><div class="modal-actions public-link-actions"><button type="button" class="button warning" data-action="regenerate-public-link">Regenera</button></div></section></div>`;
 }
 
 function renderPublicQr() {
@@ -1905,10 +1895,10 @@ async function copyText(value) {
   document.execCommand('copy'); input.remove();
 }
 
-function publicQrFile() {
+function publicQrBlob() {
   const canvas = $('#public-link-qr canvas');
   if (!canvas) return Promise.resolve(null);
-  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob ? new File([blob], 'pinendar-enllac-public.png', { type: 'image/png' }) : null), 'image/png'));
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
 function guideOnboardingModal() {
@@ -2544,23 +2534,14 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'copy-public-link') { await copyText(modal.url); toast('Enllaç copiat'); return; }
-  if (action === 'share-public-link') {
+  if (action === 'copy-public-qr') {
+    const blob = await publicQrBlob();
+    if (!blob) { toast('No s’ha pogut generar el QR', 'error'); return; }
     try {
-      if (navigator.share) await navigator.share({ title: 'Calendari Pinendar', url: modal.url });
-      else { await copyText(modal.url); toast('Enllaç copiat'); }
-    } catch (error) { if (error?.name !== 'AbortError') showError(error); }
-    return;
-  }
-  if (action === 'share-public-qr') {
-    const file = await publicQrFile();
-    if (!file) { toast('No s’ha pogut generar el QR', 'error'); return; }
-    try {
-      if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ title: 'Calendari Pinendar', text: modal.url, files: [file] });
-      else {
-        const anchor = document.createElement('a'); anchor.href = URL.createObjectURL(file); anchor.download = file.name; anchor.click(); setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
-        toast('QR descarregat');
-      }
-    } catch (error) { if (error?.name !== 'AbortError') showError(error); }
+      if (!navigator.clipboard?.write || !window.ClipboardItem) throw new Error('El navegador no permet copiar imatges');
+      await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })]);
+      toast('QR copiat com a imatge');
+    } catch (error) { showError(error); }
     return;
   }
   if (action === 'regenerate-public-link') {

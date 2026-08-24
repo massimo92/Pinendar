@@ -21,10 +21,12 @@ def public_token(client: TestClient) -> str:
 
 
 def test_every_account_has_a_stable_public_link(authenticated_client: TestClient) -> None:
+    assert PUBLIC_LINK_REPLACED_GRACE == timedelta(days=7)
     first = public_token(authenticated_client)
     second = public_token(authenticated_client)
 
     assert first == second
+    assert authenticated_client.get("/api/v1/auth/public-link").json()["graceDays"] == 7
 
 
 def test_public_link_exposes_only_read_only_planning_views(

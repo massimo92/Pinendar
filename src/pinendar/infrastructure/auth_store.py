@@ -16,7 +16,7 @@ from pinendar.application.state import DomainError
 
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,39}$")
 PUBLIC_LINK_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-PUBLIC_LINK_REPLACED_GRACE = timedelta(days=30)
+PUBLIC_LINK_REPLACED_GRACE = timedelta(days=7)
 
 
 class AuthBase(DeclarativeBase):
