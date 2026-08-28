@@ -2017,31 +2017,40 @@ function vacancyAssignmentModal() {
   const options = modal.payload?.options || [];
   const directDeferredOptions = modal.payload?.directDeferredOptions || [];
   const deferredOptions = modal.payload?.deferredOptions || [];
+  const originDate = modal.payload?.date;
   const deferredDates = [...new Set(directDeferredOptions.map((option) => option.targetDate))].sort();
-  const selectedDeferredDate = deferredDates.includes(modal.deferredDate)
+  const selectableDates = [originDate, ...deferredDates].filter(Boolean);
+  const selectedDeferredDate = selectableDates.includes(modal.deferredDate)
     ? modal.deferredDate
-    : directDeferredOptions[0]?.targetDate || deferredDates[0];
-  const deferredDateButtons = deferredDates.map((value) => {
-    const dateOptions = directDeferredOptions.filter((option) => option.targetDate === value);
-    const freeCount = dateOptions.filter((option) => !option.requiresPeonadaReview).length;
-    const availabilityLabel = freeCount
-      ? `${freeCount} ${state.language === 'es' ? 'sin peonada' : 'sense peonada'}`
-      : (state.language === 'es' ? 'Con peonada' : 'Amb peonada');
-    return `<button type="button" class="deferred-date-option ${value === selectedDeferredDate ? 'active' : ''}" data-action="select-deferred-date" data-target-date="${esc(value)}" aria-pressed="${value === selectedDeferredDate}"><b>${esc(fmtDate(value, { weekday: 'short', day: 'numeric', month: 'short' }))}</b><small>${availabilityLabel}</small></button>`;
+    : originDate;
+  const isDeferredDate = selectedDeferredDate !== originDate;
+  const deferredDateButtons = selectableDates.map((value) => {
+    const isOrigin = value === originDate;
+    const isActive = value === selectedDeferredDate;
+    return `<button type="button" class="deferred-date-option ${isActive ? 'active' : ''} ${isActive && !isOrigin ? 'is-deferred' : ''}" data-action="select-deferred-date" data-target-date="${esc(value)}" aria-pressed="${isActive}"><b>${esc(fmtDate(value, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>${isOrigin ? '<small>Original</small>' : ''}</button>`;
   }).join('');
-  const directDeferredRows = directDeferredOptions
-    .filter((option) => option.targetDate === selectedDeferredDate)
-    .map((option, index) => {
-      const destinationName = option.memberName || person(option.deferredMemberId)?.name || '—';
-      const hasCapacity = !option.requiresPeonadaReview && Number(option.projectedLoadPercentage) <= 100;
-      const capacityLabel = hasCapacity
-        ? (state.language === 'es' ? 'Sin peonada' : 'Sense peonada')
-        : (state.language === 'es' ? 'Requiere peonada' : 'Requereix peonada');
-      const currentLoadLabel = state.language === 'es' ? 'Carga actual' : 'Càrrega actual';
-      return `<button type="button" class="deferred-person-option ${hasCapacity ? 'has-capacity' : 'requires-peonada'} ${index === 0 ? 'preferred' : ''}" data-action="apply-direct-deferred" data-target-date="${esc(option.targetDate)}" data-member-id="${esc(option.deferredMemberId)}" aria-label="${esc(`${destinationName} · ${capacityLabel}`)}"><span class="assignment-choice-head"><b>${esc(destinationName)}</b>${fairnessBadge(option)}</span><small>${currentLoadLabel}: ${option.currentLoadPercentage}% → ${option.projectedLoadPercentage}%</small><span class="deferred-capacity-badge">${capacityLabel}</span></button>`;
-    }).join('');
-  const directDeferredSection = directDeferredRows
-    ? `<section class="vacancy-resolution-section deferred-direct-section"><h3>Diferir l’agenda</h3><p class="assignment-action-help">Tria data i persona. Mostrem primer qui té menys càrrega i, després, qui millora més l’equitat.</p><div class="deferred-date-options">${deferredDateButtons}</div><div class="deferred-person-options">${directDeferredRows}</div></section>`
+  const personOptions = (isDeferredDate
+    ? directDeferredOptions
+      .filter((option) => option.targetDate === selectedDeferredDate)
+      .map((option) => ({ ...option, memberId: option.deferredMemberId }))
+    : [...options])
+    .sort((left, right) => (
+      Number(left.currentLoadPercentage) - Number(right.currentLoadPercentage)
+      || -Number(left.fairnessWorstDeltaBasisPoints) + Number(right.fairnessWorstDeltaBasisPoints)
+      || -Number(left.fairnessDeltaBasisPoints) + Number(right.fairnessDeltaBasisPoints)
+      || String(left.memberName || '').localeCompare(String(right.memberName || ''))
+    ));
+  const personRows = personOptions.map((option) => {
+    const memberName = option.memberName || person(option.memberId)?.name || '—';
+    const projectedLoad = Number(option.projectedLoadPercentage || 0);
+    const loadWarning = projectedLoad > 100
+      ? `<i class="peonada-required">${projectedLoad}% · ${state.language === 'es' ? 'requiere revisar peonada' : 'cal revisar peonada'}</i>`
+      : `<i>${projectedLoad}% ${state.language === 'es' ? 'de carga' : 'de càrrega'}</i>`;
+    const currentLoadLabel = state.language === 'es' ? 'Carga actual' : 'Càrrega actual';
+    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" data-target-date="${esc(selectedDeferredDate)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(memberName)}</b>${fairnessBadge(option)}</span><small>${currentLoadLabel}: ${option.currentLoadPercentage}% → ${projectedLoad}%</small>${loadWarning}</span></label>`;
+  }).join('');
+  const dateSelector = agendaItem?.telematic
+    ? `<section class="vacancy-date-section"><h3>${state.language === 'es' ? 'Fecha' : 'Data'}</h3><div class="deferred-date-options">${deferredDateButtons}</div>${isDeferredDate ? `<p class="vacancy-date-context"><b>Agenda diferida</b> · ${esc(fmtDate(selectedDeferredDate, { weekday: 'long', day: 'numeric', month: 'long' }))}</p>` : ''}</section>`
     : '';
   const movementOptions = deferredOptions.filter((option) => (option.movements || []).length || !directDeferredOptions.length);
   const deferredRows = movementOptions.map((option, index) => {
@@ -2057,18 +2066,9 @@ function vacancyAssignmentModal() {
     const destinationName = destination?.name || '—';
     return `<button type="button" class="deferred-option ${index === 0 ? 'preferred' : ''}" data-action="apply-deferred" data-target-date="${esc(option.targetDate)}" aria-label="${esc(`${destinationName} · ${targetDateLabel}`)}"><span class="assignment-choice-head"><b>${esc(destinationName)}</b>${fairnessBadge(option)}</span><small class="deferred-option-target">${esc(targetDateLabel)}</small>${movements}</button>`;
   }).join('');
-  const rows = options.map((option) => {
-    const loadWarning = option.projectedLoadPercentage > 100
-      ? `<i class="peonada-required">${option.projectedLoadPercentage}% · cal revisar peonada</i>`
-      : `<i>${option.projectedLoadPercentage}% de càrrega</i>`;
-    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(option.memberName)}</b>${fairnessBadge(option)}</span><small>Càrrega actual: ${option.currentLoadPercentage}% → ${option.projectedLoadPercentage}%</small>${loadWarning}</span></label>`;
-  }).join('');
-  const movementSection = deferredRows ? `<details class="deferred-movement-options"><summary>Propostes amb moviments</summary><p class="assignment-action-help">Només si vols reorganitzar altres assignacions del dia.</p><div class="deferred-option-list">${deferredRows}</div></details>` : '';
-  const deferredSection = directDeferredSection || movementSection
-    ? `${directDeferredSection}${movementSection}`
-    : '';
-  const peonadaSection = `<section class="vacancy-resolution-section"><h3>Cobrir-la en la data original</h3><p class="assignment-action-help">Tria una persona. Si supera el 100%, hauràs d’indicar quina càrrega és peonada.</p><div class="assignment-choice-list">${rows || '<div class="assignment-choice-empty">No hi ha cap persona disponible que pugui cobrir aquesta agenda com a peonada.</div>'}</div></section>`;
-  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">AGENDA SENSE COBRIR</div><h2>${esc(agendaItem?.name || '—')}</h2><div class="muted">${fmtDate(modal.payload?.date, { weekday: 'long', day: 'numeric', month: 'long' })} · ${esc(hospital ? compactHospitalName(hospital) : 'Sense hospital')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="vacancy-assignment-form"><input type="hidden" name="vacancyId" value="${esc(modal.vacancyId)}" /><div class="modal-body">${peonadaSection}${deferredSection}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></form></section></div>`;
+  const movementSection = !personRows && deferredRows ? `<details class="deferred-movement-options"><summary>Propostes amb moviments</summary><p class="assignment-action-help">Només si vols reorganitzar altres assignacions del dia.</p><div class="deferred-option-list">${deferredRows}</div></details>` : '';
+  const peopleSection = `<section class="vacancy-resolution-section"><h3>Persona</h3><p class="assignment-action-help">${state.language === 'es' ? 'Ordenadas por menor carga y, después, por mejora de la equidad. Si supera el 100%, tendrás que indicar qué carga es peonada.' : 'Ordenades per menor càrrega i, després, per millora de l’equitat. Si supera el 100%, hauràs d’indicar quina càrrega és peonada.'}</p><div class="assignment-choice-list">${personRows || '<div class="assignment-choice-empty">No hi ha cap persona disponible per a aquesta data.</div>'}</div>${movementSection}</section>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><section class="modal-card modal-assignment-action" role="dialog" aria-modal="true"><div class="modal-head"><div><div class="card-kicker">AGENDA SENSE COBRIR</div><h2>${esc(agendaItem?.name || '—')}</h2><div class="muted">${esc(hospital ? compactHospitalName(hospital) : 'Sense hospital')}</div></div><button class="icon-button" data-action="close-modal">×</button></div><form id="vacancy-assignment-form"><input type="hidden" name="vacancyId" value="${esc(modal.vacancyId)}" /><div class="modal-body">${dateSelector}${peopleSection}</div><div class="modal-actions"><button type="button" class="button ghost" data-action="close-modal">Cancel·la</button></div></form></section></div>`;
 }
 
 function peonadaReviewModal() {
@@ -2493,25 +2493,6 @@ document.addEventListener('click', async (event) => {
   if (action === 'open-manual-extra') { modal = { type: 'extra-assignment', manual: true, memberId: '', date: calendarDate, payload: null }; render(); return; }
   if (action === 'submit-modal') { event.preventDefault(); const formElement = button.closest('form'); if (formElement.reportValidity()) await handleForm(formElement); return; }
   if (action === 'select-deferred-date') { modal.deferredDate = button.dataset.targetDate; render(); return; }
-  if (action === 'apply-direct-deferred') {
-    const body = {
-      targetDate: button.dataset.targetDate,
-      targetMemberId: button.dataset.memberId,
-      expectedRevision: modal.payload?.planningRevision,
-    };
-    const returnModal = modal;
-    try {
-      await api.deferVacancy(modal.vacancyId, body);
-      modal = null; await reloadState('Agenda diferida'); render();
-    } catch (error) {
-      if (error.code === 'PEONADA_REVIEW_REQUIRED') {
-        modal = { type: 'peonada-review', review: error.details, pendingOperation: { type: 'defer-vacancy', vacancyId: returnModal.vacancyId, body }, returnModal };
-        render(); return;
-      }
-      showError(error);
-    }
-    return;
-  }
   if (action === 'apply-deferred') {
     try {
       await api.deferVacancy(modal.vacancyId, { targetDate: button.dataset.targetDate, expectedRevision: modal.payload?.planningRevision });
@@ -2701,6 +2682,25 @@ document.addEventListener('change', async (event) => {
   }
   if (modal?.type === 'vacancy-assignment' && event.target.name === 'memberId') {
     const formElement = event.target.closest('form');
+    if (event.target.dataset.targetDate !== modal.payload?.date) {
+      const body = {
+        targetDate: event.target.dataset.targetDate,
+        targetMemberId: event.target.value,
+        expectedRevision: modal.payload?.planningRevision,
+      };
+      const returnModal = modal;
+      try {
+        await api.deferVacancy(modal.vacancyId, body);
+        modal = null; await reloadState('Agenda diferida'); render();
+      } catch (error) {
+        if (error.code === 'PEONADA_REVIEW_REQUIRED') {
+          modal = { type: 'peonada-review', review: error.details, pendingOperation: { type: 'defer-vacancy', vacancyId: returnModal.vacancyId, body }, returnModal };
+          render(); return;
+        }
+        showError(error);
+      }
+      return;
+    }
     $$('[name="memberId"]', formElement).forEach((input) => { input.disabled = input !== event.target; });
     await handleForm(formElement);
     $$('[name="memberId"]', formElement).forEach((input) => { input.disabled = false; });

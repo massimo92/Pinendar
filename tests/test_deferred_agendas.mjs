@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const apiSource = readFileSync(new URL('../public/api.js', import.meta.url), 'utf8');
 const indexSource = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const calendarSource = readFileSync(new URL('../public/calendar.css', import.meta.url), 'utf8');
 
 assert.match(
   appSource,
@@ -51,18 +52,28 @@ assert.match(
 );
 assert.match(
   appSource,
-  /directDeferredOptions[\s\S]*?data-action="select-deferred-date"[\s\S]*?data-action="apply-direct-deferred"/,
-  'La vacante debe permitir elegir fecha y persona para el diferido manual',
+  /selectableDates[\s\S]*?data-action="select-deferred-date"[\s\S]*?const personOptions[\s\S]*?class="assignment-choice"/,
+  'La vacante debe permitir elegir primero la fecha y después una persona con la tarjeta común',
 );
 assert.match(
   appSource,
-  /deferred-person-option[\s\S]*?has-capacity[\s\S]*?Sense peonada|Sense peonada[\s\S]*?has-capacity/,
-  'Las personas con hueco deben distinguirse visualmente',
+  /personOptions[\s\S]*?currentLoadPercentage[\s\S]*?fairnessWorstDeltaBasisPoints/,
+  'Las personas deben ordenarse por carga y después por equidad',
 );
 assert.match(
   appSource,
-  /action === 'apply-direct-deferred'[\s\S]*?targetMemberId[\s\S]*?PEONADA_REVIEW_REQUIRED[\s\S]*?type: 'defer-vacancy'/,
+  /event\.target\.dataset\.targetDate !== modal\.payload\?\.date[\s\S]*?targetMemberId[\s\S]*?PEONADA_REVIEW_REQUIRED[\s\S]*?type: 'defer-vacancy'/,
   'El diferido con sobrecarga debe abrir la revisión normal de peonadas',
+);
+assert.match(
+  appSource,
+  /agendaItem\?\.telematic[\s\S]*?vacancy-date-section/,
+  'El selector de fecha sólo debe mostrarse para agendas telemáticas',
+);
+assert.match(
+  calendarSource,
+  /calendar-event\.deferred[\s\S]*?#b78cff[\s\S]*?deferred-date-option\.active\.is-deferred[\s\S]*?#b78cff/,
+  'La selección de una fecha futura debe reutilizar el lila de las agendas diferidas',
 );
 assert.match(
   appSource,
@@ -102,7 +113,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=99/,
+  /calendar\.css\?v=100/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 
