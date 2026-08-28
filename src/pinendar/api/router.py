@@ -224,6 +224,10 @@ class DeferredVacancyRequest(BaseModel):
     target_date: date = Field(alias="targetDate")
     target_member_id: str | None = Field(default=None, alias="targetMemberId")
     expected_revision: int | None = Field(default=None, alias="expectedRevision")
+    peonada_selections: dict[str, list[str]] | None = Field(
+        default=None,
+        alias="peonadaAssignments",
+    )
 
 
 class AssignmentTransferRequest(BaseModel):
@@ -880,6 +884,7 @@ def calendar_vacancy_assignment_options(
         return {
             **result,
             "deferredOptions": deferred["options"],
+            "directDeferredOptions": deferred["directOptions"],
             "planningRevision": deferred["planningRevision"],
         }
 
@@ -902,6 +907,7 @@ def defer_calendar_vacancy(
                 payload.target_date,
                 payload.target_member_id,
                 expected_revision=payload.expected_revision,
+                peonada_selections=payload.peonada_selections,
             )
         return apply_deferred_vacancy(
             database_session,

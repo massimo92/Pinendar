@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const apiSource = readFileSync(new URL('../public/api.js', import.meta.url), 'utf8');
 const indexSource = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const calendarSource = readFileSync(new URL('../public/calendar.css', import.meta.url), 'utf8');
 
 assert.match(
   appSource,
@@ -51,6 +52,61 @@ assert.match(
 );
 assert.match(
   appSource,
+  /selectableDates[\s\S]*?data-action="select-deferred-date"[\s\S]*?const personOptions[\s\S]*?class="assignment-choice"/,
+  'La vacante debe permitir elegir primero la fecha y después una persona con la tarjeta común',
+);
+assert.match(
+  appSource,
+  /personOptions[\s\S]*?currentLoadPercentage[\s\S]*?fairnessWorstDeltaBasisPoints/,
+  'Las personas deben ordenarse por carga y después por equidad',
+);
+assert.match(
+  appSource,
+  /event\.target\.dataset\.targetDate !== modal\.payload\?\.date[\s\S]*?targetMemberId[\s\S]*?PEONADA_REVIEW_REQUIRED[\s\S]*?type: 'defer-vacancy'/,
+  'El diferido con sobrecarga debe abrir la revisión normal de peonadas',
+);
+assert.match(
+  appSource,
+  /agendaItem\?\.telematic[\s\S]*?vacancy-date-section/,
+  'El selector de fecha sólo debe mostrarse para agendas telemáticas',
+);
+assert.match(
+  calendarSource,
+  /calendar-event\.deferred[\s\S]*?#b78cff[\s\S]*?deferred-date-option\.active\.is-deferred[\s\S]*?#b78cff/,
+  'La selección de una fecha futura debe reutilizar el lila de las agendas diferidas',
+);
+assert.match(
+  calendarSource,
+  /deferred-date-option\.active\{[\s\S]*?var\(--brand\)[\s\S]*?active\.is-deferred/,
+  'La fecha original debe resaltarse en verde y una fecha diferida en lila',
+);
+assert.match(
+  appSource,
+  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-head[\s\S]*?vacancy-choice-person[\s\S]*?assignedLoadLabel[\s\S]*?vacancy-choice-signals[\s\S]*?fairness-impact vacancy-peonada-status[\s\S]*?requires-peonada' : 'has-capacity'/,
+  'Las fechas deben indicar su tipo y el estado de peonada debe quedar bajo la equidad',
+);
+assert.match(
+  calendarSource,
+  /vacancy-peonada-status\.has-capacity[\s\S]*?#dfff83[\s\S]*?vacancy-peonada-status\.requires-peonada[\s\S]*?#f7d37d/,
+  'Los estados sin peonada y con peonada deben ser legibles en verde y amarillo',
+);
+assert.doesNotMatch(
+  appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
+  /vacancy-date-context/,
+  'El selector no debe repetir la fecha diferida en un aviso adicional',
+);
+assert.doesNotMatch(
+  appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
+  /<h3>Persona<\/h3>|Ordenadas por menor carga|Ordenades per menor càrrega/,
+  'La lista de personas no debe repetir un título ni instrucciones evidentes',
+);
+assert.match(
+  appSource,
+  /pending\.type === 'defer-vacancy'[\s\S]*?api\.deferVacancy[\s\S]*?peonadaAssignments/,
+  'La revisión debe reenviar las peonadas elegidas al diferido',
+);
+assert.match(
+  appSource,
   /Diferida:[\s\S]*?'Data origen'/,
   'El CSV debe incluir la marca diferida y la fecha de origen',
 );
@@ -82,7 +138,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=98/,
+  /calendar\.css\?v=104/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 

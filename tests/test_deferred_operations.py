@@ -390,3 +390,158 @@ def test_non_telematic_vacancy_has_no_deferred_options(
 
     assert preview.status_code == 200
     assert preview.json()["deferredOptions"] == []
+    assert preview.json()["directDeferredOptions"] == []
+
+
+def test_manual_deferred_options_include_future_dates_and_order_people_by_load(
+    authenticated_client: TestClient,
+) -> None:
+    deferred_agenda, others = full_agendas(authenticated_client)
+    ordinary_agenda = others[0]
+    free = create_member(
+        authenticated_client,
+        name="Deferred Free",
+        allowed_types=[deferred_agenda["id"]],
+    )
+    busy = create_member(
+        authenticated_client,
+        name="Deferred Busy",
+        allowed_types=[deferred_agenda["id"], ordinary_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    origin = date(2026, 8, 11)
+    first_target = origin + timedelta(days=1)
+    second_target = origin + timedelta(days=2)
+    with database.session_factory.begin() as session:
+        session.add_all(
+            [
+                Assignment(
+                    id="deferred-free-first",
+                    date=first_target,
+                    member_id=free["id"],
+                    kind="no_assignment",
+                    load_percentage=0,
+                ),
+                Assignment(
+                    id="deferred-busy-first",
+                    date=first_target,
+                    member_id=busy["id"],
+                    agenda_id=ordinary_agenda["id"],
+                    load_percentage=100,
+                ),
+                Assignment(
+                    id="deferred-period-end",
+                    date=second_target,
+                    member_id=free["id"],
+                    kind="no_assignment",
+                    load_percentage=0,
+                ),
+            ]
+        )
+        vacancy = Vacancy(date=origin, agenda_id=deferred_agenda["id"])
+        session.add(vacancy)
+        session.flush()
+        vacancy_id = vacancy.id
+
+    preview = authenticated_client.get(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assignment-options"
+    )
+
+    assert preview.status_code == 200, preview.json()
+    options = preview.json()["directDeferredOptions"]
+    assert {item["targetDate"] for item in options} == {
+        first_target.isoformat(),
+        second_target.isoformat(),
+    }
+    first_day = [
+        item
+        for item in options
+        if item["targetDate"] == first_target.isoformat()
+        and item["deferredMemberId"] in {free["id"], busy["id"]}
+    ]
+    assert [item["deferredMemberId"] for item in first_day] == [free["id"], busy["id"]]
+    assert first_day[0]["projectedLoadPercentage"] == 100
+    assert first_day[0]["requiresPeonadaReview"] is False
+    assert first_day[1]["projectedLoadPercentage"] == 200
+    assert first_day[1]["requiresPeonadaReview"] is True
+
+
+def test_manual_deferred_overload_requires_and_persists_peonada_selection(
+    authenticated_client: TestClient,
+) -> None:
+    deferred_agenda, others = full_agendas(authenticated_client)
+    ordinary_agenda = others[0]
+    member = create_member(
+        authenticated_client,
+        name="Deferred Peonada",
+        allowed_types=[deferred_agenda["id"], ordinary_agenda["id"]],
+    )
+    database = authenticated_client.app.state.database
+    origin = date(2026, 8, 11)
+    target = origin + timedelta(days=1)
+    with database.session_factory.begin() as session:
+        session.add(
+            Assignment(
+                id="ordinary-before-deferred-peonada",
+                date=target,
+                member_id=member["id"],
+                agenda_id=ordinary_agenda["id"],
+                load_percentage=100,
+            )
+        )
+        vacancy = Vacancy(date=origin, agenda_id=deferred_agenda["id"])
+        session.add(vacancy)
+        session.flush()
+        vacancy_id = vacancy.id
+
+    preview = authenticated_client.get(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/assignment-options"
+    )
+    option = next(
+        item
+        for item in preview.json()["directDeferredOptions"]
+        if item["targetDate"] == target.isoformat()
+        and item["deferredMemberId"] == member["id"]
+    )
+    assert option["requiresPeonadaReview"] is True
+
+    review = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/defer",
+        json={
+            "targetDate": target.isoformat(),
+            "targetMemberId": member["id"],
+            "expectedRevision": preview.json()["planningRevision"],
+        },
+    )
+
+    assert review.status_code == 409
+    assert review.json()["error"]["code"] == "PEONADA_REVIEW_REQUIRED"
+    assert review.json()["error"]["details"]["people"][0][
+        "minimumPeonadaLoadPercentage"
+    ] == 100
+
+    created = authenticated_client.post(
+        f"/api/v1/calendar/vacancies/{vacancy_id}/defer",
+        json={
+            "targetDate": target.isoformat(),
+            "targetMemberId": member["id"],
+            "expectedRevision": preview.json()["planningRevision"],
+            "peonadaAssignments": {member["id"]: ["new"]},
+        },
+    )
+
+    assert created.status_code == 201, created.json()
+    assert created.json()["peonada"] is True
+    with database.session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(Assignment).where(
+                    Assignment.member_id == member["id"],
+                    Assignment.date == target,
+                )
+            )
+        )
+        assert sum(item.load_percentage for item in rows) == 200
+        assert {item.id for item in rows if item.peonada} == {created.json()["id"]}
+        assert next(item for item in rows if item.id == created.json()["id"]).deferred_origin_date == origin
+        assert session.get(Vacancy, vacancy_id) is None
