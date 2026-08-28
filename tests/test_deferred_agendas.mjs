@@ -82,7 +82,7 @@ assert.match(
 );
 assert.match(
   appSource,
-  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-signals[\s\S]*?fairness-impact vacancy-peonada-status[\s\S]*?requires-peonada' : 'has-capacity'/,
+  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-head[\s\S]*?vacancy-choice-person[\s\S]*?assignedLoadLabel[\s\S]*?vacancy-choice-signals[\s\S]*?fairness-impact vacancy-peonada-status[\s\S]*?requires-peonada' : 'has-capacity'/,
   'Las fechas deben indicar su tipo y el estado de peonada debe quedar bajo la equidad',
 );
 assert.match(
@@ -94,6 +94,11 @@ assert.doesNotMatch(
   appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
   /vacancy-date-context/,
   'El selector no debe repetir la fecha diferida en un aviso adicional',
+);
+assert.doesNotMatch(
+  appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
+  /<h3>Persona<\/h3>|Ordenadas por menor carga|Ordenades per menor càrrega/,
+  'La lista de personas no debe repetir un título ni instrucciones evidentes',
 );
 assert.match(
   appSource,
@@ -133,7 +138,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=103/,
+  /calendar\.css\?v=104/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 
