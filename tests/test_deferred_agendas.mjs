@@ -82,7 +82,7 @@ assert.match(
 );
 assert.match(
   appSource,
-  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-signals[\s\S]*?requires-peonada' : 'has-capacity'/,
+  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-signals[\s\S]*?fairness-impact vacancy-peonada-status[\s\S]*?requires-peonada' : 'has-capacity'/,
   'Las fechas deben indicar su tipo y el estado de peonada debe quedar bajo la equidad',
 );
 assert.match(
@@ -133,7 +133,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=102/,
+  /calendar\.css\?v=103/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 

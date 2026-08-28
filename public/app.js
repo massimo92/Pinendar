@@ -2049,7 +2049,7 @@ function vacancyAssignmentModal() {
       ? (state.language === 'es' ? 'Requiere peonada' : 'Requereix peonada')
       : (state.language === 'es' ? 'Sin peonada' : 'Sense peonada');
     const assignedLoadLabel = state.language === 'es' ? 'Carga ya asignada' : 'Càrrega ja assignada';
-    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" data-target-date="${esc(selectedDeferredDate)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(memberName)}</b><span class="vacancy-choice-signals">${fairnessBadge(option)}<span class="vacancy-peonada-status ${requiresPeonada ? 'requires-peonada' : 'has-capacity'}">${peonadaLabel}</span></span></span><small>${assignedLoadLabel}: ${option.currentLoadPercentage}%</small></span></label>`;
+    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" data-target-date="${esc(selectedDeferredDate)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(memberName)}</b><span class="vacancy-choice-signals">${fairnessBadge(option)}<span class="fairness-impact vacancy-peonada-status ${requiresPeonada ? 'requires-peonada' : 'has-capacity'}">${peonadaLabel}</span></span></span><small>${assignedLoadLabel}: ${option.currentLoadPercentage}%</small></span></label>`;
   }).join('');
   const dateSelector = agendaItem?.telematic
     ? `<section class="vacancy-date-section"><h3>${state.language === 'es' ? 'Fecha' : 'Data'}</h3><div class="deferred-date-options">${deferredDateButtons}</div></section>`
