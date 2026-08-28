@@ -51,6 +51,26 @@ assert.match(
 );
 assert.match(
   appSource,
+  /directDeferredOptions[\s\S]*?data-action="select-deferred-date"[\s\S]*?data-action="apply-direct-deferred"/,
+  'La vacante debe permitir elegir fecha y persona para el diferido manual',
+);
+assert.match(
+  appSource,
+  /deferred-person-option[\s\S]*?has-capacity[\s\S]*?Sense peonada|Sense peonada[\s\S]*?has-capacity/,
+  'Las personas con hueco deben distinguirse visualmente',
+);
+assert.match(
+  appSource,
+  /action === 'apply-direct-deferred'[\s\S]*?targetMemberId[\s\S]*?PEONADA_REVIEW_REQUIRED[\s\S]*?type: 'defer-vacancy'/,
+  'El diferido con sobrecarga debe abrir la revisión normal de peonadas',
+);
+assert.match(
+  appSource,
+  /pending\.type === 'defer-vacancy'[\s\S]*?api\.deferVacancy[\s\S]*?peonadaAssignments/,
+  'La revisión debe reenviar las peonadas elegidas al diferido',
+);
+assert.match(
+  appSource,
   /Diferida:[\s\S]*?'Data origen'/,
   'El CSV debe incluir la marca diferida y la fecha de origen',
 );
@@ -82,7 +102,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=98/,
+  /calendar\.css\?v=99/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 

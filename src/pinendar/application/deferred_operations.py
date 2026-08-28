@@ -8,6 +8,10 @@ from ortools.sat.python import cp_model
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pinendar.application.commands import (
+    _apply_peonada_selections,
+    _validate_clinical_assignment,
+)
 from pinendar.application.guard_operations import _planifiable, _telework
 from pinendar.application.state import DomainError, bump_revision, month_end, uid
 from pinendar.domain.fairness import operational_fairness_score
@@ -488,10 +492,32 @@ def deferred_vacancy_options(session: Session, vacancy_id: int) -> dict[str, Any
     agenda = session.get(Agenda, vacancy.agenda_id)
     settings = session.get(AppSettings, 1)
     options: list[dict[str, Any]] = []
+    direct_options: list[dict[str, Any]] = []
     if agenda and agenda.telematic:
         end = min(vacancy.date + timedelta(days=DEFERRED_WINDOW_DAYS), _period_end(session, vacancy))
+        members = list(
+            session.scalars(
+                select(Member)
+                .where(Member.archived_at.is_(None), Member.is_active.is_(True))
+                .order_by(Member.name, Member.id)
+            )
+        )
+        fairness_context = _fairness_context(session)
         current = vacancy.date + timedelta(days=1)
         while current <= end:
+            direct_options.extend(
+                option
+                for member in members
+                if (
+                    option := _direct_member_option(
+                        session,
+                        vacancy,
+                        current,
+                        member.id,
+                        fairness_context=fairness_context,
+                    )
+                )
+            )
             try:
                 option = _solve_target(session, vacancy, current)
             except DomainError as error:
@@ -501,12 +527,22 @@ def deferred_vacancy_options(session: Session, vacancy_id: int) -> dict[str, Any
             if option:
                 options.append({key: value for key, value in option.items() if not key.startswith("_")})
             current += timedelta(days=1)
+    direct_options.sort(
+        key=lambda item: (
+            int(item["currentLoadPercentage"]),
+            -int(item["fairnessWorstDeltaBasisPoints"]),
+            -int(item["fairnessDeltaBasisPoints"]),
+            str(item["targetDate"]),
+            str(item["memberName"]).casefold(),
+        )
+    )
     return {
         "vacancyId": vacancy.id,
         "agendaId": vacancy.agenda_id,
         "originDate": vacancy.date.isoformat(),
         "planningRevision": settings.planning_revision if settings else 0,
         "options": options,
+        "directOptions": direct_options,
     }
 
 
@@ -545,6 +581,16 @@ def _direct_member_option(
     )
     if not capable or agenda.id in _forbidden_agendas(session, target_date)[member_id]:
         return None
+    try:
+        _validate_clinical_assignment(
+            session,
+            member_id,
+            target_date,
+            agenda.id,
+            maximum_daily_load=200,
+        )
+    except DomainError:
+        return None
     rows = list(
         session.scalars(
             select(Assignment).where(
@@ -553,12 +599,12 @@ def _direct_member_option(
             )
         )
     )
-    if (
-        not rows
-        or any(row.kind != "no_assignment" for row in rows)
-        or any(row.locked or row.manually_modified for row in rows)
-    ):
-        return None
+    current_load = sum(
+        row.load_percentage
+        for row in rows
+        if row.kind in {"assigned", "management"} or row.management
+    )
+    projected_load = current_load + agenda.load_percentage
     context = fairness_context or _fairness_context(session)
     baseline = _fairness_score(context, [])
     projected = _fairness_score(context, [(member_id, None, agenda.id)])
@@ -568,7 +614,16 @@ def _direct_member_option(
         "originDate": vacancy.date.isoformat(),
         "targetDate": target_date.isoformat(),
         "deferredMemberId": member_id,
+        "memberName": member.name,
         "loadPercentage": agenda.load_percentage,
+        "currentLoadPercentage": current_load,
+        "projectedLoadPercentage": projected_load,
+        "requiresPeonadaReview": (
+            projected_load > 100
+            or any(row.peonada for row in rows if row.kind == "assigned")
+        ),
+        "movements": [],
+        "changeCount": 0,
         **_fairness_result(baseline, projected),
     }
 
@@ -621,6 +676,7 @@ def apply_direct_deferred_vacancy(
     member_id: str,
     *,
     expected_revision: int | None = None,
+    peonada_selections: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     _assert_revision(session, expected_revision)
     vacancy = session.get(Vacancy, vacancy_id)
@@ -634,7 +690,7 @@ def apply_direct_deferred_vacancy(
         )
     agenda = session.get(Agenda, vacancy.agenda_id)
     assert agenda is not None
-    rows = list(
+    no_assignment_rows = list(
         session.scalars(
             select(Assignment)
             .where(
@@ -645,21 +701,39 @@ def apply_direct_deferred_vacancy(
             .order_by(Assignment.id)
         )
     )
-    assignment = rows[0]
-    for duplicate in rows[1:]:
-        session.delete(duplicate)
-    assignment.generation_job_id = assignment.generation_job_id or vacancy.generation_job_id
-    assignment.agenda_id = agenda.id
-    assignment.kind = "assigned"
-    assignment.load_percentage = agenda.load_percentage
-    assignment.locked = True
-    assignment.fixed = False
-    assignment.extra = False
-    assignment.peonada = False
-    assignment.deferred_origin_date = vacancy.date
-    assignment.manually_modified = True
-    assignment.management = False
+    for row in no_assignment_rows:
+        session.delete(row)
+    assignment = Assignment(
+        id=uid(),
+        generation_job_id=(
+            next(
+                (row.generation_job_id for row in no_assignment_rows if row.generation_job_id),
+                None,
+            )
+            or vacancy.generation_job_id
+        ),
+        date=target_date,
+        member_id=member_id,
+        agenda_id=agenda.id,
+        kind="assigned",
+        load_percentage=agenda.load_percentage,
+        locked=True,
+        fixed=False,
+        extra=False,
+        peonada=False,
+        deferred_origin_date=vacancy.date,
+        manually_modified=True,
+        management=False,
+    )
+    session.add(assignment)
     session.delete(vacancy)
+    peonada = _apply_peonada_selections(
+        session,
+        [(member_id, target_date)],
+        peonada_selections,
+        aliases={member_id: {"new": assignment.id}},
+        reset_existing=True,
+    )
     bump_revision(session)
     return {
         "id": assignment.id,
@@ -669,6 +743,8 @@ def apply_direct_deferred_vacancy(
         "agendaId": agenda.id,
         "movements": [],
         "fairnessEffect": proposal["fairnessEffect"],
+        "peonada": assignment.peonada,
+        "peonadaReview": peonada,
     }
 
 

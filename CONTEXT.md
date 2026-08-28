@@ -134,8 +134,9 @@ Marca de una asignación clínica demandada que identifica trabajo extraordinari
 _Avoid_: Plaza extraordinaria, agenda extra, sobrecarga
 
 **Asignación diferida**:
-Asignación de una plaza telemática que no pudo cubrirse en su fecha de origen y se realiza dentro de los seis días naturales posteriores usando capacidad que habría quedado sin asignar. Conserva su fecha de origen y cubre la vacante original.
+Asignación de una plaza telemática que no pudo cubrirse en su fecha de origen y se realiza dentro de los seis días naturales posteriores. Conserva su fecha de origen y cubre la vacante original.
 Al iniciarla desde una persona sin asignación, esa persona adopta directamente una única vacante compatible: no se mueve ni se añade ninguna otra agenda y una carga del 50% conserva la jornada parcial.
+Al aplicarla manualmente a una persona con actividad previa, la carga total puede alcanzar el 200% y debe clasificarse como peonada exactamente la carga clínica que exceda el 100%; Gestión nunca puede ser peonada.
 Durante la generación, el optimizador puede crearla automáticamente para cubrir vacantes telemáticas usando solo capacidad libre; maximiza la cobertura diferida según la prioridad de la agenda original y, después, mantiene equilibrado el porcentaje telemático acumulado entre personas. Las fases posteriores pueden cambiar la fecha o la persona de un diferido automático, pero no reducir la cobertura conseguida. Los diferidos manuales permanecen bloqueados.
 _Avoid_: Agenda nueva, peonada, cambio de fecha
 
