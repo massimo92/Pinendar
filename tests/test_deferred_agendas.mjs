@@ -82,8 +82,13 @@ assert.match(
 );
 assert.match(
   appSource,
-  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-peonada-status/,
-  'Las fechas deben indicar su tipo y las personas deben mostrar la carga previa con estados de igual peso',
+  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-choice-signals[\s\S]*?requires-peonada' : 'has-capacity'/,
+  'Las fechas deben indicar su tipo y el estado de peonada debe quedar bajo la equidad',
+);
+assert.match(
+  calendarSource,
+  /vacancy-peonada-status\.has-capacity[\s\S]*?#dfff83[\s\S]*?vacancy-peonada-status\.requires-peonada[\s\S]*?#f7d37d/,
+  'Los estados sin peonada y con peonada deben ser legibles en verde y amarillo',
 );
 assert.doesNotMatch(
   appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
@@ -128,7 +133,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=101/,
+  /calendar\.css\?v=102/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 
