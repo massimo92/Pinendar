@@ -2027,7 +2027,8 @@ function vacancyAssignmentModal() {
   const deferredDateButtons = selectableDates.map((value) => {
     const isOrigin = value === originDate;
     const isActive = value === selectedDeferredDate;
-    return `<button type="button" class="deferred-date-option ${isActive ? 'active' : ''} ${isActive && !isOrigin ? 'is-deferred' : ''}" data-action="select-deferred-date" data-target-date="${esc(value)}" aria-pressed="${isActive}"><b>${esc(fmtDate(value, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>${isOrigin ? '<small>Original</small>' : ''}</button>`;
+    const dateTypeLabel = isOrigin ? 'Original' : 'Diferida';
+    return `<button type="button" class="deferred-date-option ${isActive ? 'active' : ''} ${isActive && !isOrigin ? 'is-deferred' : ''}" data-action="select-deferred-date" data-target-date="${esc(value)}" aria-pressed="${isActive}"><b>${esc(fmtDate(value, { weekday: 'short', day: 'numeric', month: 'short' }))}</b><small>${dateTypeLabel}</small></button>`;
   }).join('');
   const personOptions = (isDeferredDate
     ? directDeferredOptions
@@ -2043,14 +2044,14 @@ function vacancyAssignmentModal() {
   const personRows = personOptions.map((option) => {
     const memberName = option.memberName || person(option.memberId)?.name || '—';
     const projectedLoad = Number(option.projectedLoadPercentage || 0);
-    const loadWarning = projectedLoad > 100
-      ? `<i class="peonada-required">${projectedLoad}% · ${state.language === 'es' ? 'requiere revisar peonada' : 'cal revisar peonada'}</i>`
-      : `<i>${projectedLoad}% ${state.language === 'es' ? 'de carga' : 'de càrrega'}</i>`;
-    const currentLoadLabel = state.language === 'es' ? 'Carga actual' : 'Càrrega actual';
-    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" data-target-date="${esc(selectedDeferredDate)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(memberName)}</b>${fairnessBadge(option)}</span><small>${currentLoadLabel}: ${option.currentLoadPercentage}% → ${projectedLoad}%</small>${loadWarning}</span></label>`;
+    const peonadaLabel = projectedLoad > 100
+      ? (state.language === 'es' ? 'Requiere peonada' : 'Requereix peonada')
+      : (state.language === 'es' ? 'Sin peonada' : 'Sense peonada');
+    const assignedLoadLabel = state.language === 'es' ? 'Carga ya asignada' : 'Càrrega ja assignada';
+    return `<label class="assignment-choice"><input type="radio" name="memberId" value="${esc(option.memberId)}" data-target-date="${esc(selectedDeferredDate)}" required /><span class="assignment-choice-card"><span class="assignment-choice-head"><b>${esc(memberName)}</b>${fairnessBadge(option)}</span><small>${assignedLoadLabel}: ${option.currentLoadPercentage}%</small><span class="vacancy-peonada-status">${peonadaLabel}</span></span></label>`;
   }).join('');
   const dateSelector = agendaItem?.telematic
-    ? `<section class="vacancy-date-section"><h3>${state.language === 'es' ? 'Fecha' : 'Data'}</h3><div class="deferred-date-options">${deferredDateButtons}</div>${isDeferredDate ? `<p class="vacancy-date-context"><b>Agenda diferida</b> · ${esc(fmtDate(selectedDeferredDate, { weekday: 'long', day: 'numeric', month: 'long' }))}</p>` : ''}</section>`
+    ? `<section class="vacancy-date-section"><h3>${state.language === 'es' ? 'Fecha' : 'Data'}</h3><div class="deferred-date-options">${deferredDateButtons}</div></section>`
     : '';
   const movementOptions = deferredOptions.filter((option) => (option.movements || []).length || !directDeferredOptions.length);
   const deferredRows = movementOptions.map((option, index) => {

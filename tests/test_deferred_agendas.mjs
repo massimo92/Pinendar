@@ -76,6 +76,21 @@ assert.match(
   'La selección de una fecha futura debe reutilizar el lila de las agendas diferidas',
 );
 assert.match(
+  calendarSource,
+  /deferred-date-option\.active\{[\s\S]*?var\(--brand\)[\s\S]*?active\.is-deferred/,
+  'La fecha original debe resaltarse en verde y una fecha diferida en lila',
+);
+assert.match(
+  appSource,
+  /dateTypeLabel = isOrigin \? 'Original' : 'Diferida'[\s\S]*?Carga ya asignada[\s\S]*?vacancy-peonada-status/,
+  'Las fechas deben indicar su tipo y las personas deben mostrar la carga previa con estados de igual peso',
+);
+assert.doesNotMatch(
+  appSource.slice(appSource.indexOf('function vacancyAssignmentModal'), appSource.indexOf('function peonadaReviewModal')),
+  /vacancy-date-context/,
+  'El selector no debe repetir la fecha diferida en un aviso adicional',
+);
+assert.match(
   appSource,
   /pending\.type === 'defer-vacancy'[\s\S]*?api\.deferVacancy[\s\S]*?peonadaAssignments/,
   'La revisión debe reenviar las peonadas elegidas al diferido',
@@ -113,7 +128,7 @@ assert.match(
 );
 assert.match(
   indexSource,
-  /calendar\.css\?v=100/,
+  /calendar\.css\?v=101/,
   'Los estilos de agendas diferidas deben invalidar la versión CSS anterior',
 );
 
